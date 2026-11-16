@@ -41,16 +41,28 @@ export async function GET(request:Request){
 				take:pageSize,
 			}),
 		]);
-		const approvals=users.length?await db.auditLog.findMany({
-			where:{entity:'USER',entityId:{in:users.map(user=>user.id)},action:'KYC_APPROVED'},
-			select:{entityId:true,createdAt:true,actor:{select:{name:true,email:true}}},
-			orderBy:{createdAt:'desc'},
-			distinct:['entityId'],
-		}):[];
+		const [approvals,verificationApprovals]=users.length?await Promise.all([
+			db.auditLog.findMany({
+				where:{entity:'USER',entityId:{in:users.map(user=>user.id)},action:'KYC_APPROVED'},
+				select:{entityId:true,createdAt:true,actor:{select:{name:true,email:true}}},
+				orderBy:{createdAt:'desc'},
+				distinct:['entityId'],
+			}),
+			db.kycVerification.findMany({
+				where:{userId:{in:users.map(user=>user.id)},status:'APPROVED',reviewedAt:{not:null}},
+				select:{userId:true,reviewedAt:true,reviewedBy:{select:{name:true,email:true}}},
+				orderBy:{reviewedAt:'desc'},
+				distinct:['userId'],
+			}),
+		]):[[],[]];
 		const approvalByUser=new Map(approvals.map(approval=>[approval.entityId,approval]));
+		const verificationApprovalByUser=new Map(verificationApprovals.map(approval=>[approval.userId,approval]));
 		const items=users.map(user=>({
 			...user,
-			approval:approvalByUser.get(user.id)?{
+			approval:verificationApprovalByUser.has(user.id)?{
+				at:verificationApprovalByUser.get(user.id)!.reviewedAt,
+				reviewedBy:verificationApprovalByUser.get(user.id)!.reviewedBy,
+			}:approvalByUser.get(user.id)?{
 				at:approvalByUser.get(user.id)!.createdAt,
 				reviewedBy:approvalByUser.get(user.id)!.actor,
 			}:null,

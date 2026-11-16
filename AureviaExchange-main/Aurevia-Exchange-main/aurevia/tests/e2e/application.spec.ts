@@ -15,6 +15,7 @@ import {currentMandatoryTermsWhere} from '../../lib/managed-notice-policy';
 import {REGISTRATION_LEGAL_DOCUMENTS} from '../../lib/registration-legal';
 import {getCurrentLegalDocuments} from '../../lib/legal-acceptance';
 import {adminRoutes,authenticatedRoutes,concreteRoutePath,themes} from './theme-route-inventory';
+import {createManualReviewAssessment,kycConsentVersion,kycRegistryVersion} from '../../lib/kyc-verification';
 
 const viewports=[
 	{width:320,height:800},
@@ -2588,10 +2589,6 @@ test('administrator user and KYC actions persist and report protected actions',a
 	expect(user).toBeTruthy();
 	expect(investor).toBeTruthy();
 	expect(users.some((item:{role:string})=>item.role==='ADMIN')).toBe(false);
-	await db.kycDocument.create({data:{
-		userId:investor.id,kind:'SELFIE',filename:'e2e-approved-selfie.pdf',
-		storageKey:`${investor.id}/${randomUUID()}.pdf`,mimeType:'application/pdf',size:128,status:'APPROVED',
-	}});
 	await db.user.update({where:{id:investor.id},data:{status:'ACTIVE',accountMode:'DEMO',approvedTier:1,kycStatus:'PENDING',verifiedAt:null}});
 	const selfId=await page.request.get('/api/auth/session').then(response=>response.json().then(session=>session.user.id as string));
 	const selfDemotion=await page.request.patch('/api/admin/users',{data:{userId:selfId,role:'USER'}});
@@ -2643,34 +2640,82 @@ test('administrator user and KYC actions persist and report protected actions',a
 	await adjustmentForm.getByRole('button',{name:'Record ledger adjustment'}).click();
 	await expect(page.getByRole('status')).toContainText('Recorded credit of 10.00 USD in DEMO');
 	expect(await db.ledgerTransaction.count({where:{description:{contains:'E2E simulated account allocation'}}})).toBe(1);
+	await db.user.update({where:{id:investor.id},data:{accountMode:'REAL'}});
+	const createPendingKycCase=async(supersedesId?:string)=>{
+		const now=new Date();
+		return db.kycVerification.create({data:{
+			userId:investor.id,status:'PENDING_REVIEW',documentCountry:'US',documentType:'PASSPORT',
+			registryVersion:kycRegistryVersion,consentVersion:kycConsentVersion,consentAt:now,submittedAt:now,processedAt:now,
+			supersedesId,assessment:createManualReviewAssessment(),
+			documents:{create:['FRONT','SELFIE'].map(side=>({
+				userId:investor.id,kind:side==='SELFIE'?'SELFIE':'IDENTITY_DOCUMENT',documentSide:side,
+				filename:`e2e-${randomUUID()}-${side.toLowerCase()}.png`,storageKey:`${investor.id}/${randomUUID()}.png`,
+				mimeType:'image/png',size:128,status:'SUBMITTED',
+			}))},
+			events:{create:[
+				{actorId:investor.id,fromStatus:'DRAFT',toStatus:'SUBMITTED',action:'USER_SUBMITTED'},
+				{fromStatus:'SUBMITTED',toStatus:'PROCESSING',action:'BASIC_FILE_VALIDATION'},
+				{fromStatus:'PROCESSING',toStatus:'PENDING_REVIEW',action:'AUTOMATED_ASSESSMENT_UNAVAILABLE'},
+			]},
+		},select:{id:true,documents:{select:{id:true,documentSide:true,filename:true}}}});
+	};
 	await page.goto('/admin/kyc');
-	const kycPanel=page.locator('#kyc-verification');
-	const kycReviewRows=kycPanel.locator('div.mt-3.divide-y').locator('article');
-	await expect(kycReviewRows.filter({hasText:fixture('INVESTOR_EMAIL')})).toHaveCount(0);
-	await kycPanel.getByLabel('Review queue').selectOption('ALL');
-	const investorRow=kycPanel.locator('article').filter({hasText:fixture('INVESTOR_EMAIL')}).first();
-	await investorRow.getByRole('button',{name:'Reject',exact:true}).click();
+	const kycPanel=page.getByRole('region',{name:'Verification operations centre'});
+	const createAndOpenCase=async(supersedesId?:string)=>{
+		const verification=await createPendingKycCase(supersedesId);
+		await kycPanel.getByRole('button',{name:'Refresh'}).click();
+		const openCase=kycPanel.getByRole('button',{name:'Open case'}).first();
+		await expect(openCase).toBeVisible();
+		await openCase.click();
+		const caseDetail=kycPanel.locator('article').filter({hasText:`CASE ${verification.id}`}).first();
+		await expect(caseDetail).toBeVisible();
+		return {verification,caseDetail};
+	};
+	const rejectionCase=await createAndOpenCase();
+	await rejectionCase.caseDetail.getByLabel('Customer-facing explanation or correction').fill('E2E manual review rejection.');
+	await rejectionCase.caseDetail.getByLabel(/I independently reviewed this evidence/).check();
+	await rejectionCase.caseDetail.getByRole('button',{name:'Reject',exact:true}).click();
 	await expect.poll(async()=>{
 		const refreshed=await page.request.get('/api/admin/users').then(response=>response.json());
 		return refreshed.find((item:{id:string})=>item.id===investor.id)?.kycStatus;
 	}).toBe('REJECTED');
-	await investorRow.getByRole('button',{name:'Request information'}).click();
+	const resubmissionCase=await createAndOpenCase();
+	const frontEvidence=resubmissionCase.verification.documents.find(document=>document.documentSide==='FRONT');
+	if(!frontEvidence)throw new Error('The E2E KYC case is missing its front document.');
+	await resubmissionCase.caseDetail.getByLabel('Customer-facing explanation or correction').fill('Please replace the front image.');
+	await resubmissionCase.caseDetail.getByLabel(`FRONT · ${frontEvidence.filename}`).check();
+	await resubmissionCase.caseDetail.getByLabel(/I independently reviewed this evidence/).check();
+	await resubmissionCase.caseDetail.getByRole('button',{name:'Request resubmission'}).click();
 	await expect.poll(async()=>{
 		const refreshed=await page.request.get('/api/admin/users').then(response=>response.json());
 		return refreshed.find((item:{id:string})=>item.id===investor.id)?.kycStatus;
 	}).toBe('NEEDS_CHANGES');
-	await investorRow.getByRole('button',{name:'Approve'}).click();
+	await db.$transaction(async tx=>{
+		const changed=await tx.kycVerification.updateMany({where:{id:resubmissionCase.verification.id,status:'RESUBMISSION_REQUIRED'},data:{status:'CANCELLED'}});
+		expect(changed.count).toBe(1);
+		await tx.kycVerificationEvent.create({data:{verificationId:resubmissionCase.verification.id,actorId:investor.id,fromStatus:'RESUBMISSION_REQUIRED',toStatus:'CANCELLED',action:'SUPERSEDED_BY_RESUBMISSION'}});
+	});
+	const approvalCase=await createAndOpenCase(resubmissionCase.verification.id);
+	await approvalCase.caseDetail.getByLabel(/I independently reviewed this evidence/).check();
+	await approvalCase.caseDetail.getByRole('button',{name:'Approve case'}).click();
 	await expect.poll(async()=>{
 		const refreshed=await page.request.get('/api/admin/users').then(response=>response.json());
 		return refreshed.find((item:{id:string})=>item.id===investor.id)?.kycStatus;
 	}).toBe('APPROVED');
 	const approvedInvestor=await db.user.findUniqueOrThrow({where:{id:investor.id},select:{verifiedAt:true}});
 	expect(approvedInvestor.verifiedAt).toBeInstanceOf(Date);
-	const verifiedResponse=await page.request.get(`/api/admin/verified-accounts?search=${encodeURIComponent(fixture('INVESTOR_EMAIL'))}&tier=1&status=ACTIVE`);
+	const caseHistory=await db.kycVerification.findMany({where:{id:{in:[rejectionCase.verification.id,resubmissionCase.verification.id,approvalCase.verification.id]}},select:{id:true,status:true,supersedesId:true}});
+	expect(caseHistory).toEqual(expect.arrayContaining([
+		{id:rejectionCase.verification.id,status:'REJECTED',supersedesId:null},
+		{id:resubmissionCase.verification.id,status:'CANCELLED',supersedesId:null},
+		{id:approvalCase.verification.id,status:'APPROVED',supersedesId:resubmissionCase.verification.id},
+	]));
+	expect(await db.auditLog.count({where:{actorId:selfId,entityId:{in:[rejectionCase.verification.id,resubmissionCase.verification.id,approvalCase.verification.id]},action:{in:['KYC_VERIFICATION_REJECT','KYC_VERIFICATION_RESUBMISSION_REQUIRED','KYC_VERIFICATION_APPROVE']}}})).toBe(3);
+	const verifiedResponse=await page.request.get(`/api/admin/verified-accounts?search=${encodeURIComponent(fixture('INVESTOR_EMAIL'))}&tier=2&status=ACTIVE`);
 	expect(verifiedResponse.ok()).toBe(true);
 	const verifiedResults=await verifiedResponse.json();
 	expect(verifiedResults.total).toBe(1);
-	expect(verifiedResults.items[0]).toMatchObject({id:investor.id,email:fixture('INVESTOR_EMAIL'),kycStatus:'APPROVED',approvedTier:1,approval:{reviewedBy:{email:fixture('ADMIN_EMAIL')}}});
+	expect(verifiedResults.items[0]).toMatchObject({id:investor.id,email:fixture('INVESTOR_EMAIL'),kycStatus:'APPROVED',approvedTier:2,approval:{reviewedBy:{email:fixture('ADMIN_EMAIL')}}});
 	await page.goto('/admin/verified-accounts');
 	await expect(page.getByRole('heading',{name:'Verified Accounts'})).toBeVisible();
 	await page.getByRole('textbox',{name:'Search',exact:true}).fill(fixture('INVESTOR_EMAIL'));
