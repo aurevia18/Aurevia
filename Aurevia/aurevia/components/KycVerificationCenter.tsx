@@ -11,6 +11,7 @@ type KycDocument={id:string;kind:string;documentSide:string|null;filename:string
 type KycCheck={check:string;outcome:string;reason:string};
 type KycVerification={id:string;status:string;documentCountry:string;documentType:string;submittedAt:string|null;reviewedAt:string|null;decisionReason:string|null;identityInformation:{legalName:string;dateOfBirth:string;documentExpiryDate:string|null}|null;assessment:{riskLevel?:string;checks?:KycCheck[]}|null;documents:KycDocument[];events:{fromStatus:string|null;toStatus:string;action:string;reason:string|null;createdAt:string}[]};
 
+const statusRefreshIntervalMs=5*60_000;
 const countries=Country.getAllCountries().sort((left,right)=>left.name.localeCompare(right.name));
 const statusCopy:Record<string,string>={
 	DRAFT:'Draft',
@@ -32,6 +33,7 @@ function stopTracks(stream:MediaStream|null){
 export default function KycVerificationCenter({currentTier,onUpdated}:{currentTier:number;onUpdated:()=>void}){
 	const videoRef=useRef<HTMLVideoElement>(null);
 	const streamRef=useRef<MediaStream|null>(null);
+	const draftInProgress=useRef(false);
 	const [requirements,setRequirements]=useState<DocumentRequirement[]>([]);
 	const [verifications,setVerifications]=useState<KycVerification[]>([]);
 	const [country,setCountry]=useState('');
@@ -56,26 +58,35 @@ export default function KycVerificationCenter({currentTier,onUpdated}:{currentTi
 		&&(!selectedRequirement?.sides.includes('BACK')||Boolean(back))
 		&&(!latest||['REJECTED','RESUBMISSION_REQUIRED','CANCELLED'].includes(latest.status));
 
-	const load=useCallback(async()=>{
-		setLoading(true);
+	const load=useCallback(async(background=false)=>{
+		if(!background)setLoading(true);
 		try{
 			const response=await fetch('/api/kyc/verification',{cache:'no-store'});
 			const result=await response.json();
 			if(!response.ok)throw new Error(result.error||'Unable to load your verification centre.');
+			if(background&&draftInProgress.current)return;
 			setRequirements(result.registry||[]);
 			setVerifications(result.verifications||[]);
 			setError('');
-		}catch(exception){setError(exception instanceof Error?exception.message:'Unable to load your verification centre.')}
-		finally{setLoading(false)}
+		}catch(exception){
+			if(!background||!draftInProgress.current)setError(exception instanceof Error?exception.message:'Unable to load your verification centre.');
+		}finally{
+			if(!background)setLoading(false);
+		}
 	},[]);
 
 	useEffect(()=>{
 		void load();
-		const timer=setInterval(()=>{void load();onUpdated()},30_000);
+		const timer=setInterval(()=>{
+			if(draftInProgress.current)return;
+			void load(true);
+			onUpdated();
+		},statusRefreshIntervalMs);
 		return()=>{clearInterval(timer);stopTracks(streamRef.current)};
 	},[load,onUpdated]);
 
 	async function startCamera(){
+		draftInProgress.current=true;
 		setError('');
 		try{
 			if(!navigator.mediaDevices?.getUserMedia)throw new Error('Camera capture is not available in this browser.');
@@ -105,6 +116,7 @@ export default function KycVerificationCenter({currentTier,onUpdated}:{currentTi
 	async function submit(event:React.FormEvent<HTMLFormElement>){
 		event.preventDefault();
 		if(!canSubmit)return;
+		draftInProgress.current=true;
 		setSubmitting(true);setError('');setMessage('');
 		try{
 			const form=new FormData();
@@ -121,6 +133,7 @@ export default function KycVerificationCenter({currentTier,onUpdated}:{currentTi
 			const result=await response.json();
 			if(!response.ok)throw new Error(result.error||'Unable to submit your identity verification.');
 			setFront(null);setBack(null);setSelfie(null);setConsent(false);
+			draftInProgress.current=false;
 			setMessage('Your submission was received and is awaiting administrator review.');
 			await load();onUpdated();
 		}catch(exception){setError(exception instanceof Error?exception.message:'Unable to submit your identity verification.')}
@@ -146,7 +159,7 @@ export default function KycVerificationCenter({currentTier,onUpdated}:{currentTi
 				{latest.documents.length>0&&<ul className="mt-3 grid gap-2 text-sm sm:grid-cols-2">{latest.documents.map(document=><li className="rounded border border-white/10 p-2" key={document.id}>{document.documentSide?.replaceAll('_',' ')||document.kind.replaceAll('_',' ')} · {document.status.replaceAll('_',' ')}<span className="block truncate text-xs muted">{document.filename}</span>{document.reviewNote&&<span className="mt-1 block text-xs">{document.reviewNote}</span>}</li>)}</ul>}
 				<details className="mt-3"><summary className="cursor-pointer text-sm gold">Assessment checks</summary><ul className="mt-2 space-y-2 text-xs">{latest.assessment?.checks?.map(check=><li key={check.check}><b>{check.check.replaceAll('_',' ')} · {check.outcome.replaceAll('_',' ')}</b><span className="block muted">{check.reason}</span></li>)}</ul></details>
 			</article>}
-			{latest&&['PENDING_REVIEW','PROCESSING','SUBMITTED','NEEDS_REVIEW'].includes(latest.status)?<p className="mt-4 text-sm muted">Your case is awaiting review. You’ll receive an in-app notification and email when its status changes.</p>:<form className="mt-5 space-y-4" onSubmit={submit}>
+			{latest&&['PENDING_REVIEW','PROCESSING','SUBMITTED','NEEDS_REVIEW'].includes(latest.status)?<p className="mt-4 text-sm muted">Your case is awaiting review. You’ll receive an in-app notification and email when its status changes.</p>:<form className="mt-5 space-y-4" onSubmit={submit} onChange={()=>{draftInProgress.current=true}}>
 				<h3 className="font-semibold">{latest?.status==='RESUBMISSION_REQUIRED'?'Submit corrected evidence':'Start a verification submission'}</h3>
 				<div className="grid gap-3 sm:grid-cols-2">
 					<label className="account-label">Document-issuing country<select className="input" value={country} onChange={event=>setCountry(event.target.value)} required><option value="">Select a country</option>{countries.map(item=><option key={item.isoCode} value={item.isoCode}>{item.name}</option>)}</select></label>
