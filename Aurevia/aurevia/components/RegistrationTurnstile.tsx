@@ -58,9 +58,10 @@ export default function RegistrationTurnstile({siteKey,onToken}:{siteKey:string;
 				theme:'dark',
 				size:'flexible',
 				action:'register',
+				retry:'auto',
 				callback:(token:string)=>{tokenHandler.current(token);setState('ready')},
 				'expired-callback':()=>{tokenHandler.current(null);setState('expired')},
-				'error-callback':()=>{tokenHandler.current(null);setState('error');return true},
+				'error-callback':()=>{tokenHandler.current(null);setState('error');return false},
 			});
 			setState('ready');
 		}).catch(()=>{if(active)setState('error')});

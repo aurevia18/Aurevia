@@ -102,14 +102,17 @@ async function selectRegistrationCountry(page:Page,accessibleName:RegExp,country
 	await dialog.getByRole('option',{name:new RegExp(`${countryName}.*${countryCode}.*\\${dialCode}`)}).click();
 }
 
-async function completeRegistrationToReview(page:Page,options:{email:string;firstName?:string;lastName?:string;country?:string;countryCode?:string},turnstileOptions:{failScriptOnce?:boolean}={}){
+async function completeRegistrationToReview(page:Page,options:{email:string;firstName?:string;lastName?:string;country?:string;countryCode?:string},turnstileOptions:{failScriptOnce?:boolean;challengeFailsOnce?:boolean}={}){
 	let scriptRequests=0;
 	await page.route('https://challenges.cloudflare.com/turnstile/v0/api.js*',route=>{
 		scriptRequests++;
 		if(turnstileOptions.failScriptOnce&&scriptRequests===1)return route.fulfill({status:200,contentType:'application/javascript',body:''});
+		const challengeCompletion=turnstileOptions.challengeFailsOnce
+			?"const retry=options['error-callback'](300020);if(retry===false)window.setTimeout(()=>options.callback('e2e-turnstile-token'),0);"
+			:"window.setTimeout(()=>options.callback('e2e-turnstile-token'),0);";
 		return route.fulfill({
 			status:200,contentType:'application/javascript',
-			body:"window.turnstile={render:(container,options)=>{window.setTimeout(()=>options.callback('e2e-turnstile-token'),0);return 'e2e-widget'},remove:()=>{},reset:()=>{}};",
+			body:`window.turnstile={render:(container,options)=>{window.setTimeout(()=>{${challengeCompletion}},0);return 'e2e-widget'},remove:()=>{},reset:()=>{}};`,
 		});
 	});
 	const country=options.country||'United States';
@@ -1361,6 +1364,17 @@ test('registration can retry Turnstile after its script fails to initialize',asy
 	await page.getByRole('button',{name:'Create account'}).click();
 	await page.waitForURL(url=>url.pathname==='/dashboard');
 	expect(submittedPayload).toHaveProperty('turnstileToken','e2e-turnstile-token');
+});
+
+test('registration allows Turnstile to retry after a transient challenge error',async({page})=>{
+	const email=`aurevia-e2e-turnstile-challenge-retry-${randomUUID()}@example.invalid`;
+	await page.setViewportSize({width:390,height:844});
+	await page.goto('/register');
+	await waitForStartup(page);
+	await completeRegistrationToReview(page,{email},{challengeFailsOnce:true});
+	await page.getByRole('checkbox',{name:/I confirm that the information supplied/}).check();
+	await expect(page.getByRole('button',{name:'Create account'})).toBeEnabled();
+	await expect(page.locator('.registration-turnstile [role="alert"]')).toHaveCount(0);
 });
 
 test('three card designs preserve proportions and support keyboard, pointer, and touch flips',async({browser,browserName,page})=>{
