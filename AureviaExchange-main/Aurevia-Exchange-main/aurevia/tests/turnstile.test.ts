@@ -23,6 +23,7 @@ describe('Cloudflare Turnstile verification',()=>{
 	});
 
 	it('rejects missing configuration, expired or reused tokens, and mismatched action or hostname',async()=>{
+		vi.stubEnv('TURNSTILE_SECRET_KEY','');
 		const fetchMock=vi.fn();
 		vi.stubGlobal('fetch',fetchMock);
 		await expect(verifyTurnstileToken({token:'token',hostname:'aurevia.test'})).rejects.toThrow('TURNSTILE_CONFIGURATION_REQUIRED');
