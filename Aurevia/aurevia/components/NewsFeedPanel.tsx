@@ -1,7 +1,7 @@
 'use client';
 
 import {useCallback,useEffect,useState} from 'react';
-import {ExternalLink,LoaderCircle,Newspaper,RefreshCw,Sparkles} from 'lucide-react';
+import {ExternalLink,LoaderCircle,MonitorPlay,Newspaper,RefreshCw,Sparkles} from 'lucide-react';
 import NewsMediaPlayer from '@/components/NewsMediaPlayer';
 
 type FeedItem={
@@ -50,6 +50,7 @@ export default function NewsFeedPanel({compact=false}:{compact?:boolean}){
 	const [error,setError]=useState('');
 	const [category,setCategory]=useState('');
 	const [page,setPage]=useState(1);
+	const [selectedMediaId,setSelectedMediaId]=useState<string|null>(null);
 	const [analysis,setAnalysis]=useState<NewsAnalysis|null>(null);
 	const [analysisSources,setAnalysisSources]=useState<NewsArticleSource[]>([]);
 	const [analysisIsStale,setAnalysisIsStale]=useState(false);
@@ -100,6 +101,9 @@ export default function NewsFeedPanel({compact=false}:{compact?:boolean}){
 		return ()=>window.clearInterval(timer);
 	},[load]);
 
+	const mediaItems=data?.items.filter((item):item is FeedItem&{mediaSource:{kind:'video'|'embed';url:string}}=>Boolean(item.mediaSource))||[];
+	const featuredItem=mediaItems.find(item=>item.id===selectedMediaId)||mediaItems[0];
+
 	return (
 		<section className={`news-feed-panel ${compact?'is-compact':''}`} aria-label="External news and updates">
 			<header className="news-feed-header">
@@ -142,9 +146,55 @@ export default function NewsFeedPanel({compact=false}:{compact?:boolean}){
 				<p className="news-feed-state" role="status">No external articles are available yet. Sources sync on a schedule after configuration.</p>
 			)}
 
+			{featuredItem&&(
+				<section className="news-tv" aria-label="Aurevia TV">
+					<header className="news-tv-header">
+						<div className="news-tv-brand">
+							<span className="news-tv-icon"><MonitorPlay size={20} aria-hidden="true"/></span>
+							<div><p>THE AUREVIA NETWORK</p><h2>Aurevia TV</h2></div>
+						</div>
+						<span className="news-tv-badge"><span aria-hidden="true"/> WATCH IN PLATFORM</span>
+					</header>
+					<div className="news-tv-grid">
+						<div className="news-tv-screen">
+							<NewsMediaPlayer key={featuredItem.id} kind={featuredItem.mediaSource.kind} url={featuredItem.mediaSource.url} title={featuredItem.title}/>
+						</div>
+						<aside className="news-tv-details">
+							<p className="news-tv-eyebrow">NOW SHOWING · EPISODE {String(mediaItems.findIndex(item=>item.id===featuredItem.id)+1).padStart(2,'0')}</p>
+							<h3>{featuredItem.title}</h3>
+							{featuredItem.summary&&<p className="news-tv-summary">{featuredItem.summary}</p>}
+							<div className="news-tv-meta">
+								<span>{featuredItem.source.displayName}</span>
+								<span>{featuredItem.category.replaceAll('_',' ')}</span>
+								{featuredItem.publishedAt&&<time dateTime={featuredItem.publishedAt}>{formatWhen(featuredItem.publishedAt)}</time>}
+							</div>
+							<a className="news-tv-source-link" href={featuredItem.canonicalUrl} target="_blank" rel="noopener noreferrer">
+								View original story <ExternalLink size={13} aria-hidden="true"/>
+							</a>
+							<div className="news-tv-lineup">
+								<div className="news-tv-lineup-heading"><span>ON DEMAND</span><span>{mediaItems.length} {mediaItems.length===1?'PROGRAM':'PROGRAMS'}</span></div>
+								{mediaItems.map((item,index)=>(
+									<button
+										key={item.id}
+										type="button"
+										className={`news-tv-episode${item.id===featuredItem.id?' is-selected':''}`}
+										aria-pressed={item.id===featuredItem.id}
+										onClick={()=>setSelectedMediaId(item.id)}
+									>
+										<span className="news-tv-episode-number">{String(index+1).padStart(2,'0')}</span>
+										<span className="news-tv-episode-copy"><strong>{item.title}</strong><small>{item.source.displayName}</small></span>
+										<MonitorPlay size={16} aria-hidden="true"/>
+									</button>
+								))}
+							</div>
+						</aside>
+					</div>
+				</section>
+			)}
+
 			{data&&data.items.length>0&&(
 				<ul className="news-feed-list">
-					{data.items.map(item=>(
+					{data.items.filter(item=>!item.mediaSource).map(item=>(
 						<li key={item.id} className="news-feed-item card">
 							<div className="news-feed-item-body">
 								<div className="news-feed-meta">
@@ -155,7 +205,6 @@ export default function NewsFeedPanel({compact=false}:{compact?:boolean}){
 								<a className="news-feed-item-title" href={item.canonicalUrl} target="_blank" rel="noopener noreferrer">
 									{item.title} <ExternalLink size={14} aria-hidden="true"/>
 								</a>
-								{item.mediaSource&&<NewsMediaPlayer kind={item.mediaSource.kind} url={item.mediaSource.url} title={item.title}/>}
 								{item.summary&&<p className="news-feed-summary">{item.summary}</p>}
 								<span className="news-feed-publisher muted text-xs">{item.publisher} · {item.category.replaceAll('_',' ').toLowerCase()}</span>
 							</div>

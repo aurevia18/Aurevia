@@ -43,31 +43,48 @@ test('news cards and video players fit phone, tablet, and desktop widths',async(
 	await page.setViewportSize({width:320,height:900});
 	await page.goto('/news');
 	const cards=page.locator('.news-feed-item');
-	await expect(cards).toHaveCount(2);
+	await expect(cards).toHaveCount(0);
+	await expect(page.getByRole('region',{name:'Aurevia TV'})).toBeVisible();
+	await expect(page.getByRole('heading',{name:'Aurevia TV',exact:true})).toBeVisible();
 	for(const width of [320,375,390,430,768,1024,1440]){
 		await page.setViewportSize({width,height:900});
 		const geometry=await page.evaluate(()=>{
 			const main=document.querySelector<HTMLElement>('.news-editorial-page');
-			const card=document.querySelector<HTMLElement>('.news-feed-item');
+			const stage=document.querySelector<HTMLElement>('.news-tv');
 			const frame=document.querySelector<HTMLElement>('.news-feed-media-frame');
-			if(!main||!card||!frame)throw new Error('News layout elements are missing.');
+			if(!main||!stage||!frame)throw new Error('News layout elements are missing.');
 			return {
 				scrollWidth:document.documentElement.scrollWidth,
 				viewportWidth:window.innerWidth,
 				mainWidth:main.getBoundingClientRect().width,
-				cardWidth:card.getBoundingClientRect().width,
+				stageWidth:stage.getBoundingClientRect().width,
 				frameWidth:frame.getBoundingClientRect().width,
 				frameHeight:frame.getBoundingClientRect().height,
 			};
 		});
 		expect(geometry.scrollWidth,`horizontal overflow at ${width}px`).toBeLessThanOrEqual(geometry.viewportWidth);
 		expect(geometry.mainWidth).toBeGreaterThan(Math.min(width-40,1120)*.95);
-		expect(geometry.cardWidth).toBeGreaterThan(geometry.mainWidth*.4);
-		expect(geometry.frameWidth).toBeGreaterThan(geometry.cardWidth*.75);
+		expect(geometry.stageWidth).toBeGreaterThan(geometry.mainWidth*.95);
+		expect(geometry.frameWidth).toBeGreaterThan(geometry.stageWidth*.45);
 		expect(geometry.frameHeight/geometry.frameWidth).toBeCloseTo(9/16,1);
-		await expect(page.getByTitle('Market perspective from our video partners video')).toBeVisible();
+		await expect(page.locator('.news-tv-screen video')).toBeVisible();
 		await expect(page.getByText('A video briefing with a readable summary.')).toBeVisible();
 	}
+});
+
+test('Aurevia TV keeps selected programs inside the platform',async({page})=>{
+	await mockNewsFeed(page);
+	await page.setViewportSize({width:1280,height:900});
+	await page.goto('/news');
+
+	const stage=page.getByRole('region',{name:'Aurevia TV'});
+	await expect(stage.getByRole('heading',{name:'Aurevia market briefing video'})).toBeVisible();
+	await expect(stage.getByRole('button',{name:/Market perspective from our video partners/})).toHaveAttribute('aria-pressed','false');
+	await stage.getByRole('button',{name:/Market perspective from our video partners/}).click();
+
+	await expect(stage.getByRole('heading',{name:'Market perspective from our video partners'})).toBeVisible();
+	await expect(stage.getByTitle('Market perspective from our video partners video')).toBeVisible();
+	await expect(stage.getByRole('button',{name:/Market perspective from our video partners/})).toHaveAttribute('aria-pressed','true');
 });
 
 test('direct video reports loading errors, retries, plays, pauses, mutes, fullscreen, and replays',async({page})=>{
