@@ -95,10 +95,11 @@ export async function getFinnhubHistory(asset:LiveMarketAsset,range:string,inter
 	const start=range==='ytd'?Date.UTC(new Date().getUTCFullYear(),0,1)/1000:now-(daysByRange[range]??1)*86400;
 	const symbol=providerSymbol(asset);
 	const query=new URLSearchParams({symbol,resolution:resolutionByInterval[interval]??'D',from:String(Math.floor(start)),to:String(now)});
-	const data=await request(`stock/candle?${query}`,apiKey,fetcher);
+	const candleEndpoint=asset.type==='CRYPTO'?'crypto/candle':'stock/candle';
+	const data=await request(`${candleEndpoint}?${query}`,apiKey,fetcher);
 	if(data.s!=='ok'||!Array.isArray(data.t)||!Array.isArray(data.o)||!Array.isArray(data.h)||!Array.isArray(data.l)||!Array.isArray(data.c)){
 		const details=sanitizeMarketProviderErrorDetails({code:data.s,message:data.error});
-		throw new FinnhubMarketDataError(`Finnhub has no historical data for ${asset.id}.`,503,200,details.providerCode||'INVALID_CANDLE_RESPONSE',details.providerMessage,'/api/v1/stock/candle');
+		throw new FinnhubMarketDataError(`Finnhub has no historical data for ${asset.id}.`,503,200,details.providerCode||'INVALID_CANDLE_RESPONSE',details.providerMessage,endpointPath(candleEndpoint));
 	}
 	const candles:MarketCandle[]=[];
 	for(let i=0;i<data.t.length;i++){

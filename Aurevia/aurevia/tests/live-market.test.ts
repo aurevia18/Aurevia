@@ -157,6 +157,20 @@ describe('Finnhub market service',()=>{
 		expect(history.quote).toBeNull();
 	});
 
+	it('uses Finnhub crypto candles for crypto history',async()=>{
+		const now=Math.floor(Date.now()/1000);
+		const fetcher=vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
+			s:'ok',t:[now-60],o:[68000],h:[68500],l:[67800],c:[68200],v:[25],
+		}),{status:200}));
+		const asset={id:'BTC_FINNHUB_HISTORY_TEST',ticker:'BTC-USD',name:'Bitcoin USD test',type:'CRYPTO' as const,currency:'USD'};
+
+		const history=await getFinnhubHistory(asset,'1d','1m','test-finnhub-key',fetcher);
+
+		expect(history.candles).toHaveLength(1);
+		expect(String(fetcher.mock.calls[0][0])).toContain('/api/v1/crypto/candle?');
+		expect(new URL(String(fetcher.mock.calls[0][0])).searchParams.get('symbol')).toBe('BINANCE:BTCUSDT');
+	});
+
 	it('retains the Finnhub HTTP status and redacted provider response for history failures',async()=>{
 		const fetcher=vi.fn().mockResolvedValue(new Response(JSON.stringify({
 			error:'API key: private-finnhub-key',
