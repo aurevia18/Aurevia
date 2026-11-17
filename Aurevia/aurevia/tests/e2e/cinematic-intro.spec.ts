@@ -4,7 +4,7 @@ const introKey='aurevia-cinematic-intro-complete';
 
 async function holdVideoRequests(page:Page){
 	const releases:Array<()=>Promise<void>>=[];
-	await page.route('**/videos/*.mp4',route=>new Promise<void>(resolve=>{
+	await page.route('**/Videos/*.mp4',route=>new Promise<void>(resolve=>{
 		releases.push(async()=>{
 			try{await route.abort()}catch{}
 			resolve();
@@ -29,7 +29,7 @@ test('desktop intro falls back to the available orientation, ends, skips, and st
 	const releaseVideoRequests=await holdVideoRequests(page);
 	let releaseInitialDesktop:undefined|(()=>Promise<void>);
 	let desktopRequestCount=0;
-	await page.route('**/videos/aurevia-intro-desktop.mp4',route=>{
+	await page.route('**/Videos/aurevia-intro-desktop.mp4',route=>{
 		desktopRequestCount+=1;
 		if(desktopRequestCount>1)return route.abort();
 		return new Promise<void>(resolve=>{
@@ -43,10 +43,10 @@ test('desktop intro falls back to the available orientation, ends, skips, and st
 		const intro=page.getByRole('dialog',{name:'Aurevia Exchange introduction'});
 		await expect(intro).toBeVisible();
 		const video=page.locator('.exchange-intro-video');
-		await expect(video).toHaveAttribute('src','/videos/aurevia-intro-desktop.mp4');
+		await expect(video).toHaveAttribute('src','/Videos/aurevia-intro-desktop.mp4');
 		if(!releaseInitialDesktop)throw new Error('Desktop video request did not start.');
 		await releaseInitialDesktop();
-		await expect(video).toHaveAttribute('src','/videos/aurevia-intro-mobile.mp4');
+		await expect(video).toHaveAttribute('src','/Videos/aurevia-intro-mobile.mp4');
 
 		await video.evaluate(element=>element.dispatchEvent(new Event('ended',{bubbles:true})));
 		await expect(intro).toBeHidden();
@@ -73,7 +73,7 @@ test('portrait devices select the mobile video and autoplay failures offer playb
 	try{
 		await page.goto('/');
 		await expect(page.getByRole('dialog',{name:'Aurevia Exchange introduction'})).toBeVisible();
-		await expect(page.locator('.exchange-intro-video')).toHaveAttribute('src','/videos/aurevia-intro-mobile.mp4');
+		await expect(page.locator('.exchange-intro-video')).toHaveAttribute('src','/Videos/aurevia-intro-mobile.mp4');
 		expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
 		await expect(page.getByRole('button',{name:'Play intro'})).toBeVisible();
 		await page.getByRole('button',{name:'Play intro'}).click();
@@ -89,7 +89,7 @@ test('missing video files offer a safe way to continue to the homepage',async({p
 	await page.setViewportSize({width:1280,height:900});
 	await page.emulateMedia({reducedMotion:'no-preference'});
 	await prepareFirstVisit(page,'resolve');
-	await page.route('**/videos/*.mp4',route=>route.abort());
+	await page.route('**/Videos/*.mp4',route=>route.abort());
 	await page.goto('/');
 	await expect(page.getByRole('status')).toHaveText('The introduction video is unavailable.');
 	await page.getByRole('button',{name:'Continue to Aurevia'}).click();

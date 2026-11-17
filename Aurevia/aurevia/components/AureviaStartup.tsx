@@ -7,8 +7,8 @@ import AureviaLoading from '@/components/AureviaLoading';
 type Orientation='landscape'|'portrait';
 
 const introVideos={
-	landscape:'/videos/aurevia-intro-desktop.mp4',
-	portrait:'/videos/aurevia-intro-mobile.mp4',
+	landscape:'/Videos/aurevia-intro-desktop.mp4',
+	portrait:'/Videos/aurevia-intro-mobile.mp4',
 };
 
 export default function AureviaStartup({isVisible,isExiting,onSkip,onReplay}:{isVisible:boolean;isExiting:boolean;onSkip:()=>void;onReplay:()=>void}){
