@@ -1,7 +1,7 @@
 'use client';
 
 import {useRef,useState} from 'react';
-import {Maximize,Pause,Play,RotateCcw,Volume2,VolumeX} from 'lucide-react';
+import {LoaderCircle,Maximize,Pause,Play,RotateCcw,Volume2,VolumeX} from 'lucide-react';
 
 type Props={kind:'video'|'embed';url:string;title:string};
 type PlaybackState='loading'|'ready'|'playing'|'paused'|'ended'|'error';
@@ -142,6 +142,15 @@ export default function NewsMediaPlayer({kind,url,title}:Props){
 				<p>This video could not be loaded or played.</p>
 				<button type="button" onClick={retry}>Retry video</button>
 			</div>}
+			{playbackState!=='error'&&<button
+				type="button"
+				className={`news-feed-player-center${playbackState==='playing'?' is-playing':''}`}
+				onClick={()=>void (playbackState==='ended'?replay():togglePlayback())}
+				disabled={playbackState==='loading'}
+				aria-label={playbackState==='ended'?'Replay video from beginning':playbackState==='playing'?'Pause video in player':'Play video in player'}
+			>
+				{playbackState==='loading'?<LoaderCircle size={23} className="animate-spin" aria-hidden="true"/>:playbackState==='playing'?<Pause size={23} aria-hidden="true"/>:playbackState==='ended'?<RotateCcw size={23} aria-hidden="true"/>:<Play size={23} fill="currentColor" aria-hidden="true"/>}
+			</button>}
 		</div>
 		<div className="news-feed-player-controls" aria-label="Video controls">
 			<button type="button" onClick={()=>void togglePlayback()} disabled={playbackState==='loading'||playbackState==='error'} aria-label={playbackState==='playing'?'Pause video':'Play video'}>

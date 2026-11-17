@@ -72,6 +72,47 @@ test('news cards and video players fit phone, tablet, and desktop widths',async(
 	}
 });
 
+test('homepage video section uses its full grid width on mobile and desktop',async({page})=>{
+	await mockNewsFeed(page);
+	await page.setViewportSize({width:390,height:844});
+	await page.goto('/');
+	const section=page.locator('.news-section');
+	await section.scrollIntoViewIfNeeded();
+	const stage=section.locator('.news-tv');
+	await expect(stage).toBeVisible();
+
+	for(const viewport of [{width:390,height:844},{width:412,height:915},{width:768,height:1024},{width:1440,height:900}]){
+		await page.setViewportSize(viewport);
+		await section.scrollIntoViewIfNeeded();
+		const geometry=await page.evaluate(()=>{
+			const section=document.querySelector<HTMLElement>('.news-section');
+			const panel=document.querySelector<HTMLElement>('.news-section .news-feed-panel');
+			const tv=document.querySelector<HTMLElement>('.news-section .news-tv');
+			const screen=document.querySelector<HTMLElement>('.news-section .news-tv-screen');
+			const frame=document.querySelector<HTMLElement>('.news-section .news-feed-media-frame');
+			const details=document.querySelector<HTMLElement>('.news-section .news-tv-details');
+			if(!section||!panel||!tv||!screen||!frame||!details)throw new Error('Homepage video layout elements are missing.');
+			return {
+				viewportWidth:window.innerWidth,
+				scrollWidth:document.documentElement.scrollWidth,
+				sectionWidth:section.getBoundingClientRect().width,
+				panelWidth:panel.getBoundingClientRect().width,
+				tvWidth:tv.getBoundingClientRect().width,
+				screenWidth:screen.getBoundingClientRect().width,
+				detailsWidth:details.getBoundingClientRect().width,
+				frameWidth:frame.getBoundingClientRect().width,
+				frameHeight:frame.getBoundingClientRect().height,
+			};
+		});
+		expect(geometry.scrollWidth,`horizontal overflow at ${viewport.width}px`).toBeLessThanOrEqual(geometry.viewportWidth);
+		expect(geometry.panelWidth,`news panel narrowed at ${viewport.width}px`).toBeGreaterThan(geometry.sectionWidth*.9);
+		expect(geometry.tvWidth,`TV stage narrowed at ${viewport.width}px`).toBeGreaterThan(geometry.panelWidth*.9);
+		expect(geometry.frameWidth,`player narrowed at ${viewport.width}px`).toBeGreaterThan(geometry.screenWidth*.9);
+		expect(geometry.detailsWidth).toBeGreaterThan(0);
+		expect(geometry.frameHeight/geometry.frameWidth).toBeCloseTo(9/16,1);
+	}
+});
+
 test('Aurevia TV keeps selected programs inside the platform',async({page})=>{
 	await mockNewsFeed(page);
 	await page.setViewportSize({width:1280,height:900});
@@ -106,21 +147,25 @@ test('direct video reports loading errors, retries, plays, pauses, mutes, fullsc
 
 	const video=player.locator('video');
 	await expect.poll(()=>video.evaluate(element=>(element as HTMLVideoElement).readyState)).toBeGreaterThanOrEqual(2);
-	await player.getByRole('button',{name:'Play video',exact:true}).click();
+	await player.getByRole('button',{name:'Play video in player'}).click();
 	await expect(player.getByRole('status')).toHaveText('Playing');
 	await expect.poll(()=>video.evaluate(element=>(element as HTMLVideoElement).currentTime)).toBeGreaterThan(.2);
+	await expect(player.getByRole('button',{name:'Pause video in player'})).toBeVisible();
 
 	await player.getByRole('button',{name:'Mute video'}).click();
 	await expect(video).toHaveJSProperty('muted',true);
 	await player.getByRole('button',{name:'Unmute video'}).click();
 	await expect(video).toHaveJSProperty('muted',false);
-	await player.getByRole('button',{name:'Pause video'}).click();
+	await player.getByRole('button',{name:'Pause video',exact:true}).click();
 	await expect.poll(()=>video.evaluate(element=>(element as HTMLVideoElement).paused)).toBe(true);
 
 	const replaySeek=video.evaluate(element=>new Promise<boolean>(resolve=>element.addEventListener('seeked',()=>resolve((element as HTMLVideoElement).currentTime<.5),{once:true})));
 	await player.getByRole('button',{name:'Replay video'}).click();
 	expect(await replaySeek).toBe(true);
 	await expect.poll(()=>video.evaluate(element=>(element as HTMLVideoElement).currentTime)).toBeGreaterThan(.2);
+	await video.evaluate(element=>element.dispatchEvent(new Event('ended')));
+	await player.getByRole('button',{name:'Replay video from beginning'}).click();
+	await expect(player.getByRole('status')).toHaveText('Playing');
 	await player.getByRole('button',{name:'Fullscreen video'}).click();
 	await expect.poll(()=>page.evaluate(()=>Boolean(document.fullscreenElement))).toBe(true);
 	await page.keyboard.press('Escape');
