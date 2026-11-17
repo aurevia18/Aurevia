@@ -9,14 +9,17 @@ export const dynamic='force-dynamic';
 export default async function ClientStoriesPage(){
 	const stories=await getPublishedClientStories();
 	return <><Nav/><main className="account-page client-stories-page mx-auto max-w-6xl">
-		<header className="account-heading client-stories-page-heading"><div><span className="account-kicker">CLIENT STORIES</span><h1>Experiences, shared by our clients</h1><p>Published with permission. Verification labels reflect the checks completed for each story.</p></div></header>
+		<header className="account-heading client-stories-page-heading"><div className="client-stories-page-heading-copy">
+			<div className="client-stories-page-eyebrow"><span className="account-kicker">CLIENT STORIES</span><span className="client-stories-count">{stories.length} {stories.length===1?'STORY':'STORIES'}</span></div>
+			<h1>Experiences, shared by our clients</h1><p>Published with permission. Verification labels reflect the checks completed for each story.</p>
+		</div></header>
 		{stories.length?<div className="client-testimonials-grid">{stories.map(story=>{
 			const image=story.imageUrl||resolveClientStoryImage(story.imageReference);
 			return <article key={story.id} className="client-testimonial-card">
+				<div className={`client-testimonial-photo${image?' has-image':''}`}>
+					{image?<Image src={image} alt={`Portrait for ${story.displayName}`} fill sizes="(max-width: 600px) 96px, (max-width: 900px) 140px, 180px" unoptimized className="client-testimonial-portrait"/>:<span className="client-testimonial-monogram" aria-hidden="true">{story.displayName.trim().charAt(0).toUpperCase()}</span>}
+				</div>
 				<div className="client-testimonial-person">
-					<span className="client-story-avatar client-story-avatar-md">
-						{image?<Image src={image} alt={`Portrait for ${story.displayName}`} width={320} height={320} className="client-story-portrait"/>:<span className="client-story-monogram" aria-hidden="true">{story.displayName.trim().charAt(0).toUpperCase()}</span>}
-					</span>
 					<div className="client-testimonial-person-copy">
 						<h2>{story.displayName}</h2>
 						{(story.cityOrRegion||story.country)&&<p>{[story.cityOrRegion,story.country].filter(Boolean).join(', ')}</p>}

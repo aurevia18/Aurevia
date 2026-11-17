@@ -1170,6 +1170,7 @@ test('global chat support persists its position and exchanges private admin mess
 			title:'A simpler way to manage my finances',
 			quote:'The platform gives me a clear view of my account.',
 			rating:5,
+			imageReference:'/client-stories/e2e-portrait.png',
 			consentConfirmed:true,
 			publicationStatus:'PUBLISHED',
 			source:'admin',
@@ -1179,11 +1180,24 @@ test('global chat support persists its position and exchanges private admin mess
 		expect(story).toMatchObject({userId:null,title:'A simpler way to manage my finances',rating:5,publicationStatus:'PUBLISHED',verifiedClient:false});
 		const publicStories=await adminPage.request.get('/api/client-stories').then(response=>response.json());
 		expect(publicStories).toContainEqual(expect.objectContaining({id:story.id,title:story.title,rating:5,verifiedClientStory:false}));
+		const portrait=new PNG({width:8,height:8});portrait.data.fill(180);
+		await adminPage.route('**/client-stories/e2e-portrait.png',route=>route.fulfill({status:200,contentType:'image/png',body:PNG.sync.write(portrait)}));
+		await adminPage.setViewportSize({width:390,height:844});
 		await adminPage.goto('/client-stories');
 		const testimonial=adminPage.locator('.client-testimonial-card').filter({hasText:story.displayName});
 		await expect(testimonial).toBeVisible();
 		await expect(testimonial.getByRole('heading',{name:story.title})).toBeVisible();
 		await expect(testimonial.getByText(story.quote)).toBeVisible();
+		const portraitImage=testimonial.getByRole('img',{name:`Portrait for ${story.displayName}`});
+		await expect(portraitImage).toBeVisible();
+		await expect.poll(()=>portraitImage.evaluate(image=>(image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+		for(const viewport of [{width:390,height:844},{width:1280,height:900}]){
+			await adminPage.setViewportSize(viewport);
+			await expectNoHorizontalOverflow(adminPage);
+			const portraitBox=await testimonial.locator('.client-testimonial-photo').boundingBox();
+			expect(portraitBox?.width).toBeGreaterThan(80);
+			expect(portraitBox?.height).toBeGreaterThan(100);
+		}
 		const hiddenStory=await adminPage.request.patch('/api/admin/client-stories',{data:{storyId:story.id,publicationStatus:'DRAFT'}});
 		expect(hiddenStory.ok()).toBe(true);
 		expect(await adminPage.request.get('/api/client-stories').then(response=>response.json())).not.toContainEqual(expect.objectContaining({id:story.id}));
