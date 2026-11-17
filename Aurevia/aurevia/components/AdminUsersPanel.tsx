@@ -88,6 +88,7 @@ export default function AdminUsersPanel(){
 		const mode=params.get('mode');
 		if(mode==='DEMO'||mode==='REAL')setAccountMode(mode);
 		setSearch(params.get('search')||'');
+		setShowDeleted(params.get('showDeleted')==='true');
 	},[]);
 
 	function mergeUser(updated:Partial<AdminUser>&Pick<AdminUser,'id'>){

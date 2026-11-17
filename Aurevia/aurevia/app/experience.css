@@ -967,6 +967,95 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,su
 .support-context dt{color:#87948a;font-size:8px;text-transform:uppercase}
 .support-context dd{margin:4px 0 0;color:#d4ddd4;font-size:10px;overflow-wrap:anywhere}
 .support-admin-reply{display:grid;gap:12px;border-top:1px solid var(--color-border);padding-top:16px}
+.admin-tier-page{padding-bottom:72px}
+.admin-tier-hero{position:relative;align-items:center;margin-bottom:20px;padding:clamp(22px,3.5vw,36px);overflow:hidden;border:1px solid rgba(197,164,107,.2);border-radius:16px;background:radial-gradient(ellipse at 85% 12%,rgba(197,164,107,.14),transparent 42%),linear-gradient(145deg,#111d16,#0b100d)}
+.admin-tier-hero h1{margin-top:8px;font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;font-size:clamp(29px,4vw,42px);font-weight:450;letter-spacing:-.035em}
+.admin-tier-hero p{max-width:640px;margin-top:9px;color:#aab5ac;font-size:12px;line-height:1.6}
+.admin-tier-hero-actions{display:flex;flex:none;gap:8px}
+.admin-tier-queue,.admin-tier-review,.admin-tier-directory{border-color:rgba(197,164,107,.15);background:linear-gradient(155deg,rgba(17,29,22,.96),rgba(8,14,10,.99))}
+.admin-tier-queue{align-self:start}
+.admin-tier-review{min-width:0}
+.admin-tier-directory-heading{display:flex;min-width:0;align-items:center;gap:12px}
+.admin-tier-directory-icon{display:grid;width:42px;height:42px;flex:none;place-items:center;border:1px solid rgba(197,164,107,.24);border-radius:12px;background:rgba(197,164,107,.07);color:#e2c978}
+.admin-tier-directory-heading>div:nth-child(2){min-width:0}
+.admin-tier-directory-heading h2{margin-top:3px;color:#eef1e8;font-size:19px;font-weight:600;letter-spacing:-.025em}
+.admin-tier-directory-heading p{margin-top:3px;color:#94a196;font-size:10px}
+.admin-tier-count{margin-left:auto;border:1px solid rgba(197,164,107,.2);border-radius:999px;padding:7px 10px;color:#d9bd73;font-size:8px;font-weight:700;letter-spacing:.08em;white-space:nowrap}
+.admin-tier-filters{display:grid;grid-template-columns:minmax(220px,1fr) minmax(120px,.42fr) minmax(155px,.52fr) auto;align-items:end;gap:11px;margin-top:20px;padding:14px;border:1px solid rgba(255,255,255,.07);border-radius:12px;background:rgba(0,0,0,.13)}
+.admin-tier-list-toolbar{display:flex;min-height:48px;align-items:center;justify-content:space-between;gap:12px;color:#9aa69c;font-size:10px}
+.admin-tier-text-action{display:inline-flex;min-height:36px;align-items:center;gap:7px;border:1px solid rgba(197,164,107,.17);border-radius:8px;padding:0 10px;background:rgba(197,164,107,.045);color:#d8c17c;font-size:10px;cursor:pointer}
+.admin-tier-text-action b{display:grid;min-width:18px;height:18px;place-items:center;border-radius:99px;background:rgba(197,164,107,.14);font-size:9px}
+.admin-tier-account-list{display:grid;gap:9px}
+.admin-tier-account{min-width:0;border:1px solid rgba(255,255,255,.085);border-radius:12px;background:linear-gradient(120deg,rgba(255,255,255,.025),rgba(0,0,0,.08));transition:border-color .18s ease,background .18s ease}
+.admin-tier-account:hover,.admin-tier-account:focus-within{border-color:rgba(197,164,107,.3)}
+.admin-tier-account.is-hidden{border-style:dashed;opacity:.86}
+.admin-tier-account-details>summary{display:grid;min-height:72px;grid-template-columns:42px minmax(145px,1.3fr) 78px 92px 100px 120px 82px;align-items:center;gap:12px;padding:12px 14px;cursor:pointer;list-style:none}
+.admin-tier-account-details>summary::-webkit-details-marker{display:none}
+.admin-tier-account-avatar{display:grid;width:40px;height:40px;place-items:center;border:1px solid rgba(197,164,107,.27);border-radius:12px;background:rgba(197,164,107,.08);color:#e1ca82;font-family:Georgia,serif;font-size:17px}
+.admin-tier-account-identity{display:grid;min-width:0;gap:4px}
+.admin-tier-account-identity b,.admin-tier-account-identity small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.admin-tier-account-identity b{color:#e9ede5;font-size:11px;font-weight:650}
+.admin-tier-account-identity small,.admin-tier-account-date{color:#8f9b91;font-size:9px}
+.admin-tier-account-tier{color:#dec778;font-size:10px;font-weight:700}
+.admin-tier-account-details .status-pill{justify-self:start;font-size:8px}
+.admin-tier-account-state{color:#c3ccc2;font-size:9px}
+.admin-tier-account-expand{color:#d9bd73;font-size:9px;text-align:right}
+.admin-tier-account-content{display:grid;grid-template-columns:minmax(0,1fr) minmax(220px,.65fr);gap:14px;padding:14px;border-top:1px solid rgba(255,255,255,.07);background:rgba(0,0,0,.12)}
+.admin-tier-requirements{display:grid;align-content:start;gap:10px;min-width:0}
+.admin-tier-requirements>p{display:grid;gap:4px;margin:0;color:#9ba79d;font-size:10px;line-height:1.55}
+.admin-tier-requirements>p b,.admin-tier-history>b{color:#dce4da;font-size:9px}
+.admin-tier-history ul{display:grid;gap:5px;margin:6px 0 0;padding-left:17px;color:#9ba79d;font-size:9px;line-height:1.5}
+.admin-tier-account-actions{display:flex;align-content:start;align-items:center;flex-wrap:wrap;gap:8px}
+.admin-tier-account-actions .btn{font-size:9px}
+.admin-tier-permanent-link{display:inline-flex;min-height:36px;align-items:center;gap:5px;padding:0 5px;color:#c98f80;font-size:9px;text-decoration:none}
+.admin-tier-permanent-link:hover{text-decoration:underline}
+.admin-tier-account-footnote{grid-column:1/-1;margin:0;color:#7f8e83;font-size:9px;line-height:1.5}
+.admin-tier-pagination{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;color:#9aa69c;font-size:10px}
+.admin-tier-pagination>div{display:flex;gap:8px}
+.admin-tier-pagination .button-secondary{min-height:36px}
+html[data-theme="light"] .admin-tier-hero{border-color:#e4e9e4;background:radial-gradient(ellipse at 85% 12%,#f2e8cc,transparent 42%),linear-gradient(145deg,#fff,#f5f8f5)}
+html[data-theme="light"] .admin-tier-hero h1,html[data-theme="light"] .admin-tier-directory-heading h2{color:#173021}
+html[data-theme="light"] .admin-tier-hero p,html[data-theme="light"] .admin-tier-directory-heading p{color:#5f6c62}
+html[data-theme="light"] .admin-tier-queue,html[data-theme="light"] .admin-tier-review,html[data-theme="light"] .admin-tier-directory{border-color:#e1e6df;background:linear-gradient(155deg,#fff,#f7f9f6)}
+html[data-theme="light"] .admin-tier-count{border-color:#e1d5b0;color:#725723}
+html[data-theme="light"] .admin-tier-filters{border-color:#e4e9e4;background:#f8faf8}
+html[data-theme="light"] .admin-tier-account{border-color:#e1e6df;background:linear-gradient(120deg,#fff,#f8faf8)}
+html[data-theme="light"] .admin-tier-account-identity b,html[data-theme="light"] .admin-tier-requirements>p b,html[data-theme="light"] .admin-tier-history>b{color:#173021}
+html[data-theme="light"] .admin-tier-account-identity small,html[data-theme="light"] .admin-tier-account-date,html[data-theme="light"] .admin-tier-requirements>p,html[data-theme="light"] .admin-tier-history ul{color:#617064}
+html[data-theme="light"] .admin-tier-account-content{border-color:#e4e9e4;background:#f8faf8}
+html[data-theme="light"] .admin-tier-account-footnote{color:#617064}
+@media(max-width:1023px){
+	.admin-tier-account-details>summary{grid-template-columns:40px minmax(130px,1fr) 68px 88px 92px}
+	.admin-tier-account-state{display:none}
+	.admin-tier-account-date{display:none}
+	.admin-tier-account-expand{display:none}
+}
+@media(max-width:767px){
+	.admin-tier-page .admin-support-layout{grid-template-columns:minmax(0,1fr)}
+	.admin-tier-hero{align-items:flex-start;flex-direction:column;gap:14px}
+	.admin-tier-filters{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+	.admin-tier-filters .account-label:first-child{grid-column:1/-1}
+	.admin-tier-filters button{width:100%}
+	.admin-tier-account-details>summary{grid-template-columns:38px minmax(0,1fr) auto;gap:8px 10px;padding:11px}
+	.admin-tier-account-avatar{grid-column:1;grid-row:1}
+	.admin-tier-account-identity{grid-column:2;grid-row:1}
+	.admin-tier-account-tier{grid-column:3;grid-row:1}
+	.admin-tier-account-details .status-pill{grid-column:2;grid-row:2}
+	.admin-tier-account-content{grid-template-columns:minmax(0,1fr)}
+	.admin-tier-account-actions{grid-column:1}
+	.admin-tier-account-actions .btn{flex:1;justify-content:center}
+	.admin-tier-account-footnote{grid-column:1}
+	.admin-tier-count{font-size:7px}
+}
+@media(max-width:420px){
+	.admin-tier-directory-heading{align-items:flex-start}
+	.admin-tier-directory-icon{width:36px;height:36px}
+	.admin-tier-count{align-self:center;padding:6px}
+	.admin-tier-filters{grid-template-columns:minmax(0,1fr)}
+	.admin-tier-filters .account-label:first-child{grid-column:auto}
+	.admin-tier-account-actions{align-items:stretch;flex-direction:column}
+	.admin-tier-account-actions .btn,.admin-tier-permanent-link{justify-content:center}
+}
 .home-auth-actions{flex-wrap:wrap}
 
 @keyframes aurevia-enter{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}

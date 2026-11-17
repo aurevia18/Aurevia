@@ -28,7 +28,7 @@ export async function GET(request:Request){
 		const input=querySchema.parse(params);
 		const accountWhere:Prisma.UserWhereInput={
 			role:'USER',
-			...(input.status?{status:input.status}:{}),
+			status:input.status??{notIn:['DELETED','CLOSED']},
 			...(input.search?{OR:[
 				{id:{contains:input.search,mode:'insensitive'}},
 				{email:{contains:input.search,mode:'insensitive'}},
