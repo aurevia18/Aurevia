@@ -195,7 +195,7 @@ function LiveMarketDashboardContent(){
 
   return <><Nav/><main className="live-market-page">
     <div className="live-market-topline">
-      <div className="live-market-heading"><span>GLOBAL MARKETS <i/> {activeQuoteIsExternal&&!activeQuote?.isStale?'CURRENT QUOTE':activeQuote?'INDICATIVE PRICES':'QUOTE UNAVAILABLE'}</span><h1>Markets</h1><p>Quotes may be delayed. Internal reference prices are estimates and are not executable.</p></div>
+      <div className="live-market-heading"><span>GLOBAL MARKETS <i/> {activeQuoteIsExternal&&!activeQuote?.isStale?'CURRENT QUOTE':activeQuote?'INDICATIVE PRICES':'QUOTE UNAVAILABLE'}</span><h1>Markets</h1><p>Market prices may be subject to delays. Displayed prices are indicative and may differ from final execution prices. Actual trade prices are confirmed when orders are executed.</p></div>
       <div className={`live-source-status ${activeQuote?.isStale?'is-stale':''} ${activeQuoteIsExternal&&!activeQuote?.isStale?'is-live':''} ${activeQuote&&!activeQuoteIsExternal?'is-internal':''}`}><span className="live-status-dot"/>{`Price status: ${activeQuoteStatus}`} <small>{activeQuote?`Updated ${formatTime(activeQuote.updatedAt)}`:'Market prices are temporarily unavailable'}</small></div>
     </div>
 
