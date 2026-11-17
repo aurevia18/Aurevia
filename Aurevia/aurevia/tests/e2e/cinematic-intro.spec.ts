@@ -184,6 +184,8 @@ test('real intro videos are served and autoplay is attempted with browser-safe s
 	await expect.poll(()=>page.evaluate(()=>((window as Window&{__aureviaIntroPlayAttempts?:number}).__aureviaIntroPlayAttempts)||0)).toBeGreaterThan(0);
 	await expect(page.getByRole('button',{name:'Skip intro'})).toBeVisible();
 	await expect(page.getByRole('button',{name:'Retry video'})).toHaveCount(0);
+	await expect.poll(()=>video.evaluate(element=>(element as HTMLVideoElement).currentTime),{timeout:10_000}).toBeGreaterThan(0.2);
+	await expect(page.getByRole('dialog',{name:'Aurevia Exchange introduction'})).toHaveCount(0,{timeout:30_000});
 });
 
 test('reduced-motion visitors bypass automatic playback',async({page})=>{
