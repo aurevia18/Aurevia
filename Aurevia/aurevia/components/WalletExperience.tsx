@@ -375,7 +375,7 @@ export default function WalletExperience(){
 				{data.accountMode==='REAL'&&<div className="wallet-reservation-row"><span>Pending / reserved</span><strong>{loading||!hasWalletData?'—':balanceVisible?displayMoney(pendingWithdrawal):`•••••• ${displayCurrency}`}</strong><span>{hasWalletData?data.transactions.filter(item=>reserves.includes(item.status)).length:0} pending</span></div>}
 			</section>
 			<AureviaExchangeId id={data.aureviaExchangeId} className="mt-4"/>
-			{!hasWalletData&&<p className="wallet-feedback is-error" role="status">{loading?'Loading your authenticated wallet…':'Balance could not be retrieved. No balance is assumed.'}</p>}
+			{!hasWalletData&&!loading&&<p className="wallet-feedback is-error" role="status">Balance could not be retrieved. No balance is assumed.</p>}
 			{data.accountMode==='REAL'?<nav className="wallet-quick-actions" aria-label="Wallet actions">
 				<Link href="/wallet?action=DEPOSIT" className="wallet-quick-action"><span className="wallet-action-icon"><ArrowDownLeft size={19}/></span><span>Deposit</span></Link>
 				<Link href="/wallet?action=WITHDRAWAL" className="wallet-quick-action"><span className="wallet-action-icon"><ArrowUpRight size={19}/></span><span>Withdraw</span></Link>
