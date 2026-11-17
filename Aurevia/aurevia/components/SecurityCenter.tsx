@@ -5,6 +5,7 @@ import {signOut,useSession} from 'next-auth/react';
 import Image from 'next/image';
 import {startRegistration} from '@simplewebauthn/browser';
 import {Eye,EyeOff,KeyRound,LogOut,RefreshCw,ShieldCheck,Trash2} from 'lucide-react';
+import {removeCurrentBrowserPushSubscription} from '@/lib/push-browser';
 
 type SecuritySession={id:string;deviceLabel:string|null;createdAt:string;lastActivityAt:string;expiresAt:string;current:boolean};
 type TotpSetup={qrCode:string;manualKey:string;expiresInSeconds:number};
@@ -206,7 +207,7 @@ export default function SecurityCenter({email,twoFactorEnabled:initialTwoFactorE
 			if(!response.ok)throw new Error(result.error||'Unable to update active sessions.');
 			setSessionAction(null);setSessionPassword('');
 			setMessage('Active sessions updated.');
-			if(result.currentRevoked)await signOut({callbackUrl:'/login'});
+			if(result.currentRevoked){await removeCurrentBrowserPushSubscription();await signOut({callbackUrl:'/login'})}
 			else await loadSessions();
 		}catch(exception){setError(exception instanceof Error?exception.message:'Unable to update active sessions.');}
 		finally{setBusy(false);}

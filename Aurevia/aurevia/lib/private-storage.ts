@@ -3,7 +3,7 @@ import {getServerConfiguration} from './config/env';
 
 export type PrivateStorageArea='kyc'|'avatar'|'receipt'|'support'|'clientStory'|'story'|'tax';
 
-type StorageConfiguration={baseUrl:string;serviceKey:string};
+type StorageConfiguration={baseUrl:string;serviceKey?:string;request?:(path:string,init?:RequestInit)=>Promise<Response>};
 type AreaConfiguration={bucket:string;maxBytes:number;maxBytesByMime?:Readonly<Record<string,number>>;mimeTypes:readonly string[];legacyPrefix:string};
 
 const areas:Record<PrivateStorageArea,AreaConfiguration>={
@@ -25,6 +25,7 @@ const extensionByMime:Record<string,string>={
 	'video/webm':'webm',
 };
 const maxSignedUrlSeconds=300;
+const kycEvidencePrefix='kyc-evidence';
 
 export class PrivateStorageError extends Error {
 	constructor(message:string,readonly status=502){super(message);this.name='PrivateStorageError';}
@@ -43,8 +44,14 @@ function configuration():StorageConfiguration{
 	return {baseUrl:config.url,serviceKey:config.serviceRoleKey};
 }
 
-function storageHeaders(config:StorageConfiguration,contentType?:string){
-	return {Authorization:`Bearer ${config.serviceKey}`,apikey:config.serviceKey,...(contentType?{'Content-Type':contentType}:{})};
+function storageFetch(config:StorageConfiguration,path:string,init:RequestInit={},contentType?:string){
+	const headers=new Headers(init.headers);
+	if(contentType)headers.set('Content-Type',contentType);
+	if(config.request)return config.request(path,{...init,headers});
+	if(!config.serviceKey)throw new PrivateStorageError('Private file storage is not configured.',503);
+	headers.set('Authorization',`Bearer ${config.serviceKey}`);
+	headers.set('apikey',config.serviceKey);
+	return fetch(`${config.baseUrl}/storage/v1/${path}`,{...init,headers});
 }
 
 function validateOwnerId(ownerId:string){
@@ -56,6 +63,7 @@ export function isPrivateObjectKeyOwnedBy(area:PrivateStorageArea,ownerId:string
 	const allowedExtensions=areas[area].mimeTypes.flatMap(mime=>mime==='image/jpeg'?['jpg','jpeg']:[extensionByMime[mime]].filter((value):value is string=>Boolean(value)));
 	if(!allowedExtensions.includes(key.split('.').at(-1)?.toLowerCase()||''))return false;
 	const file=`[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.(?:${allowedExtensions.join('|')})`;
+	if(area==='kyc'&&new RegExp(`^${kycEvidencePrefix}/${ownerId}/${file}$`,'i').test(key))return true;
 	const canonical=new RegExp(`^${ownerId}/${file}$`,'i');
 	if(canonical.test(key))return true;
 	const legacyPrefix=areas[area].legacyPrefix;
@@ -74,7 +82,8 @@ export function createPrivateObjectKey(area:PrivateStorageArea,ownerId:string,co
 	validateOwnerId(ownerId);
 	const areaConfig=areas[area];
 	if(!areaConfig||!areaConfig.mimeTypes.includes(contentType)||!extensionByMime[contentType])throw new PrivateStorageError('Unsupported file type.',415);
-	return `${ownerId}/${randomUUID()}.${extensionByMime[contentType]}`;
+	const key=`${ownerId}/${randomUUID()}.${extensionByMime[contentType]}`;
+	return area==='kyc'?`${kycEvidencePrefix}/${key}`:key;
 }
 
 export function hasMatchingFileExtension(filename:string,contentType:string){
@@ -83,14 +92,29 @@ export function hasMatchingFileExtension(filename:string,contentType:string){
 	return !!expected&&(actual===expected||(contentType==='image/jpeg'&&actual==='jpeg'));
 }
 
-async function verifyPrivateBucket(config:StorageConfiguration,area:PrivateStorageArea){
-	const {bucket}=areas[area];
+async function storageTarget(area:PrivateStorageArea,key:string){
+	if(area==='kyc'&&key.startsWith(`${kycEvidencePrefix}/`)){
+		try{
+			const {createKycSupabaseClient}=await import('./kyc-supabase-client');
+			const client=createKycSupabaseClient();
+			return {config:{baseUrl:client.url,request:client.request},bucket:client.bucket};
+		}catch(error){
+			if(error instanceof Error&&error.message==='KYC_STORAGE_CONFIGURATION_MISSING'){
+				throw new PrivateStorageError('KYC evidence storage is not configured. Set KYC_SUPABASE_URL and KYC_SUPABASE_SERVICE_ROLE_KEY.',503);
+			}
+			throw new PrivateStorageError('KYC evidence storage URL is invalid.',503);
+		}
+	}
+	return {config:configuration(),bucket:areas[area].bucket};
+}
+
+async function verifyPrivateBucket(config:StorageConfiguration,bucket:string){
 	const cacheKey=`${config.baseUrl}:${bucket}`;
 	const cached=privateBucketCache.get(cacheKey);
 	if(cached&&cached.expiresAt>Date.now())return cached.promise;
 	const promise=(async()=>{
 		let response:Response;
-		try{response=await fetch(`${config.baseUrl}/storage/v1/bucket/${encodeURIComponent(bucket)}`,{headers:storageHeaders(config),cache:'no-store',signal:AbortSignal.timeout(5_000)})}
+		try{response=await storageFetch(config,`bucket/${encodeURIComponent(bucket)}`,{cache:'no-store',signal:AbortSignal.timeout(5_000)})}
 		catch{throw new PrivateStorageError('Private file storage is unavailable.',503)}
 		if(!response.ok)throw new PrivateStorageError('Private storage bucket is unavailable.',503);
 		const result=await response.json() as {id?:string;public?:boolean};
@@ -100,9 +124,9 @@ async function verifyPrivateBucket(config:StorageConfiguration,area:PrivateStora
 	return promise;
 }
 
-function objectUrl(config:StorageConfiguration,area:PrivateStorageArea,key:string){
+function objectPath(bucket:string,key:string){
 	const path=key.split('/').map(segment=>encodeURIComponent(segment)).join('/');
-	return `${config.baseUrl}/storage/v1/object/${encodeURIComponent(areas[area].bucket)}/${path}`;
+	return `object/${encodeURIComponent(bucket)}/${path}`;
 }
 
 export async function uploadPrivateObject(area:PrivateStorageArea,ownerId:string,key:string,bytes:Buffer,contentType:string){
@@ -110,10 +134,10 @@ export async function uploadPrivateObject(area:PrivateStorageArea,ownerId:string
 	const areaConfig=areas[area];
 	if(!areaConfig.mimeTypes.includes(contentType)||!hasMatchingFileExtension(key,contentType))throw new PrivateStorageError('File type and extension do not match.',415);
 	if(bytes.length===0||bytes.length>(areaConfig.maxBytesByMime?.[contentType]??areaConfig.maxBytes))throw new PrivateStorageError('Uploaded file is outside the permitted size.',413);
-	const config=configuration();
-	await verifyPrivateBucket(config,area);
+	const {config,bucket}=await storageTarget(area,key);
+	await verifyPrivateBucket(config,bucket);
 	let response:Response;
-	try{response=await fetch(objectUrl(config,area,key),{method:'POST',headers:{...storageHeaders(config,contentType),'x-upsert':'false'},body:new Uint8Array(bytes)})}
+	try{response=await storageFetch(config,objectPath(bucket,key),{method:'POST',headers:{'x-upsert':'false'},body:new Uint8Array(bytes)},contentType)}
 	catch{throw new PrivateStorageError('Private file storage is unavailable.',503)}
 	if(!response.ok)throw new PrivateStorageError(response.status===413?'Uploaded file is too large.':'Private file upload failed.',response.status===413?413:502);
 }
@@ -121,9 +145,9 @@ export async function uploadPrivateObject(area:PrivateStorageArea,ownerId:string
 export async function deletePrivateObject(area:PrivateStorageArea,ownerId:string,key:string){
 	assertOwnedKey(area,ownerId,key);
 	try{
-		const config=configuration();
-		await verifyPrivateBucket(config,area);
-		const response=await fetch(objectUrl(config,area,key),{method:'DELETE',headers:storageHeaders(config),signal:AbortSignal.timeout(5_000)});
+		const {config,bucket}=await storageTarget(area,key);
+		await verifyPrivateBucket(config,bucket);
+		const response=await storageFetch(config,objectPath(bucket,key),{method:'DELETE',signal:AbortSignal.timeout(5_000)});
 		if(!response.ok&&response.status!==404)throw new PrivateStorageError('Private file cleanup failed.',502);
 		return true;
 	}catch(error){
@@ -136,11 +160,11 @@ export async function deletePrivateObject(area:PrivateStorageArea,ownerId:string
 export async function createPrivateSignedUrl(area:PrivateStorageArea,ownerId:string,key:string,expiresIn=120){
 	assertOwnedKey(area,ownerId,key);
 	if(!Number.isInteger(expiresIn)||expiresIn<1||expiresIn>maxSignedUrlSeconds)throw new PrivateStorageError('Signed file access duration is invalid.',400);
-	const config=configuration();
-	await verifyPrivateBucket(config,area);
+	const {config,bucket}=await storageTarget(area,key);
+	await verifyPrivateBucket(config,bucket);
 	const path=key.split('/').map(segment=>encodeURIComponent(segment)).join('/');
 	let response:Response;
-	try{response=await fetch(`${config.baseUrl}/storage/v1/object/sign/${encodeURIComponent(areas[area].bucket)}/${path}`,{method:'POST',headers:{...storageHeaders(config,'application/json'),'Cache-Control':'no-store'},body:JSON.stringify({expiresIn})})}
+	try{response=await storageFetch(config,`object/sign/${encodeURIComponent(bucket)}/${path}`,{method:'POST',headers:{'Cache-Control':'no-store'},body:JSON.stringify({expiresIn})},'application/json')}
 	catch{throw new PrivateStorageError('Private file storage is unavailable.',503)}
 	if(!response.ok)throw new PrivateStorageError('Private file is unavailable.',502);
 	const result=await response.json() as {signedURL?:string;signedUrl?:string};
@@ -151,7 +175,7 @@ export async function createPrivateSignedUrl(area:PrivateStorageArea,ownerId:str
 		const normalized=signedPath.startsWith('/object/sign/')?`/storage/v1${signedPath}`:signedPath;
 		signedUrl=new URL(normalized,`${config.baseUrl}/storage/v1/`);
 	}catch{throw new PrivateStorageError('Private file is unavailable.',502)}
-	const expectedPath=`/storage/v1/object/sign/${areas[area].bucket}/`;
+	const expectedPath=`/storage/v1/object/sign/${bucket}/`;
 	if(signedUrl.origin!==new URL(config.baseUrl).origin||!signedUrl.pathname.startsWith(expectedPath))throw new PrivateStorageError('Private file is unavailable.',502);
 	return signedUrl.toString();
 }

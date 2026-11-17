@@ -209,6 +209,7 @@ export async function POST(request:Request){
 			const reviewed=await tx.kycVerification.updateMany({where:{id:verification.id,status:'PROCESSING'},data:{status:'PENDING_REVIEW',processedAt:now}});
 			if(reviewed.count!==1)throw new Error('VERIFICATION_STATE_CHANGED');
 			await tx.kycVerificationEvent.create({data:{verificationId:verification.id,fromStatus:'PROCESSING',toStatus:'PENDING_REVIEW',action:'AUTOMATED_ASSESSMENT_UNAVAILABLE'}});
+			await tx.kycVerificationDraft.deleteMany({where:{userId:user.id}});
 			const dedupeKey=`kyc-verification:${verification.id}:submitted`;
 			await createNotification(tx,{userId:user.id,type:NotificationType.KYC,title:'Identity verification submitted',message:'Your identity documents and selfie were received. Automated OCR and liveness analysis are not available, so an administrator will review your submission.',dedupeKey,actionUrl:'/kyc'});
 			await notifyActiveAdmins(tx,{type:NotificationType.KYC,title:'Identity verification awaiting review',message:`A first-party identity verification case (${verification.id}) requires manual review. Automated biometric checks are unavailable.`,dedupeKey:`${dedupeKey}:admin`,relatedEntity:'KYC_VERIFICATION',relatedId:verification.id,actionUrl:'/admin/kyc'});

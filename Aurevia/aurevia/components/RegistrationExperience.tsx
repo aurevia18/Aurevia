@@ -10,7 +10,6 @@ import {
 	FlaskConical,Globe2,Landmark,LockKeyhole,MapPin,ShieldCheck,UserRound,
 } from 'lucide-react';
 import CountrySelector from '@/components/CountrySelector';
-import RegistrationTurnstile from '@/components/RegistrationTurnstile';
 import {findCountry} from '@/lib/countries';
 import {normalizePhoneE164,parseDateOfBirth} from '@/lib/registration-validation';
 
@@ -106,7 +105,7 @@ function summaryValue(value:string|null|undefined){
 	return value?.trim()||'Not provided';
 }
 
-export default function RegistrationExperience({turnstileSiteKey}:{turnstileSiteKey:string}){
+export default function RegistrationExperience(){
 	const [details,setDetails]=useState(initialDetails);
 	const [legal,setLegal]=useState<LegalAcceptances>({
 		termsAccepted:false,privacyAccepted:false,riskDisclosureAccepted:false,amlKycAccepted:false,
@@ -124,8 +123,6 @@ export default function RegistrationExperience({turnstileSiteKey}:{turnstileSite
 	const [passwordVisible,setPasswordVisible]=useState(false);
 	const [confirmationVisible,setConfirmationVisible]=useState(false);
 	const [confirmAccuracy,setConfirmAccuracy]=useState(false);
-	const [turnstileToken,setTurnstileToken]=useState<string|null>(null);
-	const [turnstileReset,setTurnstileReset]=useState(0);
 	const [states,setStates]=useState<LocationState[]>([]);
 	const [statesLoading,setStatesLoading]=useState(false);
 	const [locationError,setLocationError]=useState('');
@@ -235,7 +232,6 @@ export default function RegistrationExperience({turnstileSiteKey}:{turnstileSite
 		if(target===5&&!legalAccepted)return fail('Review and individually accept each required policy to continue.');
 		if(target===6){
 			if(!confirmAccuracy)return fail('Confirm that the registration information is accurate and complete.');
-			if(!turnstileToken)return fail('Complete the Cloudflare security check before creating your account.');
 		}
 		setStepError('');
 		return true;
@@ -305,7 +301,6 @@ export default function RegistrationExperience({turnstileSiteKey}:{turnstileSite
 				accountMode:details.accountMode,
 				legal,
 				legalAcceptances:currentLegalDocuments.map(({documentKey,version})=>({documentKey,version})),
-				turnstileToken,
 				website:'',
 			};
 			let response:Response;
@@ -318,8 +313,6 @@ export default function RegistrationExperience({turnstileSiteKey}:{turnstileSite
 				});
 			}catch(exception){
 				const referenceId=requestId||createRegistrationRequestId();
-				setTurnstileToken(null);
-				setTurnstileReset(value=>value+1);
 				console.warn('[registration] Browser request did not receive an API response.',{
 					...(referenceId?{requestId:referenceId,referenceId}:{}),
 					endpoint:'/api/register',
@@ -370,10 +363,6 @@ export default function RegistrationExperience({turnstileSiteKey}:{turnstileSite
 				else if(result.code==='ACCOUNT_UNAVAILABLE')setExistingAccountIssue('unavailable');
 				else if(result.code==='REGISTRATION_IN_PROGRESS')setExistingAccountIssue('pending');
 				else if(result.code==='PHONE_ALREADY_IN_USE')setExistingAccountIssue('phone');
-				if(typeof result.error==='string'&&result.error.toLocaleLowerCase().includes('security check')){
-					setTurnstileToken(null);
-					setTurnstileReset(value=>value+1);
-				}
 				const retryAfter=Number(response.headers.get('Retry-After')||result.retryAfterSeconds);
 				const retryMessage=response.status===429&&Number.isFinite(retryAfter)&&retryAfter>0
 					?` You can retry in ${retryAfter>=60?`${Math.ceil(retryAfter/60)} minute(s)`:`${retryAfter} second(s)`}.`
@@ -590,10 +579,6 @@ export default function RegistrationExperience({turnstileSiteKey}:{turnstileSite
 						<section className="registration-review-section"><div className="registration-review-heading"><h3>Account type</h3><button type="button" onClick={()=>goToStep(3)}>Edit</button></div><p><b>{details.accountMode||'Not selected'} account</b><span>{accountDescription}</span></p></section>
 						<section className="registration-review-section"><div className="registration-review-heading"><h3>Legal acknowledgements</h3><button type="button" onClick={()=>goToStep(5)}>Edit</button></div><ul className="registration-review-legal">{legalItems.map(item=><li key={item.key}><Check size={13}/>{item.label} · {legal[item.key]?'Acknowledged':'Not acknowledged'}</li>)}{additionalLegalDocuments.map(document=><li key={document.documentKey}><Check size={13}/>{document.title} · {additionalLegalAcceptances[document.documentKey]?'Acknowledged':'Not acknowledged'}</li>)}</ul></section>
 						<label className="registration-accuracy"><input type="checkbox" checked={confirmAccuracy} onChange={event=>{setConfirmAccuracy(event.target.checked);setStepError('')}}/><span>I confirm that the information supplied during registration is accurate and complete.</span></label>
-						<div className="registration-captcha">
-							<p>Complete the security check to continue. This check helps prevent automated signups and does not verify your identity or contact details.</p>
-							<RegistrationTurnstile key={turnstileReset} siteKey={turnstileSiteKey} onToken={setTurnstileToken}/>
-						</div>
 					</fieldset>}
 
 					<div className="registration-live-messages" aria-live="polite">
@@ -610,7 +595,7 @@ export default function RegistrationExperience({turnstileSiteKey}:{turnstileSite
 						<button className="registration-secondary-button" type="button" disabled={step===0||busy} onClick={()=>goToStep(step-1)}><ChevronLeft size={17}/> Previous</button>
 						{step<steps.length-1
 							?<button className="registration-primary-button" type="button" onClick={()=>goToStep(step+1)}>Continue <ChevronRight size={17}/></button>
-							:<button className="registration-primary-button registration-create-button" type="submit" disabled={busy||!turnstileToken||!confirmAccuracy||!legalAccepted} aria-busy={busy}>{busy?'Creating secure account…':'Create account'} <ArrowRight size={16}/></button>}
+							:<button className="registration-primary-button registration-create-button" type="submit" disabled={busy||!confirmAccuracy||!legalAccepted} aria-busy={busy}>{busy?'Creating secure account…':'Create account'} <ArrowRight size={16}/></button>}
 					</div>
 				</form>
 				<div className="registration-panel-footer"><span><ShieldCheck size={15}/> Your details are protected by Aurevia’s account controls.</span><span>Already registered? <Link href="/login">Sign in</Link></span></div>

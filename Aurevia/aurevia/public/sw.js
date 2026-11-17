@@ -1,6 +1,7 @@
 'use strict';
 
 const CACHE_NAME='aurevia-static-v2';
+const CACHE_PREFIX='aurevia-static-';
 const APP_SHELL=['/manifest.webmanifest','/aurevia-logo.png','/icons/icon-192.png','/icons/icon-512.png'];
 const fallback={title:'Aurevia Exchange',body:'There is a new update to your account.',url:'/dashboard'};
 
@@ -21,7 +22,7 @@ self.addEventListener('install',event=>{
 self.addEventListener('activate',event=>{
 	event.waitUntil((async()=>{
 		const keys=await caches.keys();
-		await Promise.all(keys.filter(key=>key!==CACHE_NAME).map(key=>caches.delete(key)));
+		await Promise.all(keys.filter(key=>key.startsWith(CACHE_PREFIX)&&key!==CACHE_NAME).map(key=>caches.delete(key)));
 		await self.clients.claim();
 	})());
 });
@@ -70,6 +71,44 @@ self.addEventListener('push',event=>{
 		tag:payload.tag,
 		renotify:false,
 		data:{url:payload.url},
+	}));
+});
+
+self.addEventListener('pushsubscriptionchange',event=>{
+	const renewal=(async()=>{
+		let subscription=event.newSubscription;
+		if(!subscription){
+			const statusResponse=await fetch('/api/push/subscriptions',{cache:'no-store',credentials:'same-origin'});
+			if(!statusResponse.ok)throw new Error('PUSH_STATUS_UNAVAILABLE');
+			const status=await statusResponse.json();
+			if(!status.available||typeof status.publicKey!=='string')return;
+			const base64=status.publicKey.replaceAll('-','+').replaceAll('_','/');
+			const padded=base64.padEnd(Math.ceil(base64.length/4)*4,'=');
+			const applicationServerKey=Uint8Array.from(atob(padded),character=>character.charCodeAt(0));
+			subscription=await self.registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey});
+		}
+		const saved=await fetch('/api/push/subscriptions',{
+			method:'POST',
+			cache:'no-store',
+			credentials:'same-origin',
+			headers:{'content-type':'application/json'},
+			body:JSON.stringify(subscription.toJSON()),
+		});
+		if(!saved.ok)throw new Error('PUSH_SUBSCRIPTION_UPDATE_FAILED');
+		const oldEndpoint=event.oldSubscription?.endpoint;
+		if(oldEndpoint&&oldEndpoint!==subscription.endpoint){
+			const removed=await fetch('/api/push/subscriptions',{
+				method:'DELETE',
+				cache:'no-store',
+				credentials:'same-origin',
+				headers:{'content-type':'application/json'},
+				body:JSON.stringify({endpoint:oldEndpoint}),
+			});
+			if(!removed.ok)throw new Error('PUSH_OLD_SUBSCRIPTION_REMOVE_FAILED');
+		}
+	})();
+	event.waitUntil(renewal.catch(error=>{
+		console.error('Push subscription renewal failed.',{errorCode:error instanceof Error?error.message:'UnknownError'});
 	}));
 });
 

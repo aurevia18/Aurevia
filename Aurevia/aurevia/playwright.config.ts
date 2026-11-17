@@ -109,6 +109,8 @@ export default defineConfig({
 				MARKET_TICK_MS:'1000',
 				SUPABASE_URL:providerURL,
 				SUPABASE_SERVICE_ROLE_KEY:'playwright-only-storage-key',
+				KYC_SUPABASE_URL:providerURL,
+				KYC_SUPABASE_SERVICE_ROLE_KEY:'playwright-only-storage-key',
 				NEXT_PUBLIC_SUPABASE_URL:'',
 				NEXT_PUBLIC_SUPABASE_ANON_KEY:'',
 				REAL_EXECUTION_ENABLED:'false',

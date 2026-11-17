@@ -385,25 +385,33 @@ html[data-theme-name] .admin-scope :is(.admin-metric-icon,.admin-mode-icon,.admi
 html[data-theme-name] svg.lucide:not(.aurevia-icon-3d__layer){
 	overflow:visible;
 	filter:
-		drop-shadow(0 1px 0 color-mix(in srgb,var(--theme-text) 34%,transparent))
-		drop-shadow(0 2px 0 color-mix(in srgb,var(--theme-accent) 28%,transparent))
-		drop-shadow(0 4px 3px color-mix(in srgb,var(--theme-page) 44%,transparent));
-	transform:perspective(120px) rotateX(4deg) translateZ(0);
+		drop-shadow(0 -0.5px 0 color-mix(in srgb,var(--theme-text) 56%,transparent))
+		drop-shadow(0 1px 0 color-mix(in srgb,var(--theme-accent) 46%,transparent))
+		drop-shadow(0 2.5px 0 color-mix(in srgb,var(--theme-page) 72%,transparent))
+		drop-shadow(0 4px 2px color-mix(in srgb,var(--theme-page) 48%,transparent))
+		drop-shadow(0 0 4px color-mix(in srgb,var(--theme-accent) 14%,transparent));
+	transform:perspective(150px) rotateX(6deg) rotateY(-1deg) translateZ(0);
 	transform-origin:center;
 	transition:transform .18s ease,filter .18s ease;
 }
 html[data-theme-name] :is(a,button:not(:disabled),[role="button"],summary):hover svg.lucide:not(.aurevia-icon-3d__layer){
 	filter:
-		drop-shadow(0 1px 0 color-mix(in srgb,var(--theme-text) 48%,transparent))
-		drop-shadow(0 2px 0 color-mix(in srgb,var(--theme-accent) 38%,transparent))
-		drop-shadow(0 5px 4px color-mix(in srgb,var(--theme-page) 46%,transparent));
-	transform:perspective(120px) rotateX(0) translateY(-1px) scale(1.035);
+		drop-shadow(0 -0.5px 0 color-mix(in srgb,var(--theme-text) 68%,transparent))
+		drop-shadow(0 1px 0 color-mix(in srgb,var(--theme-accent) 62%,transparent))
+		drop-shadow(0 2.5px 0 color-mix(in srgb,var(--theme-page) 76%,transparent))
+		drop-shadow(0 5px 3px color-mix(in srgb,var(--theme-page) 52%,transparent))
+		drop-shadow(0 0 6px color-mix(in srgb,var(--theme-accent) 24%,transparent));
+	transform:perspective(150px) rotateX(0) rotateY(0) translateY(-1px) scale(1.04);
 }
 html[data-theme-name] :is(a,button,[role="button"],summary):focus-visible svg.lucide:not(.aurevia-icon-3d__layer){
-	filter:drop-shadow(0 0 4px color-mix(in srgb,var(--theme-accent) 62%,transparent));
+	filter:
+		drop-shadow(0 -0.5px 0 color-mix(in srgb,var(--theme-text) 60%,transparent))
+		drop-shadow(0 1px 0 color-mix(in srgb,var(--theme-accent) 52%,transparent))
+		drop-shadow(0 2.5px 0 color-mix(in srgb,var(--theme-page) 72%,transparent))
+		drop-shadow(0 0 6px color-mix(in srgb,var(--theme-accent) 60%,transparent));
 }
 html[data-theme-name] :is(a,button:not(:disabled),[role="button"],summary):active svg.lucide:not(.aurevia-icon-3d__layer){
-	transform:perspective(120px) rotateX(-4deg) translateY(1px) scale(.96);
+	transform:perspective(150px) rotateX(-5deg) rotateY(1deg) translateY(1px) scale(.96);
 }
 .aurevia-icon-3d{
 	--aurevia-icon-size:18px;

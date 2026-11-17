@@ -66,7 +66,11 @@ export function parseKycIdentityInformation(input:{
 	const legalName=typeof input.legalName==='string'?input.legalName.trim().replace(/\s+/g,' '):'';
 	const dateOfBirth=typeof input.dateOfBirth==='string'?input.dateOfBirth.trim():'';
 	const documentExpiryDate=typeof input.documentExpiryDate==='string'?input.documentExpiryDate.trim():'';
-	const validDate=(value:string)=>/^\d{4}-\d{2}-\d{2}$/.test(value)&&new Date(`${value}T00:00:00.000Z`).toISOString().slice(0,10)===value;
+	const validDate=(value:string)=>{
+		if(!/^\d{4}-\d{2}-\d{2}$/.test(value))return false;
+		const parsed=new Date(`${value}T00:00:00.000Z`);
+		return Number.isFinite(parsed.getTime())&&parsed.toISOString().slice(0,10)===value;
+	};
 	if(legalName.length<2||legalName.length>120||/[\u0000-\u001f\u007f]/.test(legalName))throw new Error('KYC_LEGAL_NAME_INVALID');
 	if(!validDate(dateOfBirth)||new Date(`${dateOfBirth}T00:00:00.000Z`).getTime()>=(input.now??new Date()).getTime())throw new Error('KYC_DATE_OF_BIRTH_INVALID');
 	if(input.expiryRequired&&!documentExpiryDate)throw new Error('KYC_DOCUMENT_EXPIRY_REQUIRED');

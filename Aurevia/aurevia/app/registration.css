@@ -118,8 +118,6 @@
 .registration-review-legal svg{flex:none;color:#b9a15f}
 .registration-accuracy{display:flex;align-items:flex-start;gap:8px;padding:10px 11px;border:1px solid rgba(197,164,107,.23);border-radius:7px;background:rgba(197,164,107,.04);color:#d4ddd4;font-size:9px;line-height:1.5}
 .registration-accuracy input{margin-top:0}
-.registration-captcha{display:grid;justify-items:center;gap:8px;min-width:0;overflow:hidden;padding:11px;border:1px solid rgba(220,230,221,.08);border-radius:7px;background:rgba(0,0,0,.14)}
-.registration-captcha p{max-width:52ch;margin:0;color:#8d9a90;font-size:8px;line-height:1.5;text-align:center}
 .registration-live-messages{display:grid;gap:7px}
 .registration-field-error{margin:0;padding:9px 10px;border:1px solid rgba(217,113,96,.28);border-radius:6px;background:rgba(121,39,30,.12);color:#edb3a8;font-size:9px;line-height:1.55}
 .registration-field-notice{margin:0;padding:9px 10px;border:1px solid rgba(105,191,130,.2);border-radius:6px;color:#b5d3b1;font-size:9px;line-height:1.55}

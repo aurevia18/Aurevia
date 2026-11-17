@@ -24,6 +24,13 @@ export type ServerConfiguration = {
     anonymousKey: string;
     serviceRoleKey: string;
   };
+  kycStorage: {
+    url: string;
+    serviceRoleKey: string;
+    bucket: 'kyc-evidence';
+    configured: boolean;
+    missingConfiguration: string[];
+  };
   smtp: {
     host: string;
     port: number;
@@ -114,18 +121,12 @@ export type ServerConfiguration = {
     formattingIssues: string[];
     configured: boolean;
   };
-  turnstile: {
-    secretKey: string;
-    siteKey: string;
-    configured: boolean;
-  };
 };
 
 export type PublicConfiguration = {
   appUrl: string;
   supabaseUrl: string;
   supabaseAnonKey: string;
-  turnstileSiteKey: string;
 };
 
 const env = (name: string, source: EnvironmentSource = process.env): string => source[name]?.trim() || '';
@@ -208,6 +209,7 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
   const directUrl = cleanUrl(env('DIRECT_URL', source));
   const appUrl = cleanUrl(env('NEXT_PUBLIC_APP_URL', source) || env('NEXTAUTH_URL', source) || env('RENDER_EXTERNAL_URL', source));
   const supabaseUrl = cleanUrl(env('SUPABASE_URL', source));
+  const kycSupabaseUrl = cleanUrl(env('KYC_SUPABASE_URL', source));
   const smtpHost = env('SMTP_HOST', source);
   const smtpUser = env('SMTP_USER', source);
   const smtpPassword = env('SMTP_PASSWORD', source);
@@ -303,6 +305,16 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
       anonymousKey: env('NEXT_PUBLIC_SUPABASE_ANON_KEY', source),
       serviceRoleKey: env('SUPABASE_SERVICE_ROLE_KEY', source),
     },
+    kycStorage: {
+      url: kycSupabaseUrl,
+      serviceRoleKey: env('KYC_SUPABASE_SERVICE_ROLE_KEY', source),
+      bucket: 'kyc-evidence',
+      configured: Boolean(kycSupabaseUrl && env('KYC_SUPABASE_SERVICE_ROLE_KEY', source)),
+      missingConfiguration: [
+        ...(!kycSupabaseUrl ? ['KYC_SUPABASE_URL'] : []),
+        ...(!env('KYC_SUPABASE_SERVICE_ROLE_KEY', source) ? ['KYC_SUPABASE_SERVICE_ROLE_KEY'] : []),
+      ],
+    },
     smtp: {
       host: smtpHost,
       port: smtpPort,
@@ -384,11 +396,6 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
       configured:kyc.enabled&&kyc.engine==='internal'&&kycEncryptionKeyBytes.length===32
         &&kycEncryptionKeyBytes.toString('base64')===kycEncryptionKey&&kyc.formattingIssues.length===0,
     },
-    turnstile: {
-      secretKey: env('TURNSTILE_SECRET_KEY', source),
-      siteKey: env('NEXT_PUBLIC_TURNSTILE_SITE_KEY', source),
-      configured: Boolean(env('TURNSTILE_SECRET_KEY', source) && env('NEXT_PUBLIC_TURNSTILE_SITE_KEY', source)),
-    },
   };
 }
 
@@ -397,7 +404,6 @@ export function getPublicConfiguration(source: EnvironmentSource = process.env):
     appUrl: cleanUrl(env('NEXT_PUBLIC_APP_URL', source) || env('NEXTAUTH_URL', source)),
     supabaseUrl: cleanUrl(env('NEXT_PUBLIC_SUPABASE_URL', source)),
     supabaseAnonKey: env('NEXT_PUBLIC_SUPABASE_ANON_KEY', source),
-    turnstileSiteKey: env('NEXT_PUBLIC_TURNSTILE_SITE_KEY', source),
   };
 }
 
@@ -432,6 +438,11 @@ export function configurationSummary(config: ServerConfiguration) {
     databaseConfigured: Boolean(config.database.url && config.database.directUrl),
     authConfigured: Boolean(config.auth.secret && config.auth.url),
     supabaseConfigured: Boolean(config.supabase.url && config.supabase.serviceRoleKey),
+    kycStorage: {
+      configured: config.kycStorage.configured,
+      bucket: config.kycStorage.bucket,
+      missingConfiguration: config.kycStorage.missingConfiguration,
+    },
     smtpConfigured: config.smtp.configured,
     verificationConfigured: config.verification.configured,
     execution: {

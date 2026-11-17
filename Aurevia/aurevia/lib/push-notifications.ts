@@ -200,7 +200,7 @@ async function completeExpandedOutboxes(){
 	}
 }
 
-export async function processPushQueue(limit=50,onlyOutboxId?:string){
+export async function processPushQueue(limit=50,onlyOutboxId?:string,onlySubscriptionId?:string){
 	configureVapid();
 	const now=new Date();
 	const staleBefore=new Date(now.getTime()-LEASE_MS);
@@ -229,7 +229,7 @@ export async function processPushQueue(limit=50,onlyOutboxId?:string){
 		}
 	}
 	const deliveries=await db.pushDelivery.findMany({
-		where:{...(onlyOutboxId?{outboxId:onlyOutboxId}:{}),attempts:{lt:MAX_ATTEMPTS},OR:[{status:'PENDING',nextAttemptAt:{lte:now}},{status:'PROCESSING',lockedAt:{lt:staleBefore}}]},
+		where:{...(onlyOutboxId?{outboxId:onlyOutboxId}:{}),...(onlySubscriptionId?{subscriptionId:onlySubscriptionId}:{}),attempts:{lt:MAX_ATTEMPTS},OR:[{status:'PENDING',nextAttemptAt:{lte:now}},{status:'PROCESSING',lockedAt:{lt:staleBefore}}]},
 		orderBy:{createdAt:'asc'},select:{id:true},take:Math.min(Math.max(limit,1),40),
 	});
 	for(let index=0;index<deliveries.length;index+=10){

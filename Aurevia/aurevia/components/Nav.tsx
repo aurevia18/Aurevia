@@ -14,6 +14,7 @@ import AccountTierBadge from '@/components/AccountTierBadge';
 import {useAccountTier} from '@/components/useAccountTier';
 import {useLocale} from '@/lib/i18n-context';
 import {MARKET_ASSETS} from '@/lib/live-market';
+import {removeCurrentBrowserPushSubscription} from '@/lib/push-browser';
 
 const moreMenuGroups=[
  {title:'Overview',links:[
@@ -124,7 +125,7 @@ export default function Nav(){
  }
  async function logout(){
   close();setLoggingOut(true);
-  try{await signOut({callbackUrl:'/login'})}
+  try{await removeCurrentBrowserPushSubscription();await signOut({callbackUrl:'/login'})}
   catch{setLoggingOut(false);setModeError('Unable to sign out. Please try again.')}
  }
  useEffect(()=>{setOpen(false)},[pathname]);

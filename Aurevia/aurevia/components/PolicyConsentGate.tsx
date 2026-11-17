@@ -140,7 +140,7 @@ export default function PolicyConsentGate({children,initialUserId}:{children:Rea
 
 	return <>
 		{!blockContent&&children}
-		{(checkingSession||eligible&&state==='checking')&&<p className="policy-consent-checking" role="status">{checkingSession?'Restoring your authenticated session…':deviceAcceptanceKnown?'Verifying your saved legal acceptance…':'Checking your current legal acceptance…'}</p>}
+		{(checkingSession||eligible&&state==='checking'&&!deviceAcceptanceKnown)&&<p className="policy-consent-checking" role="status">{checkingSession?'Restoring your authenticated session…':'Checking your current legal acceptance…'}</p>}
 		<dialog
 		ref={dialogRef}
 		className="policy-consent-dialog"

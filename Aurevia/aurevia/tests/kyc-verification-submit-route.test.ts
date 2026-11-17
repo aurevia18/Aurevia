@@ -11,6 +11,7 @@ const mocks=vi.hoisted(()=>({
 	caseUpdateMany:vi.fn(),
 	eventCreate:vi.fn(),
 	documentCreate:vi.fn(),
+	draftDeleteMany:vi.fn(),
 	validateKycImage:vi.fn(),
 	createPrivateObjectKey:vi.fn(),
 	uploadPrivateObject:vi.fn(),
@@ -64,6 +65,7 @@ describe('first-party KYC submission route',()=>{
 		mocks.caseCreate.mockResolvedValue({id:'case-1'});
 		mocks.caseUpdateMany.mockResolvedValue({count:1});
 		mocks.eventCreate.mockResolvedValue({});
+		mocks.draftDeleteMany.mockResolvedValue({count:1});
 		mocks.documentCreate.mockImplementation(async({data}:{data:{kind:string;documentSide:string}})=>({id:`${data.kind}-${data.documentSide}`}));
 		mocks.validateKycImage.mockImplementation(async(_file:File,side:string)=>({bytes:Buffer.from(side),mime:'image/png',width:640,height:480,sha256:(side==='FRONT'?'a':'b').repeat(64)}));
 		let key=0;
@@ -77,6 +79,7 @@ describe('first-party KYC submission route',()=>{
 			kycVerification:{findFirst:mocks.caseFindFirst,create:mocks.caseCreate,updateMany:mocks.caseUpdateMany},
 			kycVerificationEvent:{create:mocks.eventCreate},
 			kycDocument:{create:mocks.documentCreate},
+			kycVerificationDraft:{deleteMany:mocks.draftDeleteMany},
 		}));
 	});
 

@@ -86,6 +86,40 @@ describe('persistent Web Push delivery',()=>{
 		log.mockRestore();
 	});
 
+	it('can limit an immediate push test delivery to the requesting device',async()=>{
+		await processPushQueue(1,'outbox-1','subscription-1');
+		expect(mocks.deliveryFindMany).toHaveBeenCalledWith(expect.objectContaining({
+			where:expect.objectContaining({outboxId:'outbox-1',subscriptionId:'subscription-1'}),
+			take:1,
+		}));
+	});
+
+	it('fans a notification out to every subscribed device for the user',async()=>{
+		const subscriptionFor=(id:string)=>({
+			id,userId:'user-1',expiresAt:null,user:{status:'ACTIVE'},
+			...encryptBrowserSubscription({
+				endpoint:`https://fcm.googleapis.com/fcm/send/${id}`,
+				keys:{p256dh:Buffer.alloc(65,1).toString('base64url'),auth:Buffer.alloc(16,2).toString('base64url')},
+			}),
+		});
+		mocks.subscriptionFindMany.mockResolvedValue([{id:'subscription-1',expiresAt:null},{id:'subscription-2',expiresAt:null}]);
+		mocks.deliveryFindMany.mockResolvedValue([{id:'delivery-1'},{id:'delivery-2'}]);
+		mocks.deliveryFindUnique
+			.mockResolvedValueOnce({
+				id:'delivery-1',subscriptionId:'subscription-1',attempts:1,
+				subscription:subscriptionFor('subscription-1'),
+				outbox:{notification:{id:'notification-1',type:'ACCOUNT',relatedEntity:null,actionUrl:'/wallet'}},
+			})
+			.mockResolvedValueOnce({
+				id:'delivery-2',subscriptionId:'subscription-2',attempts:1,
+				subscription:subscriptionFor('subscription-2'),
+				outbox:{notification:{id:'notification-1',type:'ACCOUNT',relatedEntity:null,actionUrl:'/wallet'}},
+			});
+		const result=await processPushQueue();
+		expect(result).toMatchObject({attempted:2,delivered:2});
+		expect(mocks.sendNotification).toHaveBeenCalledTimes(2);
+	});
+
 	it('honors a preference change before a queued delivery is sent',async()=>{
 		mocks.preferenceFindUnique.mockResolvedValueOnce({accountActivity:true,investmentUpdates:true,announcements:false}).mockResolvedValueOnce({accountActivity:false,investmentUpdates:true,announcements:false});
 		await processPushQueue();

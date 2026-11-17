@@ -2,14 +2,17 @@
 
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {Country} from 'country-state-city';
+import Image from 'next/image';
 import Link from 'next/link';
-import {Camera,CheckCircle2,LoaderCircle,RefreshCw,ShieldCheck,Upload} from 'lucide-react';
+import {Camera,CheckCircle2,ChevronLeft,ChevronRight,LoaderCircle,RefreshCw,ScanLine,ShieldCheck,SwitchCamera,Upload,Zap} from 'lucide-react';
+import {parseKycIdentityInformation} from '@/lib/kyc-identity';
 
 type DocumentType='PASSPORT'|'NATIONAL_ID'|'DRIVING_LICENCE'|'RESIDENCE_PERMIT'|'OTHER';
 type DocumentRequirement={type:DocumentType;label:string;sides:string[];expiryRequired:boolean};
 type KycDocument={id:string;kind:string;documentSide:string|null;filename:string;mimeType:string;size:number;status:string;uploadedAt:string;reviewedAt:string|null;reviewNote:string|null};
 type KycCheck={check:string;outcome:string;reason:string};
 type KycVerification={id:string;status:string;documentCountry:string;documentType:string;submittedAt:string|null;reviewedAt:string|null;decisionReason:string|null;identityInformation:{legalName:string;dateOfBirth:string;documentExpiryDate:string|null}|null;assessment:{riskLevel?:string;checks?:KycCheck[]}|null;documents:KycDocument[];events:{fromStatus:string|null;toStatus:string;action:string;reason:string|null;createdAt:string}[]};
+type CaptureTarget='FRONT'|'BACK'|'SELFIE';
 
 const statusRefreshIntervalMs=5*60_000;
 const countries=Country.getAllCountries().sort((left,right)=>left.name.localeCompare(right.name));
@@ -30,10 +33,26 @@ function stopTracks(stream:MediaStream|null){
 	stream?.getTracks().forEach(track=>track.stop());
 }
 
+function useFilePreview(file:File|null){
+	const [url,setUrl]=useState('');
+	useEffect(()=>{
+		if(!file){setUrl('');return}
+		const previewUrl=URL.createObjectURL(file);
+		setUrl(previewUrl);
+		return()=>URL.revokeObjectURL(previewUrl);
+	},[file]);
+	return url;
+}
+
 export default function KycVerificationCenter({currentTier,onUpdated}:{currentTier:number;onUpdated:()=>void}){
 	const videoRef=useRef<HTMLVideoElement>(null);
 	const streamRef=useRef<MediaStream|null>(null);
+	const cameraRequest=useRef(0);
 	const draftInProgress=useRef(false);
+	const draftLoaded=useRef(false);
+	const draftTimer=useRef<number|null>(null);
+	const draftSaveRequest=useRef<Promise<void>|null>(null);
+	const submissionInFlight=useRef(false);
 	const [requirements,setRequirements]=useState<DocumentRequirement[]>([]);
 	const [verifications,setVerifications]=useState<KycVerification[]>([]);
 	const [country,setCountry]=useState('');
@@ -45,11 +64,23 @@ export default function KycVerificationCenter({currentTier,onUpdated}:{currentTi
 	const [back,setBack]=useState<File|null>(null);
 	const [selfie,setSelfie]=useState<File|null>(null);
 	const [consent,setConsent]=useState(false);
-	const [cameraActive,setCameraActive]=useState(false);
+	const [captureTarget,setCaptureTarget]=useState<CaptureTarget|null>(null);
+	const [cameraStarting,setCameraStarting]=useState(false);
+	const [cameraReady,setCameraReady]=useState(false);
+	const [cameraFacing,setCameraFacing]=useState<'user'|'environment'>('user');
+	const [cameraStreamVersion,setCameraStreamVersion]=useState(0);
+	const [torchSupported,setTorchSupported]=useState(false);
+	const [torchEnabled,setTorchEnabled]=useState(false);
 	const [loading,setLoading]=useState(true);
 	const [submitting,setSubmitting]=useState(false);
+	const [step,setStep]=useState(0);
+	const [uploadProgress,setUploadProgress]=useState<number|null>(null);
+	const [draftStatus,setDraftStatus]=useState<'idle'|'saving'|'saved'|'error'>('idle');
 	const [error,setError]=useState('');
 	const [message,setMessage]=useState('');
+	const frontPreview=useFilePreview(front);
+	const backPreview=useFilePreview(back);
+	const selfiePreview=useFilePreview(selfie);
 
 	const selectedRequirement=useMemo(()=>requirements.find(item=>item.type===documentType),[documentType,requirements]);
 	const latest=verifications[0]||null;
@@ -57,6 +88,24 @@ export default function KycVerificationCenter({currentTier,onUpdated}:{currentTi
 		&&(!selectedRequirement?.expiryRequired||Boolean(documentExpiryDate))
 		&&(!selectedRequirement?.sides.includes('BACK')||Boolean(back))
 		&&(!latest||['REJECTED','RESUBMISSION_REQUIRED','CANCELLED'].includes(latest.status));
+
+	const saveDraft=useCallback(async()=>{
+		const request=fetch('/api/kyc/verification/draft',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({
+			documentCountry:country||null,
+			documentType:documentType||null,
+			legalName,
+			dateOfBirth,
+			documentExpiryDate,
+		})}).then(async response=>{
+			if(!response.ok)throw new Error('DRAFT_SAVE_UNAVAILABLE');
+			setDraftStatus('saved');
+		}).catch(()=>{
+			setDraftStatus('error');
+		});
+		draftSaveRequest.current=request;
+		await request;
+		if(draftSaveRequest.current===request)draftSaveRequest.current=null;
+	},[country,dateOfBirth,documentExpiryDate,documentType,legalName]);
 
 	const load=useCallback(async(background=false)=>{
 		if(!background)setLoading(true);
@@ -67,6 +116,30 @@ export default function KycVerificationCenter({currentTier,onUpdated}:{currentTi
 			if(background&&draftInProgress.current)return;
 			setRequirements(result.registry||[]);
 			setVerifications(result.verifications||[]);
+			if(!background){
+				try{
+					const draftResponse=await fetch('/api/kyc/verification/draft',{cache:'no-store'});
+					const draftResult=await draftResponse.json();
+					if(!draftResponse.ok)throw new Error('DRAFT_LOAD_UNAVAILABLE');
+					const draft=draftResult.draft;
+					if(draft){
+						setCountry(draft.documentCountry||'');
+						setDocumentType(draft.documentType||'PASSPORT');
+						setLegalName(draft.identityInformation?.legalName||'');
+						setDateOfBirth(draft.identityInformation?.dateOfBirth||'');
+						setDocumentExpiryDate(draft.identityInformation?.documentExpiryDate||'');
+						draftInProgress.current=Boolean(
+							draft.documentCountry||draft.documentType||draft.identityInformation?.legalName
+							||draft.identityInformation?.dateOfBirth||draft.identityInformation?.documentExpiryDate,
+						);
+						setDraftStatus('saved');
+					}
+					draftLoaded.current=true;
+				}catch{
+					draftLoaded.current=true;
+					setDraftStatus('error');
+				}
+			}
 			setError('');
 		}catch(exception){
 			if(!background||!draftInProgress.current)setError(exception instanceof Error?exception.message:'Unable to load your verification centre.');
@@ -75,6 +148,18 @@ export default function KycVerificationCenter({currentTier,onUpdated}:{currentTi
 		}
 	},[]);
 
+	const invalidateCameraRequest=useCallback(()=>{cameraRequest.current++},[]);
+
+	useEffect(()=>{
+		if(!draftLoaded.current||!draftInProgress.current||submitting)return;
+		if(draftTimer.current!==null)window.clearTimeout(draftTimer.current);
+		setDraftStatus('saving');
+		draftTimer.current=window.setTimeout(()=>{void saveDraft()},700);
+		return()=>{
+			if(draftTimer.current!==null)window.clearTimeout(draftTimer.current);
+		};
+	},[country,dateOfBirth,documentExpiryDate,documentType,legalName,saveDraft,submitting]);
+
 	useEffect(()=>{
 		void load();
 		const timer=setInterval(()=>{
@@ -82,43 +167,175 @@ export default function KycVerificationCenter({currentTier,onUpdated}:{currentTi
 			void load(true);
 			onUpdated();
 		},statusRefreshIntervalMs);
-		return()=>{clearInterval(timer);stopTracks(streamRef.current)};
-	},[load,onUpdated]);
+		return()=>{clearInterval(timer);invalidateCameraRequest();stopTracks(streamRef.current);streamRef.current=null};
+	},[invalidateCameraRequest,load,onUpdated]);
 
-	async function startCamera(){
-		draftInProgress.current=true;
-		setError('');
-		try{
-			if(!navigator.mediaDevices?.getUserMedia)throw new Error('Camera capture is not available in this browser.');
-			stopTracks(streamRef.current);
-			const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:false});
-			streamRef.current=stream;
-			if(videoRef.current){videoRef.current.srcObject=stream;await videoRef.current.play()}
-			setCameraActive(true);
-		}catch(exception){setError(exception instanceof Error?exception.message:'Camera access was denied. Allow camera access or try again.')}
+	useEffect(()=>()=>{if(draftTimer.current!==null)window.clearTimeout(draftTimer.current)},[]);
+
+	useEffect(()=>{
+		if(!captureTarget)return;
+		const video=videoRef.current;
+		const stream=streamRef.current;
+		if(!video||!stream)return;
+		let active=true;
+		video.srcObject=stream;
+		const track=stream.getVideoTracks()[0];
+		const capabilities=track&&typeof track.getCapabilities==='function'
+			?track.getCapabilities() as MediaTrackCapabilities & {torch?:boolean}
+			:undefined;
+		setTorchSupported(Boolean(capabilities?.torch));
+		void video.play().then(()=>{if(active)setCameraReady(true)}).catch(()=>{
+			if(!active)return;
+			setCameraReady(false);
+			setError('The camera preview could not start. Close other camera apps, then try again.');
+		});
+		return()=>{active=false;video.srcObject=null};
+	},[captureTarget,cameraStreamVersion]);
+
+	function closeCamera(){
+		cameraRequest.current++;
+		stopTracks(streamRef.current);
+		streamRef.current=null;
+		setCaptureTarget(null);
+		setCameraStarting(false);
+		setCameraReady(false);
+		setTorchSupported(false);
+		setTorchEnabled(false);
 	}
 
-	function captureSelfie(){
+	async function startCamera(target:CaptureTarget,facing: 'user'|'environment'=target==='SELFIE'?'user':'environment'){
+		const requestId=++cameraRequest.current;
+		draftInProgress.current=true;
+		setError('');
+		setCameraStarting(true);
+		setCameraReady(false);
+		try{
+			if(!navigator.mediaDevices?.getUserMedia)throw new Error('Your browser does not support camera access. Choose an image file instead.');
+			stopTracks(streamRef.current);
+			streamRef.current=null;
+			const stream=await navigator.mediaDevices.getUserMedia({
+				video:{facingMode:{ideal:facing},width:{ideal:1920},height:{ideal:1080}},
+				audio:false,
+			});
+			if(cameraRequest.current!==requestId){stopTracks(stream);return}
+			streamRef.current=stream;
+			setCameraFacing(facing);
+			setCaptureTarget(target);
+			setCameraStreamVersion(value=>value+1);
+		}catch(exception){
+			if(cameraRequest.current!==requestId)return;
+			setCaptureTarget(null);
+			const name=exception instanceof DOMException?exception.name:'';
+			setError(name==='NotAllowedError'||name==='SecurityError'
+				?'Camera permission was denied. Allow camera access for Aurevia in your browser or device settings, then retry. You can also choose an image file.'
+				:name==='NotFoundError'||name==='DevicesNotFoundError'
+					?'No camera was found. Connect or enable a camera, or choose an image file.'
+					:name==='NotReadableError'||name==='AbortError'
+						?'The camera is busy or unavailable. Close other camera apps and retry, or choose an image file.'
+						:'Camera access is unavailable. Check your browser permissions and try again, or choose an image file.');
+		}finally{
+			if(cameraRequest.current===requestId)setCameraStarting(false);
+		}
+	}
+
+	function captureImage(){
 		const video=videoRef.current;
-		if(!video||video.videoWidth<250||video.videoHeight<250){setError('Wait for the camera preview, then try the capture again.');return}
+		if(!captureTarget||!cameraReady||!video||video.videoWidth<250||video.videoHeight<250){setError('Wait for the live camera preview, then try the capture again.');return}
 		const canvas=document.createElement('canvas');
 		canvas.width=video.videoWidth;canvas.height=video.videoHeight;
 		const context=canvas.getContext('2d');
-		if(!context){setError('Camera capture is unavailable.');return}
+		if(!context){setError('Camera capture is unavailable. Choose an image file or try another browser.');return}
 		context.drawImage(video,0,0,canvas.width,canvas.height);
 		canvas.toBlob(blob=>{
-			if(!blob){setError('The selfie could not be captured. Try again.');return}
-			setSelfie(new File([blob],'selfie.jpg',{type:'image/jpeg'}));
-			setError('');setCameraActive(false);stopTracks(streamRef.current);streamRef.current=null;
+			if(!blob){setError('The image could not be captured. Check the camera and try again.');return}
+			const fileName=captureTarget==='SELFIE'?'selfie.jpg':`identity-${captureTarget.toLowerCase()}.jpg`;
+			const file=new File([blob],fileName,{type:'image/jpeg',lastModified:Date.now()});
+			if(captureTarget==='FRONT')setFront(file);
+			else if(captureTarget==='BACK')setBack(file);
+			else setSelfie(file);
+			setError('');
+			closeCamera();
 		},'image/jpeg',0.92);
+	}
+
+	async function toggleTorch(){
+		const track=streamRef.current?.getVideoTracks()[0];
+		if(!track||!torchSupported)return;
+		const next=!torchEnabled;
+		try{
+			await track.applyConstraints({advanced:[{torch:next} as MediaTrackConstraintSet & {torch:boolean}]});
+			setTorchEnabled(next);
+		}catch{
+			setError('This camera could not change its light setting. Continue without the torch or try another camera.');
+		}
+	}
+
+	function renderCameraViewport(target:CaptureTarget){
+		if(captureTarget!==target)return null;
+		const isSelfie=target==='SELFIE';
+		return <div className="kyc-camera-shell" data-capture-target={target}>
+			<div className="kyc-camera-topline">
+				<span className={`kyc-camera-live ${cameraReady?'is-ready':''}`}><i/>{cameraStarting?'Starting camera':cameraReady?'Camera ready':'Connecting camera'}</span>
+				<span>{isSelfie?'SELFIE CAPTURE':'DOCUMENT CAPTURE'}</span>
+			</div>
+			<div className={`kyc-camera-viewport ${isSelfie?'is-selfie':'is-document'}`}>
+				<video ref={videoRef} className={isSelfie&&cameraFacing==='user'?'is-mirrored':''} autoPlay playsInline muted aria-label={isSelfie?'Live selfie camera preview':'Live identity document camera preview'}/>
+				<div className={`kyc-camera-guide ${isSelfie?'kyc-face-guide':'kyc-document-guide'}`} aria-hidden="true">
+					<span className="kyc-guide-corner top-left"/><span className="kyc-guide-corner top-right"/>
+					<span className="kyc-guide-corner bottom-left"/><span className="kyc-guide-corner bottom-right"/>
+					{isSelfie&&<span className="kyc-face-oval"/>}
+					<span className="kyc-scan-line"/>
+				</div>
+				{!cameraReady&&<div className="kyc-camera-starting" role="status">{cameraStarting?<><LoaderCircle size={18} className="animate-spin"/> Requesting camera access…</>:<>Preparing live preview…</>}</div>}
+			</div>
+			<p className="kyc-camera-instruction">{isSelfie?'Center your face inside the guide, use even lighting, and remove strong backlighting.':'Fit the complete document inside the frame. Avoid glare, shadows, blur, and cut-off edges.'}</p>
+			{isSelfie&&<p className="kyc-camera-disclosure">The guide is visual only. Face detection, face matching, and liveness checks are not performed.</p>}
+			<div className="kyc-camera-controls">
+				<button className="kyc-camera-control" type="button" onClick={()=>void startCamera(target,cameraFacing==='user'?'environment':'user')} disabled={cameraStarting} aria-label="Switch camera"><SwitchCamera size={17}/><span>Switch camera</span></button>
+				{torchSupported&&<button className={`kyc-camera-control ${torchEnabled?'is-active':''}`} type="button" onClick={()=>void toggleTorch()} aria-pressed={torchEnabled}><Zap size={17}/><span>{torchEnabled?'Light on':'Light'}</span></button>}
+				<button className="kyc-camera-capture" type="button" onClick={captureImage} disabled={!cameraReady}><Camera size={18}/><span>Capture {isSelfie?'selfie':'document'}</span></button>
+				<button className="kyc-camera-control" type="button" onClick={closeCamera}>Cancel</button>
+			</div>
+		</div>;
+	}
+
+	function validateCurrentStep(){
+		if(step===0){
+			if(!/^[A-Z]{2}$/.test(country)){setError('Select the country that issued your document.');return false}
+			if(!requirements.some(item=>item.type===documentType)){setError('Select a supported document type.');return false}
+			if(legalName.trim().length<2){setError('Enter your legal name as it appears on the document.');return false}
+			if(!dateOfBirth){setError('Enter your date of birth.');return false}
+			try{
+				const requirement=requirements.find(item=>item.type===documentType);
+				if(!requirement)throw new Error('KYC_DOCUMENT_TYPE_INVALID');
+				parseKycIdentityInformation({legalName,dateOfBirth,documentExpiryDate,expiryRequired:requirement.expiryRequired});
+			}catch(exception){
+				const message=exception instanceof Error?exception.message:'';
+				setError(message==='KYC_DATE_OF_BIRTH_INVALID'?'Enter a valid date of birth in the past.'
+					:message==='KYC_DOCUMENT_EXPIRY_REQUIRED'?'Enter the document expiry date.'
+					:message==='KYC_DOCUMENT_EXPIRED'?'The document expiry date must be in the future.'
+					:'Enter your legal name as it appears on the document.');
+				return false;
+			}
+		}
+		if(step===1){
+			if(!front){setError('Add the front image of your identity document.');return false}
+			if(selectedRequirement?.sides.includes('BACK')&&!back){setError('Add the back image of your identity document.');return false}
+			if(!selfie){setError('Capture a selfie before continuing.');return false}
+		}
+		setError('');
+		return true;
 	}
 
 	async function submit(event:React.FormEvent<HTMLFormElement>){
 		event.preventDefault();
-		if(!canSubmit)return;
+		if(submissionInFlight.current||!canSubmit||step!==2)return;
+		submissionInFlight.current=true;
+		if(draftTimer.current!==null){window.clearTimeout(draftTimer.current);draftTimer.current=null}
 		draftInProgress.current=true;
 		setSubmitting(true);setError('');setMessage('');
 		try{
+			await draftSaveRequest.current;
 			const form=new FormData();
 			form.append('documentCountry',country);
 			form.append('documentType',documentType);
@@ -129,15 +346,31 @@ export default function KycVerificationCenter({currentTier,onUpdated}:{currentTi
 			if(selectedRequirement?.sides.includes('BACK')&&back)form.append('documentBack',back);
 			form.append('selfie',selfie!);
 			form.append('consent','true');
-			const response=await fetch('/api/kyc/verification',{method:'POST',body:form});
-			const result=await response.json();
-			if(!response.ok)throw new Error(result.error||'Unable to submit your identity verification.');
+			await new Promise<void>((resolve,reject)=>{
+				const request=new XMLHttpRequest();
+				request.open('POST','/api/kyc/verification');
+				request.timeout=180_000;
+				request.upload.onprogress=event=>setUploadProgress(event.lengthComputable?Math.round(event.loaded/event.total*100):null);
+				request.onerror=()=>reject(new Error('The evidence upload was interrupted. Check your connection and try again.'));
+				request.ontimeout=()=>reject(new Error('The upload timed out. Your draft is saved; retry when your connection is stable.'));
+				request.onabort=()=>reject(new Error('The upload was interrupted. Your draft is saved; try again.'));
+				request.onload=()=>{
+					let body:Record<string,unknown>;
+					try{body=JSON.parse(request.responseText) as Record<string,unknown>}
+					catch{reject(new Error('The verification response could not be read.'));return}
+					if(request.status<200||request.status>=300){reject(new Error(typeof body.error==='string'?body.error:'Unable to submit your identity verification.'));return}
+					resolve();
+				};
+				request.send(form);
+			});
 			setFront(null);setBack(null);setSelfie(null);setConsent(false);
 			draftInProgress.current=false;
+			setDraftStatus('idle');
+			setUploadProgress(null);
 			setMessage('Your submission was received and is awaiting administrator review.');
 			await load();onUpdated();
-		}catch(exception){setError(exception instanceof Error?exception.message:'Unable to submit your identity verification.')}
-		finally{setSubmitting(false)}
+		}catch(exception){setError(exception instanceof Error?exception.message:'Unable to submit your identity verification.');setUploadProgress(null)}
+		finally{submissionInFlight.current=false;setSubmitting(false)}
 	}
 
 	return <section className="account-panel card mt-4 p-5" aria-labelledby="aurevia-verify-title">
@@ -161,27 +394,69 @@ export default function KycVerificationCenter({currentTier,onUpdated}:{currentTi
 			</article>}
 			{latest&&['PENDING_REVIEW','PROCESSING','SUBMITTED','NEEDS_REVIEW'].includes(latest.status)?<p className="mt-4 text-sm muted">Your case is awaiting review. You’ll receive an in-app notification and email when its status changes.</p>:<form className="mt-5 space-y-4" onSubmit={submit} onChange={()=>{draftInProgress.current=true}}>
 				<h3 className="font-semibold">{latest?.status==='RESUBMISSION_REQUIRED'?'Submit corrected evidence':'Start a verification submission'}</h3>
-				<div className="grid gap-3 sm:grid-cols-2">
-					<label className="account-label">Document-issuing country<select className="input" value={country} onChange={event=>setCountry(event.target.value)} required><option value="">Select a country</option>{countries.map(item=><option key={item.isoCode} value={item.isoCode}>{item.name}</option>)}</select></label>
+				<ol className="kyc-step-indicator" aria-label="Verification application progress">
+					{['Identity details','Capture evidence','Review & submit','Review status'].map((label,index)=>{
+						const statusStep=index===3&&Boolean(latest);
+						const active=index===step&&!latest||statusStep;
+						const complete=index<step||statusStep;
+						return <li key={label} aria-current={active?'step':undefined} className={active?'is-active':complete?'is-complete':''}><span>{complete&&index<step?<CheckCircle2 size={14}/>:index+1}</span><small>{label}</small></li>;
+					})}
+				</ol>
+				<fieldset hidden={step!==0} className="grid gap-3 sm:grid-cols-2">
+					<legend className="mb-3 font-semibold">Identity information</legend>
+					<label className="account-label">Document-issuing country<select className="input" value={country} onChange={event=>setCountry(event.target.value)}><option value="">Select a country</option>{countries.map(item=><option key={item.isoCode} value={item.isoCode}>{item.name}</option>)}</select></label>
 					<label className="account-label">Document type<select className="input" value={documentType} onChange={event=>{setDocumentType(event.target.value as DocumentType);setBack(null);setDocumentExpiryDate('')}}>{requirements.map(item=><option key={item.type} value={item.type}>{item.label}</option>)}</select></label>
+					<label className="account-label">Legal name<input className="input" autoComplete="name" maxLength={120} value={legalName} onChange={event=>setLegalName(event.target.value)} aria-invalid={Boolean(error&&step===0)}/><small className="muted">Enter the name exactly as shown on your identification document.</small></label>
+					<label className="account-label">Date of birth<input className="input" type="date" autoComplete="bday" value={dateOfBirth} onChange={event=>setDateOfBirth(event.target.value)}/></label>
+					{selectedRequirement?.expiryRequired&&<label className="account-label">Document expiry date<input className="input" type="date" value={documentExpiryDate} onChange={event=>setDocumentExpiryDate(event.target.value)}/><small className="muted">The document must be unexpired.</small></label>}
+				</fieldset>
+				<fieldset hidden={step!==1} className="space-y-4">
+					<legend className="mb-3 font-semibold">Private identity evidence</legend>
+					<div className="grid gap-3 sm:grid-cols-2">
+						{([
+							{target:'FRONT' as const,label:'Document front',file:front,preview:frontPreview,setFile:setFront},
+							...(selectedRequirement?.sides.includes('BACK')?[{target:'BACK' as const,label:'Document back',file:back,preview:backPreview,setFile:setBack}]:[]),
+						]).map(item=><div className="kyc-evidence-card" key={item.target}>
+							<div className="kyc-evidence-heading"><span><ScanLine size={16}/>{item.label}</span><span className={item.file?'kyc-evidence-ready':''}>{item.file?'Captured':'Required'}</span></div>
+							{item.file&&item.preview&&<div className="kyc-evidence-preview"><Image src={item.preview} alt={`${item.label} preview`} width={640} height={400} unoptimized/><span><CheckCircle2 size={14}/> Preview ready · {(item.file.size/1024).toFixed(0)} KB</span></div>}
+							{renderCameraViewport(item.target)}
+							<div className="kyc-evidence-actions">
+								<button className="btn min-h-11 bg-white/10" type="button" disabled={cameraStarting} onClick={()=>void startCamera(item.target,'environment')}><Camera size={16}/>{item.file?'Retake with camera':'Open camera'}</button>
+								<label className="kyc-file-picker">Choose image<input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" capture="environment" onChange={event=>{item.setFile(event.target.files?.[0]||null);event.currentTarget.value='';if(captureTarget===item.target)closeCamera()}}/></label>
+							</div>
+							<p className="kyc-evidence-hint">JPEG, PNG or WebP · up to 15 MB. Keep the complete document visible and avoid glare or blur.</p>
+						</div>)}
+					</div>
+					<div className="kyc-selfie-card">
+						<div className="kyc-evidence-heading"><span><Camera size={16}/>Camera-captured selfie</span><span className={selfie?'kyc-evidence-ready':''}>{selfie?'Captured':'Required'}</span></div>
+						<p className="mt-1 text-xs leading-5 muted">Use a live camera capture; an uploaded ID portrait is not accepted as a selfie. Face matching and liveness detection are unavailable, so this image requires manual review and is not proof of liveness.</p>
+						{selfie&&selfiePreview&&<div className="kyc-selfie-preview"><Image src={selfiePreview} alt="Selfie preview" width={390} height={480} unoptimized/><div><b><CheckCircle2 size={14}/> Selfie preview ready</b><span>{selfie.name} · {(selfie.size/1024).toFixed(0)} KB</span></div><button className="text-link" type="button" onClick={()=>{setSelfie(null);void startCamera('SELFIE','user')}}><RefreshCw size={14}/> Retake</button></div>}
+						{renderCameraViewport('SELFIE')}
+						{!selfie&&captureTarget!=='SELFIE'&&<button className="btn mt-3 min-h-11 bg-white/10" type="button" disabled={cameraStarting} onClick={()=>void startCamera('SELFIE','user')}><Camera size={16}/>{cameraStarting?'Starting camera…':'Open selfie camera'}</button>}
+						<p className="kyc-evidence-hint">Center your face in the guide, use even lighting, and avoid bright light behind you. The guide does not analyze your face.</p>
+					</div>
+				</fieldset>
+				<fieldset hidden={step!==2} className="space-y-4">
+					<legend className="mb-3 font-semibold">Review before submission</legend>
+					<dl className="grid gap-3 rounded-lg border border-white/10 p-4 text-sm sm:grid-cols-2">
+						<div><dt className="text-xs muted">Document country and type</dt><dd>{countries.find(item=>item.isoCode===country)?.name||'Not selected'} · {selectedRequirement?.label||'Not selected'}</dd></div>
+						<div><dt className="text-xs muted">Legal name</dt><dd>{legalName.trim()||'Not provided'}</dd></div>
+						<div><dt className="text-xs muted">Date of birth</dt><dd>{dateOfBirth||'Not provided'}</dd></div>
+						{selectedRequirement?.expiryRequired&&<div><dt className="text-xs muted">Document expiry</dt><dd>{documentExpiryDate||'Not provided'}</dd></div>}
+						<div><dt className="text-xs muted">Document images</dt><dd>{front?.name||'Front image missing'}{selectedRequirement?.sides.includes('BACK')?` · ${back?.name||'Back image missing'}`:''}{frontPreview&&<Image className="kyc-review-thumbnail" src={frontPreview} alt="Document front review" width={220} height={145} unoptimized/>}{backPreview&&<Image className="kyc-review-thumbnail" src={backPreview} alt="Document back review" width={220} height={145} unoptimized/>}</dd></div>
+						<div><dt className="text-xs muted">Selfie</dt><dd>{selfie?.name||'Selfie missing'}{selfiePreview&&<Image className="kyc-review-thumbnail is-selfie" src={selfiePreview} alt="Selfie review" width={96} height={110} unoptimized/>}</dd></div>
+					</dl>
+					<label className="flex items-start gap-2 text-sm leading-6 muted"><input className="mt-1" type="checkbox" checked={consent} onChange={event=>setConsent(event.target.checked)}/><span>I consent to Aurevia securely storing this identity evidence and making it available to authorized reviewers for identity verification. See the <Link className="text-link" href="/privacy">privacy overview</Link>.</span></label>
+					<p className="text-xs muted">Your evidence is uploaded to private storage only after you press Submit for verification.</p>
+				</fieldset>
+				<div className="flex flex-wrap items-center justify-between gap-3">
+					<button className="btn min-h-11 bg-white/10" type="button" onClick={()=>{setError('');closeCamera();setStep(value=>Math.max(0,value-1))}} disabled={step===0||submitting}><ChevronLeft size={16}/>Back</button>
+					<div className="flex flex-wrap items-center gap-3">
+						{step<2?<button className="btn min-h-11 bg-gold px-4 text-black" type="button" onClick={()=>{if(validateCurrentStep()){closeCamera();setStep(value=>Math.min(2,value+1))}}}>Continue<ChevronRight size={16}/></button>:<button className="btn min-h-11 bg-gold px-4 text-black disabled:opacity-50" type="submit" disabled={!canSubmit}>{submitting?<><LoaderCircle size={16} className="animate-spin"/>Uploading evidence…</>:<><Upload size={16}/>Submit for verification</>}</button>}
+					</div>
 				</div>
-				<div className="grid gap-3 sm:grid-cols-2">
-					<label className="account-label">Legal name<input className="input" autoComplete="name" maxLength={120} value={legalName} onChange={event=>setLegalName(event.target.value)} required/><small className="muted">Enter the name exactly as shown on your identification document.</small></label>
-					<label className="account-label">Date of birth<input className="input" type="date" autoComplete="bday" value={dateOfBirth} onChange={event=>setDateOfBirth(event.target.value)} required/></label>
-					{selectedRequirement?.expiryRequired&&<label className="account-label">Document expiry date<input className="input" type="date" value={documentExpiryDate} onChange={event=>setDocumentExpiryDate(event.target.value)} required/><small className="muted">The document must be unexpired.</small></label>}
-				</div>
-				<div className="grid gap-3 sm:grid-cols-2">
-					<label className="account-label">Document front<input className="input" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" capture="environment" onChange={event=>setFront(event.target.files?.[0]||null)} required/><small className="muted">JPEG, PNG or WebP · maximum 15 MB</small></label>
-					{selectedRequirement?.sides.includes('BACK')&&<label className="account-label">Document back<input className="input" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" capture="environment" onChange={event=>setBack(event.target.files?.[0]||null)} required/><small className="muted">JPEG, PNG or WebP · maximum 15 MB</small></label>}
-				</div>
-				<div className="rounded-lg border border-white/10 p-3">
-					<h4 className="text-sm font-semibold">Camera-captured selfie</h4>
-					<p className="mt-1 text-xs leading-5 muted">Use a live camera capture; an uploaded ID portrait is not accepted as a selfie. Face matching and liveness detection are unavailable, so the image requires manual review and is not proof of liveness.</p>
-					{cameraActive&&<div className="mt-3"><video ref={videoRef} className="max-h-72 w-full rounded-lg bg-black object-contain" autoPlay playsInline muted aria-label="Live selfie camera preview"/><div className="mt-2 flex gap-2"><button className="btn min-h-11 bg-gold text-black" type="button" onClick={captureSelfie}><Camera size={16}/>Capture selfie</button><button className="btn min-h-11 bg-white/10" type="button" onClick={()=>{setCameraActive(false);stopTracks(streamRef.current);streamRef.current=null}}>Cancel</button></div></div>}
-					{selfie?<div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm"><span>{selfie.name} · {(selfie.size/1024).toFixed(0)} KB</span><button className="text-link" type="button" onClick={()=>{setSelfie(null);void startCamera()}}><RefreshCw size={14}/> Retake</button></div>:!cameraActive&&<button className="btn mt-3 min-h-11 bg-white/10" type="button" onClick={()=>void startCamera()}><Camera size={16}/>Open camera</button>}
-				</div>
-				<label className="flex items-start gap-2 text-sm leading-6 muted"><input className="mt-1" type="checkbox" checked={consent} onChange={event=>setConsent(event.target.checked)}/><span>I consent to Aurevia securely storing this identity evidence and making it available to authorized reviewers for identity verification. See the <Link className="text-link" href="/privacy">privacy overview</Link>.</span></label>
-				<div className="flex flex-wrap items-center gap-3"><button className="btn min-h-11 bg-gold px-4 text-black disabled:opacity-50" type="submit" disabled={!canSubmit}>{submitting?<><LoaderCircle size={16} className="animate-spin"/>Submitting securely…</>:<><Upload size={16}/>Submit for review</>}</button>{submitting&&<span className="text-xs muted" role="status">Uploading and validating your files…</span>}</div>
+				{draftStatus!=='idle'&&<p className={`text-xs ${draftStatus==='error'?'text-loss':'muted'}`} role={draftStatus==='error'?'alert':'status'}>{draftStatus==='saving'?'Saving encrypted draft…':draftStatus==='saved'?'Draft saved securely. You can resume after signing in again.':'Draft could not be saved. You can still submit, but unfinished changes may not be retained.'}</p>}
+				{submitting&&<div className="space-y-1" role="status" aria-live="polite"><p className="text-xs muted">{uploadProgress===null?'Uploading and validating your files…':`Uploading evidence… ${uploadProgress}%`}</p>{uploadProgress!==null&&<progress className="w-full accent-amber-400" max={100} value={uploadProgress}>{uploadProgress}%</progress>}</div>}
 			</form>}
 			{verifications.length>1&&<details className="mt-5"><summary className="cursor-pointer text-sm gold">Previous verification cases ({verifications.length-1})</summary><ul className="mt-2 divide-y divide-white/10">{verifications.slice(1).map(item=><li className="py-2 text-sm" key={item.id}>{statusCopy[item.status]||item.status.replaceAll('_',' ')} · {item.submittedAt?new Date(item.submittedAt).toLocaleDateString():'Draft'}{item.decisionReason&&<span className="block text-xs muted">{item.decisionReason}</span>}</li>)}</ul></details>}
 		</>}

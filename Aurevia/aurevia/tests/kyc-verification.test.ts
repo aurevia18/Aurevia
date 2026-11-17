@@ -1,6 +1,8 @@
-import {describe,expect,it} from 'vitest';
+import {describe,expect,it,vi} from 'vitest';
 import sharp from 'sharp';
 import {createManualReviewAssessment,kycDocumentRegistry,validateKycImage} from '@/lib/kyc-verification';
+
+vi.mock('server-only',()=>({}));
 
 async function image(width=640,height=480){
 	return sharp({create:{width,height,channels:3,background:{r:70,g:90,b:80}}}).png().toBuffer();

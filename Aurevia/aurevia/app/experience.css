@@ -3467,6 +3467,17 @@ a,button,input,select,textarea,summary{transition:color .16s ease,border-color .
 .browser-push-preferences label small{color:#aab2aa;font-size:11px;line-height:1.5}
 .browser-push-preferences :focus-visible,.browser-push-actions .btn:focus-visible{outline:2px solid #d9bd68;outline-offset:3px}
 .browser-push-success{display:flex;align-items:center;gap:8px;color:#b4d8bb}
+.browser-push-devices{margin-top:20px;padding-top:14px;border-top:1px solid rgba(255,255,255,.1)}
+.browser-push-devices-heading{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+.browser-push-devices-heading h4{color:#e4e9e2;font-size:13px;font-weight:650}
+.browser-push-devices-heading>span{display:grid;min-width:20px;height:20px;place-items:center;border:1px solid rgba(197,164,107,.2);border-radius:999px;color:#d9bd68;font-size:10px}
+.browser-push-devices ul{display:grid;gap:8px}
+.browser-push-devices li{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:11px 12px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(255,255,255,.02)}
+.browser-push-devices li>div{display:grid;gap:4px;min-width:0}
+.browser-push-devices li b{color:#e6eae4;font-size:12px}
+.browser-push-devices li small{color:#aab2aa;font-size:10px;line-height:1.5;overflow-wrap:anywhere}
+.browser-push-devices li button{flex:none}
+.browser-push-devices>p{font-size:11px;line-height:1.6}
 @media(max-width:520px){
 	.browser-push-actions{display:grid;grid-template-columns:1fr}
 	.browser-push-actions .btn{width:100%}
@@ -6072,6 +6083,12 @@ body:has(.dashboard-sidebar) .user-dashboard-panel-heading p{font-size:10px}
 .settings-preferences .browser-push-preferences label>span{display:grid;gap:4px}
 .settings-preferences .browser-push-preferences label b{color:var(--theme-text);font-size:8px}
 .settings-preferences .browser-push-preferences label small{color:var(--theme-text-muted);font-size:7px;line-height:1.55}
+.settings-preferences .browser-push-devices{border-color:var(--theme-border)}
+.settings-preferences .browser-push-devices-heading h4,.settings-preferences .browser-push-devices li b{color:var(--theme-text);font-size:9px}
+.settings-preferences .browser-push-devices-heading>span{border-color:var(--theme-border);color:var(--theme-accent);font-size:8px}
+.settings-preferences .browser-push-devices li{border-color:var(--theme-border);background:var(--theme-page-secondary);color:var(--theme-text-secondary)}
+.settings-preferences .browser-push-devices li small,.settings-preferences .browser-push-devices>p{color:var(--theme-text-muted);font-size:8px;line-height:1.55}
+.settings-preferences .browser-push-devices li button{font-size:8px}
 .settings-preferences .account-callout{border-color:var(--theme-border);border-radius:8px;background:var(--theme-page-secondary);color:var(--theme-text-secondary);font-size:9px;line-height:1.6}
 .settings-preferences :is(button,a,input):focus-visible{outline:2px solid var(--theme-focus);outline-offset:3px}
 

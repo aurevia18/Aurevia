@@ -9,9 +9,7 @@ import {trustedProxyClientIp} from '@/lib/request-ip';
 import {isValidE164,parseDateOfBirth} from '@/lib/registration-validation';
 import {createImmediateRegistration} from '@/lib/registration-attempt';
 import {createNotification,notifyActiveAdmins} from '@/lib/notifications';
-import {verifyTurnstileToken} from '@/lib/turnstile';
 import {findCountry,supportedCountries} from '@/lib/countries';
-import {getServerConfiguration} from '@/lib/config/env';
 import {getCurrentLegalDocuments} from '@/lib/legal-acceptance';
 
 const countryCodeSchema=z.string().regex(/^[A-Z]{2}$/).refine(value=>Boolean(findCountry(value)),'Choose a valid country.');
@@ -61,7 +59,6 @@ const schema=z.object({
 		]),
 		version:z.string().trim().min(1).max(128),
 	})).min(1).max(16),
-	turnstileToken:z.string().trim().min(1).max(2048),
 	website:z.string().max(0).optional().default(''),
 }).superRefine((value,context)=>{
 	const names=value.firstName&&value.lastName
@@ -177,18 +174,6 @@ export async function POST(request:Request){
 		parsedInput=input;
 		if(input.website)return NextResponse.json({error:'Invalid registration request.'},{status:400,headers:{'Cache-Control':'no-store'}});
 		rateLimit(`register:${trustedProxyClientIp(request)||'unknown'}`,30,10*60_000);
-		try{
-			await verifyTurnstileToken({
-				token:input.turnstileToken,
-				remoteIp:trustedProxyClientIp(request),
-				hostname:new URL(getServerConfiguration().auth.url).hostname,
-			});
-		}catch(error){
-			if(error instanceof Error&&error.message==='TURNSTILE_CONFIGURATION_REQUIRED')return NextResponse.json({error:'Registration security check is not configured. Contact support; no account was created.'},{status:503,headers:{'Cache-Control':'no-store'}});
-			if(error instanceof Error&&error.message==='TURNSTILE_TOKEN_INVALID')return NextResponse.json({error:'Complete the security check and try again.'},{status:400,headers:{'Cache-Control':'no-store'}});
-			if(error instanceof Error&&error.message==='TURNSTILE_PROVIDER_UNAVAILABLE')return NextResponse.json({error:'The registration security check is temporarily unavailable. Try again shortly.'},{status:503,headers:{'Cache-Control':'no-store'}});
-			throw error;
-		}
 		const currentLegalDocuments=await getCurrentLegalDocuments();
 		const submittedLegalVersions=new Map(input.legalAcceptances.map(item=>[item.documentKey,item.version]));
 		if(submittedLegalVersions.size!==input.legalAcceptances.length
@@ -281,7 +266,6 @@ export async function POST(request:Request){
 			if(error.issues.some(issue=>issue.path[0]==='phone'))return NextResponse.json({error:'Enter a valid phone number in international format.'},{status:400});
 			if(error.issues.some(issue=>issue.path[0]==='address'))return NextResponse.json({error:'Check the required residential address fields.'},{status:400});
 			if(error.issues.some(issue=>issue.path[0]==='legal'))return NextResponse.json({error:'Review and individually accept each required policy before creating your account.'},{status:400});
-			if(error.issues.some(issue=>issue.path[0]==='turnstileToken'))return NextResponse.json({error:'Complete the security check before creating your account.'},{status:400});
 			if(error.issues.some(issue=>issue.path[0]==='website'))return NextResponse.json({error:'Invalid registration request.'},{status:400});
 			return NextResponse.json({error:'Check your personal, address, contact, password, and consent details.'},{status:400});
 		}

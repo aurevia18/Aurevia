@@ -1,5 +1,7 @@
-import {describe,expect,it} from 'vitest';
+import {describe,expect,it,vi} from 'vitest';
 import {FundingEvidenceError,validateFundingEvidence} from '../lib/funding-evidence';
+
+vi.mock('server-only',()=>({}));
 
 const pngSignature=Buffer.from([137,80,78,71,13,10,26,10]);
 

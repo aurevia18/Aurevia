@@ -2,21 +2,21 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {describe,expect,it,vi} from 'vitest';
 
-function loadServiceWorker(options:{fetch?:ReturnType<typeof vi.fn>}={}){
+function loadServiceWorker(options:{fetch?:ReturnType<typeof vi.fn>;cacheKeys?:string[];pushManager?:Record<string,ReturnType<typeof vi.fn>>}={}){
 	const listeners=new Map<string,(event:Record<string,unknown>)=>void>();
 	const showNotification=vi.fn().mockResolvedValue(undefined);
 	const cache={addAll:vi.fn().mockResolvedValue(undefined),match:vi.fn().mockResolvedValue(undefined),put:vi.fn().mockResolvedValue(undefined)};
-	const caches={open:vi.fn().mockResolvedValue(cache),keys:vi.fn().mockResolvedValue([]),delete:vi.fn().mockResolvedValue(true),match:vi.fn().mockResolvedValue(undefined)};
+	const caches={open:vi.fn().mockResolvedValue(cache),keys:vi.fn().mockResolvedValue(options.cacheKeys||[]),delete:vi.fn().mockResolvedValue(true),match:vi.fn().mockResolvedValue(undefined)};
 	const self={
 		location:{origin:'https://aurevia.test'},
-		registration:{showNotification},
+		registration:{showNotification,pushManager:options.pushManager},
 		skipWaiting:vi.fn().mockResolvedValue(undefined),
-		clients:{claim:vi.fn().mockResolvedValue(undefined)},
+		clients:{claim:vi.fn().mockResolvedValue(undefined),matchAll:vi.fn().mockResolvedValue([]),openWindow:vi.fn()},
 		addEventListener:(name:string,callback:(event:Record<string,unknown>)=>void)=>listeners.set(name,callback),
 	};
 	const fetch=options.fetch||vi.fn();
-	runInNewContext(readFileSync('public/sw.js','utf8'),{self,URL,Promise,caches,fetch,Response});
-	return {listeners,showNotification,cache,caches};
+	runInNewContext(readFileSync('public/sw.js','utf8'),{self,URL,Promise,caches,fetch,Response,Uint8Array,atob});
+	return {listeners,showNotification,cache,caches,self,fetch};
 }
 
 describe('Aurevia browser push service worker',()=>{
@@ -81,5 +81,51 @@ describe('Aurevia browser push service worker',()=>{
 		listeners.get('fetch')!({request:{method:'GET',mode:'same-origin',url:'https://aurevia.test/_next/static/chunks/app.js'},respondWith:(value:unknown)=>{cachedResponse=value}});
 		await cachedResponse;
 		expect(cache.put).toHaveBeenCalledWith(expect.objectContaining({url:'https://aurevia.test/_next/static/chunks/app.js'}),{staticAsset:true});
+	});
+
+	it('deletes only obsolete Aurevia caches when the worker activates',async()=>{
+		const {listeners,caches,self}=loadServiceWorker({cacheKeys:['aurevia-static-v1','next-cache','other-app-cache','aurevia-static-v2']});
+		let activation:Promise<unknown>|undefined;
+		listeners.get('activate')!({waitUntil:(value:unknown)=>{activation=value as Promise<unknown>}});
+		await activation;
+		expect(caches.delete).toHaveBeenCalledOnce();
+		expect(caches.delete).toHaveBeenCalledWith('aurevia-static-v1');
+		expect(self.clients.claim).toHaveBeenCalledOnce();
+	});
+
+	it('replaces an expired push subscription before removing its old endpoint',async()=>{
+		const subscription={endpoint:'https://fcm.googleapis.com/fcm/send/new',toJSON:()=>({endpoint:'https://fcm.googleapis.com/fcm/send/new',keys:{p256dh:'key',auth:'key'}})};
+		const fetch=vi.fn().mockResolvedValue({ok:true});
+		const pushManager={subscribe:vi.fn()};
+		const {listeners}=loadServiceWorker({fetch,pushManager});
+		let update:Promise<unknown>|undefined;
+		listeners.get('pushsubscriptionchange')!({
+			newSubscription:subscription,
+			oldSubscription:{endpoint:'https://fcm.googleapis.com/fcm/send/old'},
+			waitUntil:(value:unknown)=>{update=value as Promise<unknown>},
+		});
+		await update;
+		expect(fetch).toHaveBeenCalledTimes(2);
+		expect(fetch.mock.calls[0][1]).toMatchObject({method:'POST',credentials:'same-origin'});
+		expect(fetch.mock.calls[1][1]).toMatchObject({method:'DELETE',credentials:'same-origin'});
+		expect(pushManager.subscribe).not.toHaveBeenCalled();
+	});
+
+	it('renews an empty subscription from the authenticated server configuration',async()=>{
+		const replacement={endpoint:'https://fcm.googleapis.com/fcm/send/renewed',toJSON:()=>({endpoint:'https://fcm.googleapis.com/fcm/send/renewed',keys:{p256dh:'key',auth:'key'}})};
+		const pushManager={subscribe:vi.fn().mockResolvedValue(replacement)};
+		const fetch=vi.fn()
+			.mockResolvedValueOnce({ok:true,json:async()=>({available:true,publicKey:'AQAB'})})
+			.mockResolvedValueOnce({ok:true});
+		const {listeners}=loadServiceWorker({fetch,pushManager});
+		let update:Promise<unknown>|undefined;
+		listeners.get('pushsubscriptionchange')!({
+			newSubscription:null,
+			oldSubscription:null,
+			waitUntil:(value:unknown)=>{update=value as Promise<unknown>},
+		});
+		await update;
+		expect(pushManager.subscribe).toHaveBeenCalledWith(expect.objectContaining({userVisibleOnly:true,applicationServerKey:expect.any(Uint8Array)}));
+		expect(fetch).toHaveBeenLastCalledWith('/api/push/subscriptions',expect.objectContaining({method:'POST'}));
 	});
 });

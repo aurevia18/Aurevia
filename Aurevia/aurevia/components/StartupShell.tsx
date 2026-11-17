@@ -4,11 +4,13 @@ import {useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
 import type {MouseEvent,ReactNode} from 'react';
 import {usePathname} from 'next/navigation';
 import {useSession} from 'next-auth/react';
-import {AureviaStartupLoader} from '@/components/AureviaStartup';
+import AureviaStartup,{AureviaStartupLoader} from '@/components/AureviaStartup';
 import AureviaLoading from '@/components/AureviaLoading';
 
 const startupKey='aurevia-startup-complete';
+const introKey='aurevia-cinematic-intro-complete';
 const exitDurationMs=180;
+const introExitDurationMs=450;
 const maximumStartupWaitMs=1200;
 const navigationLoaderDelayMs=100;
 const navigationLoaderTimeoutMs=15_000;
@@ -21,10 +23,13 @@ export default function StartupShell({children}:{children:ReactNode}){
 	const startupInitialized=useRef(false);
 	const navigationLoaderTimer=useRef<number|undefined>(undefined);
 	const navigationTimeoutTimer=useRef<number|undefined>(undefined);
+	const introExitTimer=useRef<number|undefined>(undefined);
 	const [ready,setReady]=useState(false);
 	const [startupMode,setStartupMode]=useState<StartupMode>(pathname==='/'?'hidden':'loading');
 	const [isExiting,setIsExiting]=useState(false);
 	const [showPageTransition,setShowPageTransition]=useState(false);
+	const [showIntro,setShowIntro]=useState(false);
+	const [isIntroExiting,setIsIntroExiting]=useState(false);
 	const showStartup=startupMode!=='hidden';
 
 	const clearNavigationTimers=useCallback(()=>{
@@ -59,6 +64,60 @@ export default function StartupShell({children}:{children:ReactNode}){
 		document.documentElement.dataset.aureviaStartupComplete='true';
 		setStartupMode('hidden');
 	},[]);
+
+	const completeIntro=useCallback(()=>{
+		try{localStorage.setItem(introKey,'1')}catch{
+			try{sessionStorage.setItem(introKey,'1')}catch{}
+		}
+		delete document.documentElement.dataset.aureviaIntroPending;
+		setShowIntro(false);
+		setIsIntroExiting(false);
+		introExitTimer.current=undefined;
+	},[]);
+
+	const finishIntro=useCallback(()=>{
+		if(introExitTimer.current!==undefined)return;
+		setIsIntroExiting(true);
+		introExitTimer.current=window.setTimeout(completeIntro,introExitDurationMs);
+	},[completeIntro]);
+
+	const replayIntro=useCallback(()=>{
+		if(introExitTimer.current!==undefined)window.clearTimeout(introExitTimer.current);
+		introExitTimer.current=undefined;
+		document.documentElement.dataset.aureviaIntroPending='true';
+		setIsIntroExiting(false);
+		setShowIntro(true);
+	},[]);
+
+	useLayoutEffect(()=>{
+		if(introExitTimer.current!==undefined)window.clearTimeout(introExitTimer.current);
+		introExitTimer.current=undefined;
+		setIsIntroExiting(false);
+		if(pathname!=='/'){
+			setShowIntro(false);
+			delete document.documentElement.dataset.aureviaIntroPending;
+			return;
+		}
+		if(window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+			try{localStorage.setItem(introKey,'1')}catch{}
+			delete document.documentElement.dataset.aureviaIntroPending;
+			setShowIntro(false);
+			return;
+		}
+		let introSeen=false;
+		try{introSeen=localStorage.getItem(introKey)==='1'}catch{
+			try{introSeen=sessionStorage.getItem(introKey)==='1'}catch{}
+		}
+		if(introSeen){
+			delete document.documentElement.dataset.aureviaIntroPending;
+			setShowIntro(false);
+			return;
+		}
+		document.documentElement.dataset.aureviaIntroPending='true';
+		setShowIntro(true);
+	},[pathname]);
+
+	useEffect(()=>()=>{if(introExitTimer.current!==undefined)window.clearTimeout(introExitTimer.current)},[]);
 
 	useEffect(()=>{
 		if(startupInitialized.current){
@@ -112,9 +171,10 @@ export default function StartupShell({children}:{children:ReactNode}){
 
 	return <div className="app-shell" onClickCapture={handleNavigationClick}>
 		<div className="scene-depth" aria-hidden="true"/>
-		<div className="scene-content"><div inert={showStartup||showPageTransition} aria-hidden={showStartup||showPageTransition}>{children}</div>
+		<div className="scene-content"><div inert={showStartup||showPageTransition||showIntro} aria-hidden={showStartup||showPageTransition||showIntro}>{children}</div>
 			{startupMode==='loading'&&<AureviaStartupLoader isExiting={isExiting}/>}
 			{showPageTransition&&<AureviaLoading label="Loading the next page" detail="Moving securely through Aurevia Exchange"/>}
+			{pathname==='/'&&<AureviaStartup isVisible={showIntro} isExiting={isIntroExiting} onSkip={finishIntro} onReplay={replayIntro}/>}
 		</div>
 	</div>;
 }

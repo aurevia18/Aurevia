@@ -1,17 +1,17 @@
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 
 const mocks=vi.hoisted(()=>({
-	requireUser:vi.fn(),findUnique:vi.fn(),create:vi.fn(),update:vi.fn(),deleteMany:vi.fn(),preferenceUpsert:vi.fn(),transaction:vi.fn(),
+	requireUser:vi.fn(),findUnique:vi.fn(),findMany:vi.fn(),create:vi.fn(),update:vi.fn(),deleteMany:vi.fn(),preferenceUpsert:vi.fn(),transaction:vi.fn(),
 }));
 
 vi.mock('@/lib/auth',()=>({requireUser:mocks.requireUser}));
 vi.mock('@/lib/db',()=>({db:{
-	pushSubscription:{findUnique:mocks.findUnique,create:mocks.create,update:mocks.update,deleteMany:mocks.deleteMany},
+	pushSubscription:{findUnique:mocks.findUnique,findMany:mocks.findMany,create:mocks.create,update:mocks.update,deleteMany:mocks.deleteMany},
 	pushPreference:{upsert:mocks.preferenceUpsert},
 	$transaction:mocks.transaction,
 }}));
 
-import {DELETE,POST} from '@/app/api/push/subscriptions/route';
+import {DELETE,GET,POST} from '@/app/api/push/subscriptions/route';
 
 const originalEnv={
 	publicKey:process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
@@ -34,6 +34,7 @@ beforeEach(()=>{
 	vi.clearAllMocks();
 	mocks.requireUser.mockResolvedValue({id:'user-1'});
 	mocks.findUnique.mockResolvedValue(null);
+	mocks.findMany.mockResolvedValue([]);
 	mocks.create.mockResolvedValue({id:'subscription-1'});
 	mocks.update.mockResolvedValue({id:'subscription-1'});
 	mocks.deleteMany.mockResolvedValue({count:1});
@@ -56,6 +57,37 @@ afterEach(()=>{
 });
 
 describe('authenticated browser push subscriptions',()=>{
+	it('lists devices with last successful send and marks only the current endpoint',async()=>{
+		const lastDeliveredAt=new Date('2026-11-16T12:00:00.000Z');
+		const currentHash='a'.repeat(64);
+		mocks.findMany.mockResolvedValue([
+			{id:'subscription-1',endpointHash:currentHash,createdAt:new Date('2026-11-01T12:00:00.000Z'),expiresAt:null,deliveries:[{deliveredAt:lastDeliveredAt}]},
+			{id:'subscription-2',endpointHash:'b'.repeat(64),createdAt:new Date('2026-11-02T12:00:00.000Z'),expiresAt:null,deliveries:[]},
+		]);
+		const statusRequest=new Request('https://aurevia.test/api/push/subscriptions',{headers:{'x-aurevia-current-endpoint-hash':currentHash}});
+		const response=await GET(statusRequest);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			subscriptionCount:2,
+			devices:[
+				{ id:'subscription-1',isCurrentDevice:true,lastDeliveredAt:lastDeliveredAt.toISOString() },
+				{ id:'subscription-2',isCurrentDevice:false,lastDeliveredAt:null },
+			],
+		});
+		expect(mocks.findMany).toHaveBeenCalledWith(expect.objectContaining({where:{userId:'user-1'}}));
+	});
+
+	it('removes expired device registrations while retaining active devices',async()=>{
+		const expiredAt=new Date(Date.now()-60_000);
+		mocks.findMany.mockResolvedValue([
+			{id:'expired-subscription',endpointHash:'a'.repeat(64),createdAt:new Date(),expiresAt:expiredAt,deliveries:[]},
+			{id:'active-subscription',endpointHash:'b'.repeat(64),createdAt:new Date(),expiresAt:null,deliveries:[]},
+		]);
+		const response=await GET(new Request('https://aurevia.test/api/push/subscriptions'));
+		expect(await response.json()).toMatchObject({subscriptionCount:1,devices:[{id:'active-subscription'}]});
+		expect(mocks.deleteMany).toHaveBeenCalledWith({where:{userId:'user-1',id:{in:['expired-subscription']}}});
+	});
+
 	it('stores an encrypted subscription under the authenticated owner',async()=>{
 		const response=await POST(request('/api/push/subscriptions','POST',subscription));
 		expect(response.status).toBe(200);
@@ -87,6 +119,12 @@ describe('authenticated browser push subscriptions',()=>{
 		const response=await DELETE(request('/api/push/subscriptions','DELETE',{endpoint:subscription.endpoint}));
 		expect(response.status).toBe(200);
 		expect(mocks.deleteMany).toHaveBeenCalledWith({where:{userId:'user-1',endpointHash:expect.stringMatching(/^[a-f0-9]{64}$/)}});
+	});
+
+	it('removes a selected device by its account-owned subscription id',async()=>{
+		const response=await DELETE(request('/api/push/subscriptions','DELETE',{id:'subscription-2'}));
+		expect(response.status).toBe(200);
+		expect(mocks.deleteMany).toHaveBeenCalledWith({where:{userId:'user-1',id:'subscription-2'}});
 	});
 
 	it('rejects cross-origin, malformed and unauthenticated requests',async()=>{

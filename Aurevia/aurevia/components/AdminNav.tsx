@@ -9,6 +9,7 @@ import {Activity,ArrowLeft,ArrowRight,BadgeCheck,Bell,BriefcaseBusiness,Building
 import AureviaIcon from '@/components/AureviaIcon';
 import ProfileAvatar from '@/components/ProfileAvatar';
 import ThemeToggle from '@/components/ThemeToggle';
+import {removeCurrentBrowserPushSubscription} from '@/lib/push-browser';
 
 const groups=[
 	{title:'Dashboards',links:[
@@ -161,7 +162,7 @@ export default function AdminNav(){
 	async function logout(){
 		if(loggingOut)return;
 		setLoggingOut(true);
-		try{await signOut({callbackUrl:'/admin/login'})}
+		try{await removeCurrentBrowserPushSubscription();await signOut({callbackUrl:'/admin/login'})}
 		catch{setLoggingOut(false)}
 	}
 

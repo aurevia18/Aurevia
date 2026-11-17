@@ -11,7 +11,6 @@ const mocks=vi.hoisted(()=>({
 	notifyActiveAdmins:vi.fn(),
 	trustedProxyClientIp:vi.fn(),
 	rateLimit:vi.fn(),
-	verifyTurnstileToken:vi.fn(),
 	getCurrentLegalDocuments:vi.fn(),
 	RateLimitError:class extends Error{
 		readonly retryAfterSeconds:number;
@@ -31,7 +30,6 @@ vi.mock('@/lib/rate-limit',()=>({rateLimit:mocks.rateLimit,RateLimitError:mocks.
 vi.mock('@/lib/request-ip',()=>({trustedProxyClientIp:mocks.trustedProxyClientIp}));
 vi.mock('@/lib/registration-attempt',()=>({createImmediateRegistration:mocks.createAccount}));
 vi.mock('@/lib/notifications',()=>({createNotification:mocks.createNotification,notifyActiveAdmins:mocks.notifyActiveAdmins}));
-vi.mock('@/lib/turnstile',()=>({verifyTurnstileToken:mocks.verifyTurnstileToken}));
 vi.mock('@/lib/legal-acceptance',()=>({getCurrentLegalDocuments:mocks.getCurrentLegalDocuments}));
 
 import {POST} from '@/app/api/register/route';
@@ -59,7 +57,6 @@ const payload={
 		{documentKey:'DEPOSIT_WITHDRAWAL_POLICY',version:'2026-11-15-v1'},
 		{documentKey:'PLATFORM_USAGE_POLICY',version:'2026-11-15-v1'},
 	],
-	turnstileToken:'test-turnstile-token',
 	website:'',
 };
 
@@ -82,7 +79,6 @@ describe('immediate registration',()=>{
 		mocks.userFindFirst.mockResolvedValue(null);
 		mocks.trustedProxyClientIp.mockReturnValue('192.0.2.5');
 		mocks.rateLimit.mockReturnValue(undefined);
-		mocks.verifyTurnstileToken.mockResolvedValue(undefined);
 		mocks.getCurrentLegalDocuments.mockResolvedValue(payload.legalAcceptances.map(document=>({
 			...document,title:document.documentKey,href:'/legal-centre',requiresReacceptance:true,content:null,
 		})));
@@ -95,7 +91,7 @@ describe('immediate registration',()=>{
 
 	afterEach(()=>vi.unstubAllEnvs());
 
-	it('creates an active account after server-verified Turnstile without email or phone OTP',async()=>{
+	it('creates an active account without a Turnstile token or email or phone OTP',async()=>{
 		const response=await POST(request(payload,'e75c6069-6dc9-4de5-8a58-e8257d8f8e03'));
 		const body=await response.json();
 
@@ -116,9 +112,6 @@ describe('immediate registration',()=>{
 		}));
 		expect(mocks.createAccount.mock.calls[0][1].passwordHash).not.toBe(payload.password);
 		expect(response.headers.get('set-cookie')).toBeNull();
-		expect(mocks.verifyTurnstileToken).toHaveBeenCalledWith({
-			token:payload.turnstileToken,remoteIp:'192.0.2.5',hostname:new URL(process.env.NEXT_PUBLIC_APP_URL||process.env.NEXTAUTH_URL||'https://aurevia-exchange-6hfi.onrender.com').hostname,
-		});
 		expect(mocks.rateLimit).toHaveBeenCalledWith('register:192.0.2.5',30,600_000);
 		expect(mocks.transaction).toHaveBeenCalledWith(expect.any(Function),{
 			isolationLevel:Prisma.TransactionIsolationLevel.ReadCommitted,
@@ -199,25 +192,6 @@ describe('immediate registration',()=>{
 		expect(mocks.createAccount).toHaveBeenCalledWith(expect.anything(),expect.objectContaining({
 			name:'A User',middleName:null,phone:null,
 		}));
-	});
-
-	it('rejects a failed Turnstile verification before account lookup or creation',async()=>{
-		mocks.verifyTurnstileToken.mockRejectedValue(new Error('TURNSTILE_TOKEN_INVALID'));
-		const response=await POST(request());
-
-		expect(response.status).toBe(400);
-		expect(await response.json()).toMatchObject({error:'Complete the security check and try again.'});
-		expect(mocks.userFindFirst).not.toHaveBeenCalled();
-		expect(mocks.transaction).not.toHaveBeenCalled();
-	});
-
-	it('requires a Turnstile token before account creation',async()=>{
-		const {turnstileToken:_,...withoutToken}=payload;
-		const response=await POST(request(withoutToken));
-
-		expect(response.status).toBe(400);
-		expect(mocks.verifyTurnstileToken).not.toHaveBeenCalled();
-		expect(mocks.createAccount).not.toHaveBeenCalled();
 	});
 
 	it('treats a case-variant retry with the correct password as sign-in',async()=>{

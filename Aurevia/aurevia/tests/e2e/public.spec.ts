@@ -87,6 +87,22 @@ test('zoom remains available for regular pages and admin',async({page})=>{
 	expect(adminZoomAvailable).toBe(false);
 });
 
+test('Lucide icons use dimensional styling in both site themes',async({page})=>{
+	for(const theme of themes){
+		await page.context().addCookies([{name:'aurevia-anonymous-theme',value:theme,url:appOrigin}]);
+		await page.goto('/markets');
+		await expect(page.locator('html')).toHaveAttribute('data-theme-name',theme);
+		const icon=page.locator('svg.lucide:visible').first();
+		await expect(icon).toBeVisible();
+		const style=await icon.evaluate(element=>{
+			const computed=getComputedStyle(element);
+			return {filter:computed.filter,transform:computed.transform};
+		});
+		expect((style.filter.match(/drop-shadow\(/g)||[]).length).toBeGreaterThanOrEqual(4);
+		expect(style.transform).toMatch(/^matrix3d\(/);
+	}
+});
+
 test('education header fits mobile screens without zooming out',async({page})=>{
 	await page.setViewportSize({width:320,height:800});
 	await page.goto('/education');

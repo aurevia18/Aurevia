@@ -1,4 +1,5 @@
 import {NextResponse} from 'next/server';
+import {PushDeliveryStatus} from '@prisma/client';
 import {z,ZodError} from 'zod';
 import {requireUser} from '@/lib/auth';
 import {db} from '@/lib/db';
@@ -21,19 +22,48 @@ function isUniqueConstraintError(error:unknown){
 	return Boolean(error&&typeof error==='object'&&'code' in error&&error.code==='P2002');
 }
 
-export async function GET(){
+const removeSubscriptionSchema=z.union([
+	z.object({id:z.string().min(1).max(64)}).strict(),
+	z.object({endpoint:z.string().url().max(8192).refine(value=>value.startsWith('https://'))}).strict(),
+]);
+
+export async function GET(request:Request){
 	try{
 		const user=await requireUser();
 		rateLimit(`push-subscription-status:${user.id}`,60,60_000);
-		const [preferences,subscriptionCount]=await Promise.all([
+		const [preferences,storedSubscriptions]=await Promise.all([
 			db.pushPreference.upsert({where:{userId:user.id},update:{},create:{userId:user.id}}),
-			db.pushSubscription.count({where:{userId:user.id}}),
+			db.pushSubscription.findMany({
+				where:{userId:user.id},
+				select:{
+					id:true,endpointHash:true,createdAt:true,expiresAt:true,
+					deliveries:{
+						where:{status:PushDeliveryStatus.SENT,deliveredAt:{not:null}},
+						orderBy:{deliveredAt:'desc'},take:1,select:{deliveredAt:true},
+					},
+				},
+				orderBy:{createdAt:'desc'},
+			}),
 		]);
+		const now=new Date();
+		const expiredSubscriptions=storedSubscriptions.filter(subscription=>subscription.expiresAt&&subscription.expiresAt<=now);
+		if(expiredSubscriptions.length){
+			await db.pushSubscription.deleteMany({where:{userId:user.id,id:{in:expiredSubscriptions.map(subscription=>subscription.id)}}});
+		}
+		const currentEndpointHash=request.headers.get('x-aurevia-current-endpoint-hash')||'';
+		const activeSubscriptions=storedSubscriptions.filter(subscription=>!subscription.expiresAt||subscription.expiresAt>now);
 		const configured=Boolean(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY?.trim()&&process.env.VAPID_PRIVATE_KEY?.trim()&&process.env.VAPID_SUBJECT?.trim()&&process.env.PUSH_SUBSCRIPTION_ENCRYPTION_KEY?.trim());
 		return NextResponse.json({
 			available:configured,
 			publicKey:configured?process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!.trim():null,
-			subscriptionCount,
+			subscriptionCount:activeSubscriptions.length,
+			devices:activeSubscriptions.map(subscription=>({
+				id:subscription.id,
+				createdAt:subscription.createdAt,
+				expiresAt:subscription.expiresAt,
+				lastDeliveredAt:subscription.deliveries[0]?.deliveredAt||null,
+				isCurrentDevice:/^[a-f0-9]{64}$/.test(currentEndpointHash)&&subscription.endpointHash===currentEndpointHash,
+			})),
 			preferences:{
 				accountActivity:preferences.accountActivity,
 				investmentUpdates:preferences.investmentUpdates,
@@ -75,8 +105,8 @@ export async function DELETE(request:Request){
 		if(!isSameOriginRequest(request))return NextResponse.json({error:'Cross-origin request blocked.'},{status:403});
 		const user=await requireUser();
 		rateLimit(`push-unsubscribe:${user.id}`,20,60_000);
-		const body=z.object({endpoint:z.string().url().max(8192).refine(value=>value.startsWith('https://'))}).strict().parse(await request.json());
-		await db.pushSubscription.deleteMany({where:{userId:user.id,endpointHash:pushEndpointHash(body.endpoint)}});
+		const body=removeSubscriptionSchema.parse(await request.json());
+		await db.pushSubscription.deleteMany({where:{userId:user.id,...('id' in body?{id:body.id}:{endpointHash:pushEndpointHash(body.endpoint)})}});
 		return NextResponse.json({ok:true},{headers:{'Cache-Control':'private, no-store'}});
 	}catch(error){return errorResponse(error)}
 }

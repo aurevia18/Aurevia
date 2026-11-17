@@ -395,6 +395,7 @@ model User {
   hiddenAdminDashboardActivities   AdminDashboardActivityDismissal[] @relation("AdminDashboardActivityHiddenBy")
   restoredAdminDashboardActivities AdminDashboardActivityDismissal[] @relation("AdminDashboardActivityRestoredBy")
   kyc                              KycProfile?
+  kycVerificationDraft             KycVerificationDraft?
   kycVerifications                 KycVerification[]                 @relation("KycVerificationApplicant")
   reviewedKycVerifications         KycVerification[]                 @relation("KycVerificationReviewer")
   assignedKycVerifications         KycVerification[]                 @relation("KycVerificationAssignee")
@@ -829,7 +830,7 @@ model KycVerification {
   documentType               String                 @db.VarChar(32)
   identityDataCiphertext     String?
   identityDataIv             String?                @db.VarChar(24)
-  identityDataAuthTag         String?                @db.VarChar(24)
+  identityDataAuthTag        String?                @db.VarChar(24)
   registryVersion            String                 @db.VarChar(32)
   consentVersion             String                 @db.VarChar(64)
   consentAt                  DateTime
@@ -866,6 +867,21 @@ model KycVerification {
   @@index([assignedToId, status, submittedAt])
   @@index([status, reviewedAt, legalHoldAt, evidencePurgeNextAttemptAt])
   @@index([supersedesId])
+}
+
+model KycVerificationDraft {
+  id                     String   @id @default(cuid())
+  userId                 String   @unique
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentCountry        String?  @db.VarChar(2)
+  documentType           String?  @db.VarChar(32)
+  identityDataCiphertext String?
+  identityDataIv         String?  @db.VarChar(24)
+  identityDataAuthTag    String?  @db.VarChar(24)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@index([updatedAt])
 }
 
 model KycVerificationEvent {

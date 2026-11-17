@@ -90,7 +90,7 @@ async function validRegistrationPayload(email:string,password='SecureTestPasswor
 		address:{countryCode:'US',line1:'123 Test Street',city:'New York'},
 		legal:{termsAccepted:true,privacyAccepted:true,riskDisclosureAccepted:true,amlKycAccepted:true,depositWithdrawalAccepted:true,platformUsageAccepted:true},
 		legalAcceptances:legalAcceptances.map(({documentKey,version})=>({documentKey,version})),
-		turnstileToken:randomUUID(),website:'',
+		website:'',
 		...overrides,
 	};
 }
@@ -102,19 +102,7 @@ async function selectRegistrationCountry(page:Page,accessibleName:RegExp,country
 	await dialog.getByRole('option',{name:new RegExp(`${countryName}.*${countryCode}.*\\${dialCode}`)}).click();
 }
 
-async function completeRegistrationToReview(page:Page,options:{email:string;firstName?:string;lastName?:string;country?:string;countryCode?:string},turnstileOptions:{failScriptOnce?:boolean;challengeFailsOnce?:boolean}={}){
-	let scriptRequests=0;
-	await page.route('https://challenges.cloudflare.com/turnstile/v0/api.js*',route=>{
-		scriptRequests++;
-		if(turnstileOptions.failScriptOnce&&scriptRequests===1)return route.fulfill({status:200,contentType:'application/javascript',body:''});
-		const challengeCompletion=turnstileOptions.challengeFailsOnce
-			?"const retry=options['error-callback'](300020);if(retry===false)window.setTimeout(()=>options.callback('e2e-turnstile-token'),0);"
-			:"window.setTimeout(()=>options.callback('e2e-turnstile-token'),0);";
-		return route.fulfill({
-			status:200,contentType:'application/javascript',
-			body:`window.turnstile={render:(container,options)=>{window.setTimeout(()=>{${challengeCompletion}},0);return 'e2e-widget'},remove:()=>{},reset:()=>{}};`,
-		});
-	});
+async function completeRegistrationToReview(page:Page,options:{email:string;firstName?:string;lastName?:string;country?:string;countryCode?:string}){
 	const country=options.country||'United States';
 	const code=options.countryCode||'US';
 	await page.getByRole('textbox',{name:'First name'}).fill(options.firstName||'Temporary');
@@ -477,6 +465,91 @@ test('Aurevia Verify is first-party and legacy upload flows fail closed',async({
 		file:{name:'identity.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\\nManual ID upload must be retired\\n%%EOF\\n')},
 	}});
 	expect(legacyDocument.status()).toBe(410);
+});
+
+test('KYC camera recovers from denied permission and supports front/back/selfie capture through submission',async({page})=>{
+	await db.user.update({where:{email:fixture('USER_EMAIL')},data:{accountMode:'REAL'}});
+	await loginAs(page,fixture('USER_EMAIL'),fixture('USER_PASSWORD'));
+	await page.addInitScript(()=>{
+		let requests=0;
+		let captures=0;
+		const facingModes:string[]=[];
+		Object.defineProperty(window,'__aureviaCameraFacingModes',{value:facingModes});
+		Object.defineProperty(navigator,'mediaDevices',{configurable:true,value:{
+			getUserMedia:async(constraints:MediaStreamConstraints)=>{
+				const video=constraints.video as MediaTrackConstraints;
+				const mode=video.facingMode;
+				const ideal=mode&&typeof mode==='object'&&!Array.isArray(mode)?mode.ideal:'';
+				facingModes.push(typeof mode==='string'?mode:Array.isArray(mode)?mode.join(','):typeof ideal==='string'?ideal:Array.isArray(ideal)?ideal.join(','):'');
+				requests++;
+				if(requests===1)throw new DOMException('Permission denied','NotAllowedError');
+				return new MediaStream();
+			},
+		}});
+		Object.defineProperty(HTMLMediaElement.prototype,'play',{configurable:true,value:()=>Promise.resolve()});
+		Object.defineProperty(HTMLVideoElement.prototype,'videoWidth',{configurable:true,get:()=>640});
+		Object.defineProperty(HTMLVideoElement.prototype,'videoHeight',{configurable:true,get:()=>480});
+		Object.defineProperty(CanvasRenderingContext2D.prototype,'drawImage',{configurable:true,value:function(this:CanvasRenderingContext2D){
+			captures++;
+			this.fillStyle=`hsl(${captures*71} 45% 45%)`;
+			this.fillRect(0,0,640,480);
+		}});
+	});
+	await page.setViewportSize({width:390,height:844});
+	await page.goto('/kyc');
+	await expect(page.getByRole('heading',{name:'First-party verification centre'})).toBeVisible();
+	await page.getByLabel('Document-issuing country').selectOption('US');
+	await page.getByLabel('Document type').selectOption('NATIONAL_ID');
+	await page.getByLabel('Legal name').fill('Camera Test');
+	await page.getByLabel('Date of birth').fill('1990-01-01');
+	await page.getByRole('button',{name:'Continue'}).click();
+
+	await page.getByRole('button',{name:'Open camera'}).first().click();
+	await expect(page.getByText('Camera permission was denied')).toBeVisible();
+	await page.getByRole('button',{name:'Open camera'}).first().click();
+	await expect(page.getByText('Camera ready')).toBeVisible();
+	await page.getByRole('button',{name:'Switch camera'}).click();
+	await expect.poll(()=>page.evaluate(()=>(
+		window as typeof window & {__aureviaCameraFacingModes?:string[]}
+	).__aureviaCameraFacingModes)).toEqual(['environment','environment','user']);
+	await page.getByRole('button',{name:'Capture document'}).click();
+	await expect(page.getByRole('img',{name:'Document front preview'})).toBeVisible();
+	await page.getByRole('button',{name:'Retake with camera'}).click();
+	await expect(page.getByText('Camera ready')).toBeVisible();
+	await page.getByRole('button',{name:'Capture document'}).click();
+	await page.getByRole('button',{name:'Open camera'}).first().click();
+	await expect(page.getByText('Camera ready')).toBeVisible();
+	await page.getByRole('button',{name:'Capture document'}).click();
+	await page.getByRole('button',{name:'Open selfie camera'}).click();
+	await expect(page.getByText('Camera ready')).toBeVisible();
+	await page.getByRole('button',{name:'Switch camera'}).click();
+	await page.getByRole('button',{name:'Switch camera'}).click();
+	await page.getByRole('button',{name:'Capture selfie'}).click();
+	await expect(page.getByRole('img',{name:'Selfie preview'})).toBeVisible();
+	await page.getByRole('button',{name:'Continue'}).click();
+	await expect(page.getByText('Review before submission')).toBeVisible();
+	await expect(page.getByRole('img',{name:'Document front review'})).toBeVisible();
+	await expect(page.getByRole('img',{name:'Document back review'})).toBeVisible();
+	await expect(page.getByRole('img',{name:'Selfie review'})).toBeVisible();
+	await page.getByRole('checkbox').check();
+	const submission=page.waitForResponse(response=>response.url().endsWith('/api/kyc/verification')&&response.request().method()==='POST');
+	await page.getByRole('button',{name:'Submit for verification'}).click();
+	const response=await submission;
+	expect(response.status()).toBe(201);
+	expect(await response.json()).toMatchObject({status:'PENDING_REVIEW'});
+	await expect(page.getByText('Your submission was received and is awaiting administrator review.')).toBeVisible();
+	const storedCase=await db.kycVerification.findFirstOrThrow({
+		where:{user:{email:fixture('USER_EMAIL')}},
+		orderBy:{createdAt:'desc'},
+		select:{status:true,documents:{select:{kind:true,documentSide:true,status:true}}},
+	});
+	expect(storedCase.status).toBe('PENDING_REVIEW');
+	expect(storedCase.documents).toHaveLength(3);
+	expect(storedCase.documents.map(document=>document.documentSide).sort()).toEqual(['BACK','FRONT','SELFIE']);
+	for(const width of [320,390,768,1440]){
+		await page.setViewportSize({width,height:844});
+		await expectNoHorizontalOverflow(page);
+	}
 });
 
 test('market view labels internal reference prices when no live provider is configured',async({page})=>{
@@ -1300,10 +1373,15 @@ test('sign-in password visibility, recovery link, and account link are accessibl
 	await expectNoHorizontalOverflow(page);
 });
 
-test('signup uses server-verified Turnstile, automatically signs in, and does not require phone OTP',async({page})=>{
+test('signup needs no Cloudflare scripts, automatically signs in, and does not require phone OTP',async({page})=>{
 	const email=`aurevia-e2e-immediate-signup-${randomUUID()}@example.invalid`;
 	let registrationRequests=0;
+	let cloudflareRequests=0;
 	const registrationPayloads:Record<string,unknown>[]=[];
+	await page.route('https://challenges.cloudflare.com/**',async route=>{
+		cloudflareRequests++;
+		await route.abort();
+	});
 	page.on('request',request=>{
 		if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/register'){
 			registrationRequests++;
@@ -1340,41 +1418,10 @@ test('signup uses server-verified Turnstile, automatically signs in, and does no
 	expect(await db.user.count({where:{email}})).toBe(1);
 	expect(await db.registrationAttempt.findUnique({where:{email}})).toBeNull();
 	expect(registrationPayloads).toHaveLength(1);
-	expect(registrationPayloads[0]).toHaveProperty('turnstileToken','e2e-turnstile-token');
+	expect(registrationPayloads[0]).not.toHaveProperty('turnstileToken');
 	expect(registrationPayloads[0]).not.toHaveProperty('captchaToken');
+	expect(cloudflareRequests).toBe(0);
 	expect(registrationPayloads[0].website).toBe('');
-});
-
-test('registration can retry Turnstile after its script fails to initialize',async({page})=>{
-	const email=`aurevia-e2e-turnstile-retry-${randomUUID()}@example.invalid`;
-	let submittedPayload:Record<string,unknown>|undefined;
-	page.on('request',request=>{
-		if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/register'){
-			submittedPayload=request.postDataJSON() as Record<string,unknown>;
-		}
-	});
-	await page.setViewportSize({width:390,height:844});
-	await page.goto('/register');
-	await waitForStartup(page);
-	await completeRegistrationToReview(page,{email},{failScriptOnce:true});
-	await expect(page.locator('.registration-turnstile [role="alert"]')).toContainText('Cloudflare security check could not connect.');
-	await page.getByRole('button',{name:'Retry security check'}).click();
-	await expect(page.getByRole('button',{name:'Retry security check'})).toBeHidden();
-	await page.getByRole('checkbox',{name:/I confirm that the information supplied/}).check();
-	await page.getByRole('button',{name:'Create account'}).click();
-	await page.waitForURL(url=>url.pathname==='/dashboard');
-	expect(submittedPayload).toHaveProperty('turnstileToken','e2e-turnstile-token');
-});
-
-test('registration allows Turnstile to retry after a transient challenge error',async({page})=>{
-	const email=`aurevia-e2e-turnstile-challenge-retry-${randomUUID()}@example.invalid`;
-	await page.setViewportSize({width:390,height:844});
-	await page.goto('/register');
-	await waitForStartup(page);
-	await completeRegistrationToReview(page,{email},{challengeFailsOnce:true});
-	await page.getByRole('checkbox',{name:/I confirm that the information supplied/}).check();
-	await expect(page.getByRole('button',{name:'Create account'})).toBeEnabled();
-	await expect(page.locator('.registration-turnstile [role="alert"]')).toHaveCount(0);
 });
 
 test('three card designs preserve proportions and support keyboard, pointer, and touch flips',async({browser,browserName,page})=>{
@@ -3636,6 +3683,47 @@ test('browser notification settings explain denied permission without prompting 
 	await expect(page.getByText(/Aurevia cannot prompt again/)).toBeVisible();
 	await expect(page.getByRole('button',{name:'Enable notifications'})).toBeDisabled();
 	await expectNoHorizontalOverflow(page);
+});
+
+test('iOS browser tabs receive Home Screen Web Push installation guidance',async({page})=>{
+	const settingsUser=await createIsolatedDemoUser('push-ios-tab');
+	await page.addInitScript(()=>{
+		Object.defineProperty(navigator,'userAgent',{configurable:true,value:'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'});
+	});
+	await loginAs(page,settingsUser.email,settingsUser.password);
+	await page.goto('/settings#preferences');
+	await waitForStartup(page);
+	await expect(page.getByText(/Web Push is available only after Aurevia is added to the Home Screen/)).toBeVisible();
+	await expect(page.getByText(/Share.*Add to Home Screen/)).toBeVisible();
+	await expect(page.getByRole('button',{name:'Enable notifications'})).toBeDisabled();
+});
+
+test('installed iOS Home Screen apps are distinguished from browser tabs',async({page})=>{
+	const settingsUser=await createIsolatedDemoUser('push-ios-installed');
+	await page.addInitScript(()=>{
+		Object.defineProperty(navigator,'userAgent',{configurable:true,value:'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'});
+		Object.defineProperty(navigator,'standalone',{configurable:true,value:true});
+	});
+	await loginAs(page,settingsUser.email,settingsUser.password);
+	await page.goto('/settings#preferences');
+	await waitForStartup(page);
+	await expect(page.getByText('Installed app')).toBeVisible();
+	await expect(page.getByText(/Web Push is available only after Aurevia is added to the Home Screen/)).toHaveCount(0);
+});
+
+test('browser notification settings report service worker registration failures',async({page})=>{
+	const settingsUser=await createIsolatedDemoUser('push-worker-failure');
+	await page.addInitScript(()=>{
+		let registrations=0;
+		Object.defineProperty(navigator,'serviceWorker',{configurable:true,value:{register:()=>{
+			registrations++;
+			return registrations===1?Promise.resolve({}):Promise.reject(new Error('registration blocked'));
+		}}});
+	});
+	await loginAs(page,settingsUser.email,settingsUser.password);
+	await page.goto('/settings#preferences');
+	await waitForStartup(page);
+	await expect(page.getByRole('alert').filter({hasText:'could not register its background notification worker'})).toBeVisible();
 });
 
 test('theme preferences are account-isolated and load on a second device',async({browser})=>{

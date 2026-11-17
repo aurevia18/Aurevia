@@ -72,6 +72,34 @@ describe('canonical environment configuration',()=>{
     expect(JSON.stringify(publicConfig)).not.toContain('private-service-key');
   });
 
+  it('reads the dedicated KYC storage variables and reports missing names without secrets',()=>{
+    const config=getServerConfiguration({
+      KYC_SUPABASE_URL:'https://kyc-project.example.test',
+      KYC_SUPABASE_SERVICE_ROLE_KEY:'private-kyc-service-key',
+    });
+    const summary=configurationSummary(config);
+
+    expect(config.kycStorage).toMatchObject({
+      url:'https://kyc-project.example.test',
+      serviceRoleKey:'private-kyc-service-key',
+      bucket:'kyc-evidence',
+      configured:true,
+      missingConfiguration:[],
+    });
+    expect(summary.kycStorage).toEqual({configured:true,bucket:'kyc-evidence',missingConfiguration:[]});
+    expect(JSON.stringify(summary)).not.toContain('private-kyc-service-key');
+    expect(JSON.stringify(getPublicConfiguration({
+      KYC_SUPABASE_URL:'https://kyc-project.example.test',
+      KYC_SUPABASE_SERVICE_ROLE_KEY:'private-kyc-service-key',
+    }))).not.toContain('private-kyc-service-key');
+
+    expect(configurationSummary(getServerConfiguration({})).kycStorage).toEqual({
+      configured:false,
+      bucket:'kyc-evidence',
+      missingConfiguration:['KYC_SUPABASE_URL','KYC_SUPABASE_SERVICE_ROLE_KEY'],
+    });
+  });
+
   it('keeps Akedly credentials server-side and reports only whether the set is complete',()=>{
     const akedlySource={
       AKEDLY_API_KEY:'test-api-key',

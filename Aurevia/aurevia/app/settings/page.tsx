@@ -14,6 +14,7 @@ import AureviaExchangeId from '@/components/AureviaExchangeId';
 import {useAccountTier} from '@/components/useAccountTier';
 import {useLocale} from '@/lib/i18n-context';
 import SecurityCenter from '@/components/SecurityCenter';
+import {removeCurrentBrowserPushSubscription} from '@/lib/push-browser';
 
 type Profile={id:string;aureviaExchangeId:string|null;email:string;name:string|null;firstName:string;lastName:string;label:string;phone:string|null;phoneVerified:boolean;country:string|null;address:string|null;hasAvatar:boolean;twoFactorEnabled:boolean;twoFactorAvailable:boolean;role:'USER'|'ADMIN';status:string;kycStatus:string;profileLocked:boolean;profileLockAt:string|null};
 
@@ -127,6 +128,7 @@ export default function Settings(){
 			const response=await fetch('/api/account/delete',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:deletePassword,confirmation:deleteConfirmation})});
 			const result=await response.json();
 			if(!response.ok)throw new Error(result?.error||'Account deletion could not be completed.');
+			await removeCurrentBrowserPushSubscription();
 			await signOut({callbackUrl:'/login'});
 		}catch(exception){setError(exception instanceof Error?exception.message:'Account deletion could not be completed.');setDeleting(false)}
 	}
