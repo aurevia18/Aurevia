@@ -2,6 +2,7 @@
 
 import {useCallback,useEffect,useState} from 'react';
 import {ExternalLink,LoaderCircle,Newspaper,RefreshCw,Sparkles} from 'lucide-react';
+import NewsMediaPlayer from '@/components/NewsMediaPlayer';
 
 type FeedItem={
 	id:string;
@@ -154,8 +155,7 @@ export default function NewsFeedPanel({compact=false}:{compact?:boolean}){
 								<a className="news-feed-item-title" href={item.canonicalUrl} target="_blank" rel="noopener noreferrer">
 									{item.title} <ExternalLink size={14} aria-hidden="true"/>
 								</a>
-								{item.mediaSource?.kind==='video'&&<video className="mt-3 aspect-video w-full rounded-md bg-black" controls playsInline preload="metadata"><source src={item.mediaSource.url}/></video>}
-								{item.mediaSource?.kind==='embed'&&<div className="mt-3 aspect-video overflow-hidden rounded-md bg-black"><iframe className="h-full w-full" src={item.mediaSource.url} title={item.title} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin"/></div>}
+								{item.mediaSource&&<NewsMediaPlayer kind={item.mediaSource.kind} url={item.mediaSource.url} title={item.title}/>}
 								{item.summary&&<p className="news-feed-summary">{item.summary}</p>}
 								<span className="news-feed-publisher muted text-xs">{item.publisher} · {item.category.replaceAll('_',' ').toLowerCase()}</span>
 							</div>
