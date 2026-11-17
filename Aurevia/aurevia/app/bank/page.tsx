@@ -111,7 +111,7 @@ export default function AureviaBankPage(){
 			</section>
 
 			<section className="card mt-4 flex flex-wrap items-center justify-between gap-4 p-5" aria-label="Account details">
-				<div><span className="account-kicker">INTERNAL ACCOUNT IDENTIFIER</span><p className="mt-2 font-mono text-lg">{loading?'—':summary?.account.accountIdentifier||'—'}</p><small className="muted">Aurevia internal identifier; not an external bank account number.</small></div>
+				<div><span className="account-kicker">ACCOUNT IDENTIFIER</span><p className="mt-2 font-mono text-lg">{loading?'—':summary?.account.accountIdentifier||'—'}</p><small className="muted">Aurevia internal identifier; not an external bank account number.</small></div>
 				<div className="text-sm"><span className="muted">Account status</span><p className={`mt-1 font-semibold ${summary?.account.status==='ACTIVE'?'text-profit':'text-loss'}`}>{loading?'—':readable(summary?.account.status||'')}</p>{summary?.account.statusReason&&<small className="muted">{summary.account.statusReason}</small>}</div>
 			</section>
 

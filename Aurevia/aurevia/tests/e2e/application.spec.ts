@@ -1780,12 +1780,18 @@ test('account-mode changes initialize and isolate wallet, trade, history, and su
 	await page.goto('/dashboard');
 	const dashboardRealOverview=page.locator('.user-dashboard-real-overview');
 	const realExecutionNote='When enabled, REAL account orders route through the Alpaca sandbox. Status reflects provider confirmation; confirmed fills are recorded in the Aurevia ledger.';
-	await expect(dashboardRealOverview.getByText('Trade confidently with Aurevia. Manage your orders, monitor execution status, and track your account balance, portfolio performance, and available funds from one secure trading dashboard. Deposits and withdrawals are subject to account verification and approval.',{exact:true})).toBeVisible();
+	const dashboardRealCopy=[
+		'Trade with confidence on Aurevia. Manage your orders, monitor trade activity, and track your account balance, portfolio performance, and available funds through one secure trading dashboard.',
+		'Aurevia provides a seamless account management experience, with real-time order status updates and transparent portfolio tracking.',
+		'Deposits and withdrawals are subject to account verification and approval. Approved deposits are credited to your Aurevia account, while confirmed transactions are reflected in your account balance and transaction history.',
+	];
+	for(const paragraph of dashboardRealCopy)await expect(dashboardRealOverview.getByText(paragraph,{exact:true})).toBeVisible();
+	await expect(page.getByText('REAL funding is credited only through existing administrator-approved requests. Balances shown are internal Aurevia ledger records.')).toHaveCount(0);
 	for(const viewport of [{width:375,height:812},{width:1440,height:900}]){
 		test.setTimeout(300_000);
 		await page.setViewportSize(viewport);
 		await expect(dashboardRealOverview).toBeVisible();
-		await expect(dashboardRealOverview.getByText(realExecutionNote,{exact:true})).toBeVisible();
+		for(const paragraph of dashboardRealCopy)await expect(dashboardRealOverview.getByText(paragraph,{exact:true})).toBeVisible();
 		await expectNoHorizontalOverflow(page);
 	}
 	await page.goto('/trade');
