@@ -1,7 +1,8 @@
 'use client';
 
 import Image from 'next/image';
-import {useEffect,useRef,useState} from 'react';
+import {useCallback,useEffect,useRef,useState} from 'react';
+import {LoaderCircle} from 'lucide-react';
 import AureviaLoading from '@/components/AureviaLoading';
 
 type Orientation='landscape'|'portrait';
@@ -18,8 +19,9 @@ export default function AureviaStartup({isVisible,isExiting,onSkip,onReplay}:{is
 	const wasVisible=useRef(false);
 	const [orientation,setOrientation]=useState<Orientation|null>(null);
 	const [sourceIndex,setSourceIndex]=useState(0);
-	const [needsPlay,setNeedsPlay]=useState(false);
-	const [videoUnavailable,setVideoUnavailable]=useState(false);
+	const [playbackIssue,setPlaybackIssue]=useState<'blocked'|'unavailable'|null>(null);
+	const [loading,setLoading]=useState(true);
+	const [loadAttempt,setLoadAttempt]=useState(0);
 
 	useEffect(()=>{
 		const portraitQuery=window.matchMedia('(orientation: portrait)');
@@ -42,38 +44,68 @@ export default function AureviaStartup({isVisible,isExiting,onSkip,onReplay}:{is
 	useEffect(()=>{
 		if(!isVisible)return;
 		setSourceIndex(0);
-		setNeedsPlay(false);
-		setVideoUnavailable(false);
+		setPlaybackIssue(null);
+		setLoading(true);
 	},[isVisible,orientation]);
 
 	const preferredSource=orientation?introVideos[orientation]:null;
 	const fallbackSource=orientation?introVideos[orientation==='portrait'?'landscape':'portrait']:null;
 	const source=sourceIndex===0?preferredSource:fallbackSource;
 
+	const playVideo=useCallback(async(video:HTMLVideoElement|null=videoRef.current)=>{
+		if(!isVisible||!video)return;
+		video.muted=true;
+		try{
+			await video.play();
+			if(videoRef.current===video){
+				setPlaybackIssue(null);
+				setLoading(false);
+			}
+		}catch{
+			if(videoRef.current===video){
+				setPlaybackIssue('blocked');
+				setLoading(false);
+			}
+		}
+	},[isVisible]);
+
 	useEffect(()=>{
 		if(!isVisible||!source)return;
 		const video=videoRef.current;
 		if(!video)return;
-		video.muted=true;
-		void video.play().then(()=>setNeedsPlay(false)).catch(()=>setNeedsPlay(true));
-	},[isVisible,source]);
+		setLoading(true);
+		setPlaybackIssue(null);
+		video.load();
+		void playVideo(video);
+	},[isVisible,source,loadAttempt,playVideo]);
 
-	if(!isVisible)return <button className="exchange-intro-replay" type="button" onClick={onReplay} ref={replayButton}>Replay intro</button>;
+	function retryVideo(){
+		setSourceIndex(0);
+		setPlaybackIssue(null);
+		setLoading(true);
+		setLoadAttempt(value=>value+1);
+	}
+
+	if(!isVisible)return <button className="exchange-intro-replay" type="button" onClick={onReplay} ref={replayButton}>Replay video</button>;
 
 	return <div className={`exchange-intro${isExiting?' is-exiting':''}`} role="dialog" aria-modal="true" aria-label="Aurevia Exchange introduction">
 		<div className="exchange-intro-glow" aria-hidden="true"/>
 		<Image className="exchange-intro-poster" src="/aurevia-logo.png" alt="" aria-hidden="true" width={512} height={512} priority sizes="(max-width: 600px) 58vw, 320px"/>
 		{source&&<video
-			key={source}
+			key={`${source}:${loadAttempt}`}
 			ref={videoRef}
 			className="exchange-intro-video"
 			src={source}
 			autoPlay
 			muted
 			playsInline
-			preload="metadata"
+			preload="auto"
 			poster="/aurevia-logo.png"
-			onPlay={()=>setNeedsPlay(false)}
+			onLoadStart={()=>setLoading(true)}
+			onLoadedData={()=>setLoading(false)}
+			onCanPlay={event=>void playVideo(event.currentTarget)}
+			onPlaying={()=>{setPlaybackIssue(null);setLoading(false)}}
+			onWaiting={()=>setLoading(true)}
 			onEnded={onSkip}
 			onTimeUpdate={event=>{
 				if(event.currentTarget.currentTime>=7){
@@ -84,29 +116,31 @@ export default function AureviaStartup({isVisible,isExiting,onSkip,onReplay}:{is
 			onError={()=>{
 				if(sourceIndex===0&&fallbackSource){
 					setSourceIndex(1);
-					setNeedsPlay(false);
+					setPlaybackIssue(null);
+					setLoading(true);
 					return;
 				}
-				setVideoUnavailable(true);
-				setNeedsPlay(false);
+				setPlaybackIssue('unavailable');
+				setLoading(false);
 			}}
 		/>}
+		{loading&&!playbackIssue&&<div className="exchange-intro-loader" role="status"><LoaderCircle size={22} className="animate-spin" aria-hidden="true"/><span>Preparing your introduction</span></div>}
 		<div className="exchange-intro-brand" aria-hidden="true"><span>AUREVIA</span><small>EXCHANGE</small></div>
 		<button className="exchange-intro-skip" type="button" onClick={()=>{
 			videoRef.current?.pause();
 			onSkip();
 		}} ref={skipButton}>Skip intro</button>
-		{(needsPlay||videoUnavailable)&&<div className="exchange-intro-actions">
-			<p role="status">{videoUnavailable?'The introduction video is unavailable.':'Start the introduction when you are ready.'}</p>
-			<button type="button" onClick={()=>{
-				if(videoUnavailable){
-					onSkip();
-					return;
-				}
-				const video=videoRef.current;
-				if(!video)return;
-				void video.play().then(()=>setNeedsPlay(false)).catch(()=>setNeedsPlay(true));
-			}}>{videoUnavailable?'Continue to Aurevia':'Play intro'}</button>
+		{playbackIssue&&<div className="exchange-intro-actions">
+			<p role="status">{playbackIssue==='unavailable'?'The introduction video could not be loaded.':'Tap to start the introduction.'}</p>
+			<div className="exchange-intro-action-buttons">
+				{playbackIssue==='blocked'?<>
+					<button type="button" onClick={()=>void playVideo()}>Play video</button>
+					<button type="button" className="is-secondary" onClick={retryVideo}>Retry video</button>
+				</>:<>
+					<button type="button" onClick={retryVideo}>Retry video</button>
+					<button type="button" className="is-secondary" onClick={onSkip}>Continue to Aurevia</button>
+				</>}
+			</div>
 		</div>}
 	</div>;
 }

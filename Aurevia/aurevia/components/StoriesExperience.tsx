@@ -34,20 +34,18 @@ export function StoriesViewer({stories,initialIndex=0,onClose,trackEngagement=tr
 	const [frameIndex,setFrameIndex]=useState(initialIndex);
 	const [progress,setProgress]=useState(0);
 	const [paused,setPaused]=useState(false);
-	const [videoDuration,setVideoDuration]=useState(15_000);
 	const elapsed=useRef(0);
 	const touchStart=useRef<number|null>(null);
 	const videoRef=useRef<HTMLVideoElement|null>(null);
 	const activeFrame=frames[frameIndex]??null;
 	const activeStoryId=activeFrame?.story.id;
-	const duration=activeFrame?.media?.type==='VIDEO'?videoDuration:6_000;
+	const duration=6_000;
 
 	const goTo=useCallback((index:number)=>{
 		if(!frames.length)return;
 		const next=(index+frames.length)%frames.length;
 		elapsed.current=0;
 		setProgress(0);
-		setVideoDuration(15_000);
 		setFrameIndex(next);
 	},[frames.length]);
 
@@ -55,7 +53,7 @@ export function StoriesViewer({stories,initialIndex=0,onClose,trackEngagement=tr
 	const previous=useCallback(()=>goTo(frameIndex-1),[frameIndex,goTo]);
 
 	useEffect(()=>{
-		if(!activeFrame||paused)return;
+		if(!activeFrame||paused||activeFrame.media?.type==='VIDEO')return;
 		const timer=window.setInterval(()=>{
 			elapsed.current+=100;
 			setProgress(Math.min(100,elapsed.current/duration*100));
@@ -110,11 +108,11 @@ export function StoriesViewer({stories,initialIndex=0,onClose,trackEngagement=tr
 					<button type="button" aria-label="Close stories" onClick={onClose}><X size={20}/></button>
 				</div>
 			</header>
-			<div className="story-viewer-stage">
-				{media?.type==='VIDEO'?<video ref={videoRef} key={media.id} className="story-viewer-media" src={media.url} aria-label={media.altText||story.title} autoPlay muted playsInline onLoadedMetadata={event=>{
-					const seconds=event.currentTarget.duration;
-					if(Number.isFinite(seconds)&&seconds>0)setVideoDuration(Math.min(Math.max(seconds*1000,3_000),60_000));
-				}} onEnded={next}/>:media?.type==='IMAGE'?<Image key={media.id} className="story-viewer-media" src={media.url} alt={media.altText||story.title} fill priority unoptimized sizes="(max-width: 720px) 100vw, 680px"/>:<div className="story-viewer-no-media"><Radio size={36}/><span>Aurevia update</span></div>}
+			<div className={`story-viewer-stage${media?.type==='VIDEO'?' is-video':''}`}>
+				{media?.type==='VIDEO'?<video ref={videoRef} key={media.id} className="story-viewer-media" src={media.url} aria-label={media.altText||story.title} autoPlay muted playsInline controls preload="metadata" onTimeUpdate={event=>{
+					const video=event.currentTarget;
+					if(Number.isFinite(video.duration)&&video.duration>0)setProgress(video.currentTime/video.duration*100);
+				}} onPlay={()=>setPaused(false)} onPause={event=>{if(!event.currentTarget.ended)setPaused(true)}} onEnded={()=>{setPaused(false);next()}}/>:media?.type==='IMAGE'?<Image key={media.id} className="story-viewer-media" src={media.url} alt={media.altText||story.title} fill priority unoptimized sizes="(max-width: 720px) 100vw, 680px"/>:<div className="story-viewer-no-media"><Radio size={36}/><span>Aurevia update</span></div>}
 				<button type="button" className="story-viewer-nav story-viewer-prev" aria-label="Previous story" onClick={previous}><ArrowLeft size={20}/></button>
 				<button type="button" className="story-viewer-nav story-viewer-next" aria-label="Next story" onClick={next}><ArrowRight size={20}/></button>
 				<div className="story-viewer-copy">
@@ -171,8 +169,9 @@ export default function StoriesExperience({mode='strip',stories:providedStories}
 		{!loading&&!error&&visibleStories.length>0&&<div className={mode==='strip'?'stories-strip':'stories-card-grid'}>
 			{visibleStories.map((story,index)=>{
 				const image=story.media.find(item=>item.type==='IMAGE');
+				const hasVideo=story.media.some(item=>item.type==='VIDEO');
 				return <button type="button" className={mode==='strip'?'story-bubble':index===0?'story-card story-card-featured':'story-card'} key={story.id} onClick={()=>openStory(story.id)} aria-label={`Open ${story.title}`}>
-					{mode==='strip'?<><span className="story-bubble-ring"><span className="story-bubble-inner">{image?<Image src={image.url} alt="" fill unoptimized sizes="84px"/>:<span className="story-bubble-letter">A</span>}</span></span><span className="story-bubble-title">{story.title}</span><small>{story.category.name}</small></>:<><span className="story-card-media">{image?<Image src={image.url} alt={image.altText||''} fill unoptimized sizes="(max-width: 720px) 100vw, 520px"/>:<span className="story-card-placeholder"><Radio size={22}/></span>}{story.media.some(item=>item.type==='VIDEO')&&<i className="story-card-video"><Play size={13} fill="currentColor"/></i>}</span><span className="story-card-content">{index===0&&<i>Featured story</i>}<small>{story.category.name}</small><b>{story.title}</b><time dateTime={story.publishedAt||undefined}>{formatPublicationDate(story.publishedAt)}</time><span>{story.description}</span><strong>{mode==='page'?'Read more':'Open story'} <ArrowRight size={13}/></strong></span></>}
+					{mode==='strip'?<><span className="story-bubble-ring"><span className="story-bubble-inner">{image?<Image src={image.url} alt="" fill unoptimized sizes="84px"/>:<span className="story-bubble-letter">A</span>}</span></span><span className="story-bubble-title">{story.title}</span><small>{story.category.name}</small></>:<><span className="story-card-media">{image?<Image src={image.url} alt={image.altText||''} fill unoptimized sizes="(max-width: 720px) 100vw, 520px"/>:<span className="story-card-placeholder">{hasVideo?<><Play size={24} fill="currentColor"/><small>Video story</small></>:<Radio size={22}/>}</span>}{hasVideo&&<span className="story-card-video"><Play size={12} fill="currentColor"/> Play video</span>}</span><span className="story-card-content">{index===0&&<i>Featured story</i>}<small>{story.category.name}</small><b>{story.title}</b><time dateTime={story.publishedAt||undefined}>{formatPublicationDate(story.publishedAt)}</time><span>{story.description}</span><strong>{mode==='page'?'Read more':'Open story'} <ArrowRight size={13}/></strong></span></>}
 				</button>;
 			})}
 		</div>}

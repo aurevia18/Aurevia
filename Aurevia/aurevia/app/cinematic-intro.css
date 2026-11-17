@@ -41,6 +41,21 @@ html[data-aurevia-intro-pending=true] .scene-content>div:first-child{visibility:
 	object-fit:contain;
 	background:transparent;
 }
+.exchange-intro-loader{
+	position:absolute;
+	top:50%;
+	left:50%;
+	z-index:1;
+	display:grid;
+	justify-items:center;
+	gap:10px;
+	color:#ddc990;
+	font-size:11px;
+	letter-spacing:.08em;
+	transform:translate(-50%,-50%);
+	pointer-events:none;
+}
+.exchange-intro-loader svg{filter:drop-shadow(0 0 12px rgba(221,201,144,.34))}
 .exchange-intro-brand{
 	position:absolute;
 	bottom:max(32px,calc(env(safe-area-inset-bottom) + 22px));
@@ -84,15 +99,22 @@ html[data-aurevia-intro-pending=true] .scene-content>div:first-child{visibility:
 	transform:translate(-50%,-50%);
 }
 .exchange-intro-actions p{margin:0;color:#e4e6dc;font-size:13px;line-height:1.55}
+.exchange-intro-action-buttons{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
 .exchange-intro-actions button,.exchange-intro-replay{
 	min-height:44px;
 	padding:0 16px;
 	border:1px solid rgba(214,191,137,.38);
 	border-radius:4px;
+	background:linear-gradient(110deg,#c5a46b,#dbc18f);
+	color:#11160f;
+	font-size:12px;
+	font-weight:650;
+	cursor:pointer;
+}
+.exchange-intro-actions button.is-secondary{
+	border-color:rgba(214,191,137,.38);
 	background:rgba(5,11,7,.72);
 	color:#f2ead8;
-	font-size:12px;
-	cursor:pointer;
 }
 .exchange-intro-replay{
 	position:fixed;

@@ -42,6 +42,7 @@ test('desktop intro falls back to the available orientation, ends, skips, and st
 		await page.goto('/');
 		const intro=page.getByRole('dialog',{name:'Aurevia Exchange introduction'});
 		await expect(intro).toBeVisible();
+		await expect(page.getByRole('button',{name:'Retry video'})).toHaveCount(0);
 		const video=page.locator('.exchange-intro-video');
 		await expect(video).toHaveAttribute('src','/Videos/aurevia-intro-desktop.mp4');
 		if(!releaseInitialDesktop)throw new Error('Desktop video request did not start.');
@@ -53,11 +54,11 @@ test('desktop intro falls back to the available orientation, ends, skips, and st
 		await expect(page.locator('h1:visible').first()).toBeVisible();
 		expect(await page.evaluate(key=>localStorage.getItem(key),introKey)).toBe('1');
 
-		await page.getByRole('button',{name:'Replay intro'}).click();
+		await page.getByRole('button',{name:'Replay video'}).click();
 		await expect(intro).toBeVisible();
 		await page.getByRole('button',{name:'Skip intro'}).click();
 		await expect(intro).toBeHidden();
-		await expect(page.getByRole('button',{name:'Replay intro'})).toBeVisible();
+		await expect(page.getByRole('button',{name:'Replay video'})).toBeVisible();
 		await page.reload();
 		await expect(intro).toHaveCount(0);
 		await expect(page.locator('h1:visible').first()).toBeVisible();
@@ -75,9 +76,10 @@ test('portrait devices select the mobile video and autoplay failures offer playb
 		await expect(page.getByRole('dialog',{name:'Aurevia Exchange introduction'})).toBeVisible();
 		await expect(page.locator('.exchange-intro-video')).toHaveAttribute('src','/Videos/aurevia-intro-mobile.mp4');
 		expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
-		await expect(page.getByRole('button',{name:'Play intro'})).toBeVisible();
-		await page.getByRole('button',{name:'Play intro'}).click();
-		await expect(page.getByRole('button',{name:'Play intro'})).toBeVisible();
+		await expect(page.getByRole('button',{name:'Play video'})).toBeVisible();
+		await expect(page.getByRole('button',{name:'Retry video'})).toBeVisible();
+		await page.getByRole('button',{name:'Play video'}).click();
+		await expect(page.getByRole('button',{name:'Play video'})).toBeVisible();
 		await page.getByRole('button',{name:'Skip intro'}).click();
 		await expect(page.getByRole('dialog',{name:'Aurevia Exchange introduction'})).toBeHidden();
 	}finally{
@@ -85,16 +87,66 @@ test('portrait devices select the mobile video and autoplay failures offer playb
 	}
 });
 
-test('missing video files offer a safe way to continue to the homepage',async({page})=>{
+test('video network failures can be retried after connectivity returns',async({page})=>{
 	await page.setViewportSize({width:1280,height:900});
 	await page.emulateMedia({reducedMotion:'no-preference'});
 	await prepareFirstVisit(page,'resolve');
-	await page.route('**/Videos/*.mp4',route=>route.abort());
+	const failedSources=new Set<string>();
+	await page.route('**/Videos/*.mp4',route=>{
+		const source=new URL(route.request().url()).pathname;
+		if(!failedSources.has(source)){
+			failedSources.add(source);
+			return route.abort();
+		}
+		return route.continue();
+	});
 	await page.goto('/');
-	await expect(page.getByRole('status')).toHaveText('The introduction video is unavailable.');
-	await page.getByRole('button',{name:'Continue to Aurevia'}).click();
+	await expect(page.locator('.exchange-intro-actions [role="status"]')).toHaveText('The introduction video could not be loaded.');
+	await expect(page.getByRole('button',{name:'Retry video'})).toBeVisible();
+	await page.getByRole('button',{name:'Retry video'}).click();
+	const video=page.locator('.exchange-intro-video');
+	await expect(video).toHaveAttribute('src','/Videos/aurevia-intro-desktop.mp4');
+	await expect.poll(()=>video.evaluate(element=>(element as HTMLVideoElement).readyState)).toBeGreaterThanOrEqual(2);
+	await expect(page.getByRole('button',{name:'Continue to Aurevia'})).toHaveCount(0);
+	await page.getByRole('button',{name:'Skip intro'}).click();
 	await expect(page.getByRole('dialog',{name:'Aurevia Exchange introduction'})).toBeHidden();
 	await expect(page.locator('h1:visible').first()).toBeVisible();
+});
+
+test('real intro videos are served and autoplay is attempted with browser-safe settings',async({page})=>{
+	await page.setViewportSize({width:1440,height:900});
+	await page.emulateMedia({reducedMotion:'no-preference'});
+	await page.addInitScript(()=>{
+		localStorage.removeItem('aurevia-cinematic-intro-complete');
+		const nativePlay=HTMLMediaElement.prototype.play;
+		Object.defineProperty(window,'__aureviaIntroPlayAttempts',{configurable:true,writable:true,value:0});
+		Object.defineProperty(HTMLMediaElement.prototype,'play',{
+			configurable:true,
+			value:function(this:HTMLMediaElement){
+				(window as Window&{__aureviaIntroPlayAttempts?:number}).__aureviaIntroPlayAttempts=(window as Window&{__aureviaIntroPlayAttempts?:number}).__aureviaIntroPlayAttempts!+1;
+				return nativePlay.call(this);
+			},
+		});
+	});
+
+	await page.goto('/');
+	for(const source of ['/Videos/aurevia-intro-desktop.mp4','/Videos/aurevia-intro-mobile.mp4']){
+		const response=await page.request.get(new URL(source,page.url()).toString());
+		expect(response.status()).toBe(200);
+		expect(response.headers()['content-type']).toContain('video/mp4');
+		const bytes=await response.body();
+		expect(bytes.length).toBeGreaterThan(100_000);
+		expect(bytes.toString('ascii',4,8)).toBe('ftyp');
+	}
+
+	const video=page.locator('.exchange-intro-video');
+	await expect(video).toHaveAttribute('src','/Videos/aurevia-intro-desktop.mp4');
+	await expect(video).toHaveAttribute('preload','auto');
+	await expect(video).toHaveJSProperty('muted',true);
+	await expect(video).toHaveJSProperty('playsInline',true);
+	await expect.poll(()=>page.evaluate(()=>((window as Window&{__aureviaIntroPlayAttempts?:number}).__aureviaIntroPlayAttempts)||0)).toBeGreaterThan(0);
+	await expect(page.getByRole('button',{name:'Skip intro'})).toBeVisible();
+	await expect(page.getByRole('button',{name:'Retry video'})).toHaveCount(0);
 });
 
 test('reduced-motion visitors bypass automatic playback',async({page})=>{

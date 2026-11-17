@@ -349,9 +349,12 @@ test('public stories publish for visitors and members with role, schedule, expir
 		const png=PNG.sync.write(new PNG({width:1,height:1}));
 		const publicImage=await adminPage.request.post(`/api/admin/stories/${publicStory.id}/media`,{multipart:{file:{name:'story.png',mimeType:'image/png',buffer:png},altText:'Aurevia story artwork'}});
 		expect(publicImage.status()).toBe(201);
+		const publicVideo=await adminPage.request.post(`/api/admin/stories/${publicStory.id}/media`,{multipart:{file:{name:'story.mp4',mimeType:'video/mp4',buffer:Buffer.from('\u0000\u0000\u0000\u0000ftypisom','binary')},altText:'Aurevia story video'}});
+		expect(publicVideo.status()).toBe(201);
 		const draftVideo=await adminPage.request.post(`/api/admin/stories/${draftStory.id}/media`,{multipart:{file:{name:'draft.mp4',mimeType:'video/mp4',buffer:Buffer.from('\u0000\u0000\u0000\u0000ftypisom','binary')}}});
 		expect(draftVideo.status()).toBe(201);
 		const publicMedia=(await publicImage.json()).media;
+		const publicVideoMedia=(await publicVideo.json()).media;
 		const privateMedia=(await draftVideo.json()).media;
 		await db.story.update({where:{id:scheduledStory.id},data:{publishAt:new Date(now-60_000)}});
 		await db.story.update({where:{id:expiredStory.id},data:{expiresAt:new Date(now-1_000)}});
@@ -359,6 +362,7 @@ test('public stories publish for visitors and members with role, schedule, expir
 		const beforeLoginFeed=await page.request.get('/api/stories').then(response=>response.json());
 		const publicFeedStory=beforeLoginFeed.find((story:{id:string})=>story.id===publicStory.id);
 		expect(publicFeedStory.media).toContainEqual(expect.objectContaining({id:publicMedia.id,type:'IMAGE'}));
+		expect(publicFeedStory.media).toContainEqual(expect.objectContaining({id:publicVideoMedia.id,type:'VIDEO'}));
 		const publicMediaUrl=publicFeedStory.media.find((item:{id:string;url:string})=>item.id===publicMedia.id)?.url;
 		if(!publicMediaUrl)throw new Error('Public story media URL was not returned.');
 		const publicImageResponse=await page.request.get(publicMediaUrl);
@@ -378,6 +382,7 @@ test('public stories publish for visitors and members with role, schedule, expir
 		await expect(page.locator('.story-card-featured')).toContainText('Featured story');
 		await expect(page.getByRole('button',{name:`Open ${publicStory.title}`})).toContainText('Read more');
 		await expect(page.getByRole('button',{name:`Open ${publicStory.title}`}).locator('time')).not.toHaveText('Publication date unavailable');
+		await expect(page.getByRole('button',{name:`Open ${publicStory.title}`})).toContainText('Play video');
 		await expect(page.getByRole('button',{name:`Open ${scheduledStory.title}`})).toBeVisible();
 		await expect(page.getByRole('button',{name:`Open ${draftStory.title}`})).toHaveCount(0);
 		await expect(page.getByRole('button',{name:`Open ${membersStory.title}`})).toHaveCount(0);
@@ -387,6 +392,12 @@ test('public stories publish for visitors and members with role, schedule, expir
 		const storyDialog=page.getByRole('dialog',{name:`Story: ${publicStory.title}`});
 		await expect(storyDialog).toBeVisible();
 		await expect(storyDialog.getByText(`${publicStory.title} content for the public stories viewer.`)).toBeVisible();
+		await storyDialog.getByRole('button',{name:'Next story'}).click();
+		const storyVideo=storyDialog.locator('video.story-viewer-media');
+		await expect(storyVideo).toHaveAttribute('controls','');
+		await expect(storyVideo).toBeVisible();
+		await page.waitForTimeout(6_200);
+		await expect(storyVideo).toBeVisible();
 		await page.getByRole('button',{name:'Close stories'}).click();
 
 		await loginAs(page,fixture('USER_EMAIL'),fixture('USER_PASSWORD'));
@@ -1168,6 +1179,11 @@ test('global chat support persists its position and exchanges private admin mess
 		expect(story).toMatchObject({userId:null,title:'A simpler way to manage my finances',rating:5,publicationStatus:'PUBLISHED',verifiedClient:false});
 		const publicStories=await adminPage.request.get('/api/client-stories').then(response=>response.json());
 		expect(publicStories).toContainEqual(expect.objectContaining({id:story.id,title:story.title,rating:5,verifiedClientStory:false}));
+		await adminPage.goto('/client-stories');
+		const testimonial=adminPage.locator('.client-testimonial-card').filter({hasText:story.displayName});
+		await expect(testimonial).toBeVisible();
+		await expect(testimonial.getByRole('heading',{name:story.title})).toBeVisible();
+		await expect(testimonial.getByText(story.quote)).toBeVisible();
 		const hiddenStory=await adminPage.request.patch('/api/admin/client-stories',{data:{storyId:story.id,publicationStatus:'DRAFT'}});
 		expect(hiddenStory.ok()).toBe(true);
 		expect(await adminPage.request.get('/api/client-stories').then(response=>response.json())).not.toContainEqual(expect.objectContaining({id:story.id}));
@@ -1373,15 +1389,10 @@ test('sign-in password visibility, recovery link, and account link are accessibl
 	await expectNoHorizontalOverflow(page);
 });
 
-test('signup needs no Cloudflare scripts, automatically signs in, and does not require phone OTP',async({page})=>{
+test('signup needs no external verification and automatically signs in without phone OTP',async({page})=>{
 	const email=`aurevia-e2e-immediate-signup-${randomUUID()}@example.invalid`;
 	let registrationRequests=0;
-	let cloudflareRequests=0;
 	const registrationPayloads:Record<string,unknown>[]=[];
-	await page.route('https://challenges.cloudflare.com/**',async route=>{
-		cloudflareRequests++;
-		await route.abort();
-	});
 	page.on('request',request=>{
 		if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/register'){
 			registrationRequests++;
@@ -1418,9 +1429,8 @@ test('signup needs no Cloudflare scripts, automatically signs in, and does not r
 	expect(await db.user.count({where:{email}})).toBe(1);
 	expect(await db.registrationAttempt.findUnique({where:{email}})).toBeNull();
 	expect(registrationPayloads).toHaveLength(1);
-	expect(registrationPayloads[0]).not.toHaveProperty('turnstileToken');
+	expect(registrationPayloads[0]).not.toHaveProperty('verificationToken');
 	expect(registrationPayloads[0]).not.toHaveProperty('captchaToken');
-	expect(cloudflareRequests).toBe(0);
 	expect(registrationPayloads[0].website).toBe('');
 });
 
@@ -1583,10 +1593,12 @@ test('sign-in returns to the protected dashboard requested before authentication
 	await page.goto('/dashboard');
 	await expect(page).toHaveURL(/\/login\?callbackUrl=/);
 	await waitForStartup(page);
+	await page.getByRole('checkbox',{name:'Remember my email on this device'}).check();
 	await page.getByLabel('Email address').fill(fixture('LEGACY_USER_EMAIL'));
 	await page.getByLabel('Password',{exact:true}).fill(fixture('LEGACY_USER_PASSWORD'));
 	await page.getByRole('button',{name:'Sign in'}).click();
 	await page.waitForURL(url=>url.pathname==='/dashboard');
+	expect(await page.evaluate(()=>localStorage.getItem('aurevia-signin-remembered-email'))).toBe(fixture('LEGACY_USER_EMAIL'));
 	await expect(page.getByRole('heading',{name:'My Portfolio'})).toBeVisible();
 });
 

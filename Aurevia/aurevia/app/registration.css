@@ -149,43 +149,56 @@
 	.registration-panel{padding:20px}
 }
 @media(max-width:680px){
-	.registration-app{padding:0 0 calc(env(safe-area-inset-bottom) + 10px)}
-	.registration-mobile-header{position:sticky;top:0;z-index:80;display:flex;min-height:58px;align-items:center;justify-content:space-between;gap:12px;padding:7px 15px;border-bottom:1px solid rgba(220,230,221,.1);background:rgba(7,16,11,.96);backdrop-filter:blur(16px)}
+	.registration-app{padding:0 0 calc(env(safe-area-inset-bottom) + 10px);background:radial-gradient(ellipse at 50% 0,rgba(197,164,107,.07),transparent 38%),#080a08}
+	.registration-mobile-header{position:sticky;top:0;z-index:80;display:flex;min-height:58px;align-items:center;justify-content:space-between;gap:12px;padding:7px 15px;border-bottom:1px solid rgba(220,230,221,.1);background:rgba(7,9,7,.96);backdrop-filter:blur(16px)}
 	.registration-mobile-header .registration-brand img{width:35px;height:35px}
 	.registration-mobile-header .registration-brand b{font-size:11px}
 	.registration-login-link{display:inline-flex;min-height:38px;align-items:center;padding:0 10px;border:1px solid rgba(197,164,107,.24);border-radius:5px;color:#d7c18e;font-size:9px;text-decoration:none}
 	.registration-layout{display:block;width:100%;min-height:0;margin:0}
 	.registration-intro{display:none}
-	.registration-panel{margin:13px 12px 0;padding:17px 14px;border-radius:10px}
-	.registration-panel-top .registration-eyebrow{font-size:8px}
-	.registration-mobile-title{display:block;margin:11px 0 0;color:#f0f2ed;font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;font-size:22px;font-weight:400}
-	.registration-stepper{gap:3px;margin:13px 0 18px}
-	.registration-step-dot{min-width:26px}
-	.registration-step-dot>span{width:27px;height:27px}
-	.registration-step-dot:not(:last-child):after{top:13px;left:calc(50% + 14px);width:calc(100% + 3px - 4px)}
-	.registration-step-heading{gap:9px;margin-bottom:15px}
-	.registration-step-heading-icon{width:34px;height:34px}
-	.registration-step-heading h2{font-size:22px}
+	.registration-panel{margin:14px 12px 0;padding:20px 16px;border:1px solid rgba(197,164,107,.16);border-radius:12px;background:linear-gradient(155deg,#141611,#0e100e 62%,#0b0d0b);box-shadow:0 18px 48px rgba(0,0,0,.28),inset 0 1px rgba(255,255,255,.025)}
+	.registration-panel-top .registration-eyebrow{font-size:8px;letter-spacing:.16em}
+	.registration-step-count{color:#d3c18f;font-size:8px}
+	.registration-mobile-title{display:block;margin:15px 0 0;color:#f6f5f0;font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;font-size:clamp(25px,6.5vw,30px);font-weight:400;letter-spacing:-.035em;line-height:1.15}
+	.registration-stepper{gap:0;margin:21px 0 23px}
+	.registration-step-dot{flex:1;min-width:0}
+	.registration-step-dot>span{width:30px;height:30px;border-color:rgba(220,230,221,.22);background:#111410;color:#788078}
+	.registration-step-dot:not(:last-child):after{top:14px;left:calc(50% + 16px);width:calc(100% - 32px);background:rgba(197,164,107,.26)}
+	.registration-step-dot.is-current>span{border-color:#d4b775;background:linear-gradient(145deg,#d9bd7d,#ad8950);color:#fff;box-shadow:0 3px 12px rgba(197,164,107,.2)}
+	.registration-step-dot.is-complete>span{border-color:rgba(224,201,158,.62);background:rgba(197,164,107,.14);color:#e5cf9a}
+	.registration-step-dot.is-current small,.registration-step-dot.is-complete small{color:#d7c18e}
+	.registration-step-heading{gap:10px;margin-bottom:17px}
+	.registration-step-heading-icon{width:38px;height:38px;border-color:rgba(197,164,107,.32);border-radius:9px;background:rgba(197,164,107,.11);color:#e5cc91}
+	.registration-step-heading h2{font-family:inherit;font-size:15px;font-weight:650;letter-spacing:0}
 	.registration-step-heading p{font-size:9px}
-	.registration-field-grid{gap:11px 8px}
-	.registration-field{font-size:9px}
-	.registration-field .auth-input{min-height:42px;padding-inline:9px;font-size:13px}
-	.registration-field .country-selector-trigger{min-height:42px;padding-inline:8px}
-	.registration-wizard-form{gap:13px}
-	.registration-wizard-actions{position:sticky;bottom:0;z-index:5;margin:0 -14px -17px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:rgba(8,18,12,.97);box-shadow:0 -10px 22px rgba(0,0,0,.14);backdrop-filter:blur(12px)}
-	.registration-primary-button,.registration-secondary-button{min-height:44px;padding-inline:13px}
+	.registration-field-grid{gap:15px 11px}
+	.registration-field{gap:7px;color:#e3e5df;font-size:10px;font-weight:600}
+	.registration-field>span[aria-hidden="true"]{color:#d8bc7d}
+	.registration-field .auth-input{min-height:48px;padding-inline:12px;border-color:rgba(220,230,221,.16);border-radius:10px;background:#111310;font-size:16px}
+	.registration-field .auth-input:focus{border-color:rgba(224,201,158,.72);background:#141611}
+	.registration-field .country-selector-trigger{min-height:48px;border-radius:10px;background:#111310}
+	.registration-field small{font-size:9px}
+	.registration-wizard-form{gap:16px}
+	.registration-wizard-actions{position:sticky;bottom:0;z-index:5;margin:0 -16px -20px;padding:12px 16px calc(12px + env(safe-area-inset-bottom));border-top:1px solid rgba(220,230,221,.08);background:rgba(9,10,9,.97);box-shadow:0 -10px 22px rgba(0,0,0,.18);backdrop-filter:blur(12px)}
+	.registration-primary-button,.registration-secondary-button{min-height:48px;padding-inline:16px;border-radius:8px;font-size:11px}
+	.registration-primary-button{box-shadow:0 5px 16px rgba(197,164,107,.16)}
 	.registration-panel-footer{padding-bottom:3px}
 }
 @media(max-width:390px){
 	.registration-panel{margin-inline:8px;padding:15px 11px}
-	.registration-field-grid{grid-template-columns:minmax(0,1fr)}
-	.registration-field-wide{grid-column:auto}
+	.registration-panel{padding:18px 13px}
+	.registration-wizard-actions{margin-inline:-13px;padding-inline:13px}
 	.registration-phone-row{grid-template-columns:minmax(115px,.78fr) minmax(0,1fr)}
 	.registration-phone-row .country-selector-trigger{gap:5px;padding-inline:6px}
 	.registration-phone-row .country-selector-trigger>svg{width:13px}
 	.registration-legal-item{grid-template-columns:17px minmax(0,1fr) auto;gap:6px;padding:8px}
 	.registration-legal-link{gap:2px;font-size:7px}
 	.registration-review-section dl>div{grid-template-columns:minmax(82px,.36fr) minmax(0,1fr);gap:7px}
+}
+@media(max-width:360px){
+	.registration-panel{padding:15px 11px}
+	.registration-field-grid{grid-template-columns:minmax(0,1fr)}
+	.registration-field-wide{grid-column:auto}
 	.registration-wizard-actions{margin-inline:-11px;padding-inline:11px}
 	.registration-create-button{min-width:0}
 }

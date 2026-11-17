@@ -91,7 +91,7 @@ describe('immediate registration',()=>{
 
 	afterEach(()=>vi.unstubAllEnvs());
 
-	it('creates an active account without a Turnstile token or email or phone OTP',async()=>{
+	it('creates an active account without an external verification token or email or phone OTP',async()=>{
 		const response=await POST(request(payload,'e75c6069-6dc9-4de5-8a58-e8257d8f8e03'));
 		const body=await response.json();
 
