@@ -563,7 +563,7 @@ test('portfolio timeframe controls filter authenticated snapshot history accessi
 
 test('desktop 3D emblem renders with a mobile static fallback',async({browser})=>{
 	const desktopContext=await browser.newContext({viewport:{width:1440,height:900},reducedMotion:'no-preference'});
-	await desktopContext.addInitScript(()=>{sessionStorage.setItem('aurevia-startup-complete','1');sessionStorage.setItem('aurevia-introduction-complete','1')});
+	await desktopContext.addInitScript(()=>{sessionStorage.setItem('aurevia-startup-complete','1');localStorage.setItem('aurevia-cinematic-intro-complete','1')});
 	try{
 		const desktopPage=await desktopContext.newPage();
 		await desktopPage.goto('/');
@@ -586,7 +586,7 @@ test('desktop 3D emblem renders with a mobile static fallback',async({browser})=
 	}
 
 	const mobileContext=await browser.newContext({viewport:{width:320,height:800},reducedMotion:'reduce'});
-	await mobileContext.addInitScript(()=>{sessionStorage.setItem('aurevia-startup-complete','1');sessionStorage.setItem('aurevia-introduction-complete','1')});
+	await mobileContext.addInitScript(()=>{sessionStorage.setItem('aurevia-startup-complete','1');localStorage.setItem('aurevia-cinematic-intro-complete','1')});
 	try{
 		const mobilePage=await mobileContext.newPage();
 		await mobilePage.goto('/');
@@ -603,7 +603,7 @@ test('floating support launcher can be dragged horizontally and vertically',asyn
 	await page.setViewportSize({width:1440,height:900});
 	await page.addInitScript(()=>{
 		sessionStorage.setItem('aurevia-startup-complete','1');
-		sessionStorage.setItem('aurevia-introduction-complete','1');
+		localStorage.setItem('aurevia-cinematic-intro-complete','1');
 		localStorage.setItem('aurevia-support-chat-position',JSON.stringify({left:1100,top:650}));
 	});
 	await page.goto('/');

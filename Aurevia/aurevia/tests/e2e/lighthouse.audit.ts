@@ -52,7 +52,7 @@ test('local Aurevia pages have measured Lighthouse scores @lighthouse',async({br
 			await page.goto(baseURL,{waitUntil:'domcontentloaded'});
 			await page.evaluate(()=>{
 				sessionStorage.setItem('aurevia-startup-complete','1');
-				sessionStorage.setItem('aurevia-introduction-complete','1');
+				localStorage.setItem('aurevia-cinematic-intro-complete','1');
 			});
 			if(target.cookies.length){
 				await page.setCookie(...target.cookies.map(cookie=>({

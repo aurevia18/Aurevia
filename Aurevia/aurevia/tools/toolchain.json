@@ -33,7 +33,7 @@
     {
       "Tool": "Next.js",
       "Package": "next",
-      "Version": "16.4.3",
+      "Version": "16.4.6",
       "Purpose": "Application framework and production build/runtime.",
       "Installation": "npm ci",
       "Verification": "npm ls next and npm run build",
