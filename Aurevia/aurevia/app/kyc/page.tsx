@@ -88,7 +88,7 @@ export default function Kyc(){
 				</tbody></table></div>
 				<p className="mt-3 text-xs leading-5 muted">REAL trading and deposits are available before KYC. Withdrawals remain subject to approved KYC and existing account controls.</p>
 			</section>
-			{page.phone&&<p className="mt-3 text-xs muted">Phone on file: {page.phone} · {page.phoneVerified?'verified':'not verified'}. Phone verification is not required for registration, KYC, or tier progression.</p>}
+			{page.phone&&<p className="mt-3 text-xs muted">Registered phone number: {page.phone} · {page.phoneVerified?'Verified':'Not verified'}. Phone verification is optional and is not required to complete registration, submit KYC, or advance to the next account tier.</p>}
 			{page.currentTier>=2&&page.kycStatus==='APPROVED'&&<section className="account-panel card mt-4 p-5">
 				<h2 className="text-lg font-semibold">Tier 3 proof of address</h2>
 				<p className="mt-2 text-sm leading-6 muted">Aurevia Verify identity approval is only one part of Tier 3 eligibility. Tier 3 also requires a residential address, proof of address, and administrator review.</p>
