@@ -15,12 +15,38 @@ async function holdVideoRequests(page:Page){
 
 async function prepareFirstVisit(page:Page,playResult:'resolve'|'reject'){
 	await page.addInitScript(({result})=>{
+		Object.defineProperty(window,'__aureviaStartupPlayCalls',{configurable:true,writable:true,value:0});
 		Object.defineProperty(HTMLMediaElement.prototype,'play',{
 			configurable:true,
-			value:()=>result==='resolve'?Promise.resolve():Promise.reject(new Error('Autoplay blocked')),
+			value:()=>{
+				const target=window as Window&{__aureviaStartupPlayCalls?:number};
+				target.__aureviaStartupPlayCalls=(target.__aureviaStartupPlayCalls||0)+1;
+				return result==='resolve'?Promise.resolve():Promise.reject(new Error('Autoplay blocked'));
+			},
 		});
 	},{result:playResult});
 }
+
+test('fresh visits start intro playback when media is ready and never time out early',async({page})=>{
+	await page.setViewportSize({width:1440,height:900});
+	await page.emulateMedia({reducedMotion:'no-preference'});
+	await prepareFirstVisit(page,'resolve');
+	await page.goto('/');
+	const intro=page.getByRole('dialog',{name:'Aurevia Exchange introduction'});
+	const video=page.locator('.exchange-intro-video');
+	await expect(intro).toBeVisible();
+	await expect(video).toHaveAttribute('autoplay','');
+	await expect(video).toHaveJSProperty('muted',true);
+	await expect(video).toHaveAttribute('playsinline','');
+	await expect(video).toHaveAttribute('preload','auto');
+	await expect.poll(()=>page.evaluate(()=>((window as Window&{__aureviaStartupPlayCalls?:number}).__aureviaStartupPlayCalls)||0)).toBeGreaterThan(0);
+	await video.evaluate(element=>{
+		Object.defineProperty(element,'currentTime',{configurable:true,value:7});
+		element.dispatchEvent(new Event('timeupdate'));
+	});
+	await expect(intro).toBeVisible();
+	await expect(page.getByRole('button',{name:'Skip intro'})).toBeVisible();
+});
 
 test('desktop intro falls back to the available orientation, ends, skips, and stays complete',async({page})=>{
 	await page.setViewportSize({width:1440,height:900});
@@ -59,6 +85,12 @@ test('desktop intro falls back to the available orientation, ends, skips, and st
 		await page.getByRole('button',{name:'Skip intro'}).click();
 		await expect(intro).toBeHidden();
 		await expect(page.getByRole('button',{name:'Replay video'})).toBeVisible();
+		await page.evaluate(()=>window.history.pushState({},'','/stories'));
+		await expect(page).toHaveURL(/\/stories$/);
+		await expect(intro).toHaveCount(0);
+		await page.evaluate(()=>window.history.pushState({},'','/'));
+		await expect(page).toHaveURL(/\/$/);
+		await expect(intro).toHaveCount(0);
 		await page.reload();
 		await expect(intro).toHaveCount(0);
 		await expect(page.locator('h1:visible').first()).toBeVisible();
@@ -74,8 +106,13 @@ test('portrait devices select the mobile video and autoplay failures offer playb
 	try{
 		await page.goto('/');
 		await expect(page.getByRole('dialog',{name:'Aurevia Exchange introduction'})).toBeVisible();
-		await expect(page.locator('.exchange-intro-video')).toHaveAttribute('src','/Videos/aurevia-intro-mobile.mp4');
+		const video=page.locator('.exchange-intro-video');
+		await expect(video).toHaveAttribute('src','/Videos/aurevia-intro-mobile.mp4');
 		expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+		await video.evaluate(element=>{
+			Object.defineProperty(element,'readyState',{configurable:true,value:HTMLMediaElement.HAVE_CURRENT_DATA});
+			element.dispatchEvent(new Event('loadeddata'));
+		});
 		await expect(page.getByRole('button',{name:'Play video'})).toBeVisible();
 		await expect(page.getByRole('button',{name:'Retry video'})).toBeVisible();
 		await page.getByRole('button',{name:'Play video'}).click();

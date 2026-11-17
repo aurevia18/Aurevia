@@ -16,6 +16,8 @@ export default function AureviaStartup({isVisible,isExiting,onSkip,onReplay}:{is
 	const skipButton=useRef<HTMLButtonElement>(null);
 	const replayButton=useRef<HTMLButtonElement>(null);
 	const videoRef=useRef<HTMLVideoElement>(null);
+	const playRequest=useRef<Promise<void>|null>(null);
+	const loadingTimer=useRef<number|undefined>(undefined);
 	const wasVisible=useRef(false);
 	const [orientation,setOrientation]=useState<Orientation|null>(null);
 	const [sourceIndex,setSourceIndex]=useState(0);
@@ -53,10 +55,12 @@ export default function AureviaStartup({isVisible,isExiting,onSkip,onReplay}:{is
 	const source=sourceIndex===0?preferredSource:fallbackSource;
 
 	const playVideo=useCallback(async(video:HTMLVideoElement|null=videoRef.current)=>{
-		if(!isVisible||!video)return;
+		if(!isVisible||!video||video.readyState<HTMLMediaElement.HAVE_CURRENT_DATA||!video.paused||playRequest.current)return;
 		video.muted=true;
+		const request=video.play();
+		playRequest.current=request;
 		try{
-			await video.play();
+			await request;
 			if(videoRef.current===video){
 				setPlaybackIssue(null);
 				setLoading(false);
@@ -66,18 +70,29 @@ export default function AureviaStartup({isVisible,isExiting,onSkip,onReplay}:{is
 				setPlaybackIssue('blocked');
 				setLoading(false);
 			}
+		}finally{
+			if(playRequest.current===request)playRequest.current=null;
 		}
 	},[isVisible]);
 
 	useEffect(()=>{
 		if(!isVisible||!source)return;
-		const video=videoRef.current;
-		if(!video)return;
 		setLoading(true);
 		setPlaybackIssue(null);
-		video.load();
-		void playVideo(video);
-	},[isVisible,source,loadAttempt,playVideo]);
+		if(loadingTimer.current!==undefined)window.clearTimeout(loadingTimer.current);
+		playRequest.current=null;
+		loadingTimer.current=window.setTimeout(()=>{
+			const video=videoRef.current;
+			if(video&&video.readyState<HTMLMediaElement.HAVE_CURRENT_DATA){
+				setPlaybackIssue('unavailable');
+				setLoading(false);
+			}
+		},15_000);
+		return ()=>{
+			if(loadingTimer.current!==undefined)window.clearTimeout(loadingTimer.current);
+			loadingTimer.current=undefined;
+		};
+	},[isVisible,source,loadAttempt]);
 
 	function retryVideo(){
 		setSourceIndex(0);
@@ -102,18 +117,29 @@ export default function AureviaStartup({isVisible,isExiting,onSkip,onReplay}:{is
 			preload="auto"
 			poster="/aurevia-logo.png"
 			onLoadStart={()=>setLoading(true)}
-			onLoadedData={()=>setLoading(false)}
-			onCanPlay={event=>void playVideo(event.currentTarget)}
-			onPlaying={()=>{setPlaybackIssue(null);setLoading(false)}}
+			onLoadedData={event=>{
+				if(loadingTimer.current!==undefined)window.clearTimeout(loadingTimer.current);
+				loadingTimer.current=undefined;
+				setPlaybackIssue(null);
+				setLoading(false);
+				void playVideo(event.currentTarget);
+			}}
+			onCanPlay={event=>{
+				if(loadingTimer.current!==undefined)window.clearTimeout(loadingTimer.current);
+				loadingTimer.current=undefined;
+				void playVideo(event.currentTarget);
+			}}
+			onPlaying={()=>{
+				if(loadingTimer.current!==undefined)window.clearTimeout(loadingTimer.current);
+				loadingTimer.current=undefined;
+				setPlaybackIssue(null);
+				setLoading(false);
+			}}
 			onWaiting={()=>setLoading(true)}
 			onEnded={onSkip}
-			onTimeUpdate={event=>{
-				if(event.currentTarget.currentTime>=7){
-					event.currentTarget.pause();
-					onSkip();
-				}
-			}}
 			onError={()=>{
+				if(loadingTimer.current!==undefined)window.clearTimeout(loadingTimer.current);
+				loadingTimer.current=undefined;
 				if(sourceIndex===0&&fallbackSource){
 					setSourceIndex(1);
 					setPlaybackIssue(null);
