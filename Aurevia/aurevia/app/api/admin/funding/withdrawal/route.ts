@@ -93,7 +93,7 @@ export async function POST(request:Request){
 					nextStatus=FundingStatus.PROCESSING;
 					break;
 				case 'FAIL':
-					if(![FundingStatus.APPROVED,FundingStatus.PROCESSING].includes(current.status))throw new Error('WITHDRAWAL_INVALID_TRANSITION');
+					if(current.status!==FundingStatus.APPROVED&&current.status!==FundingStatus.PROCESSING)throw new Error('WITHDRAWAL_INVALID_TRANSITION');
 					const debitReference=`FUNDING:${current.id}:APPROVED_WITHDRAWAL_DEBIT`;
 					const debit=tx.ledgerTransaction?await tx.ledgerTransaction.findUnique({where:{reference:debitReference},select:{id:true}}):null;
 					if(debit){

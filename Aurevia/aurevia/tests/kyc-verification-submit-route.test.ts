@@ -24,6 +24,7 @@ const mocks=vi.hoisted(()=>({
 vi.mock('@/lib/auth',()=>({requireUser:mocks.requireUser}));
 vi.mock('@/lib/db',()=>({db:{user:{findUnique:mocks.userFindUnique},kycDocument:{findMany:mocks.kycDocumentFindMany},$transaction:mocks.transaction}}));
 vi.mock('@/lib/rate-limit',()=>({rateLimit:mocks.rateLimit}));
+vi.mock('@/lib/config/env',()=>({getServerConfiguration:()=>({kyc:{enabled:true,engine:'internal'}})}));
 vi.mock('@/lib/kyc-verification',async importOriginal=>{
 	const original=await importOriginal<typeof import('@/lib/kyc-verification')>();
 	return {...original,validateKycImage:mocks.validateKycImage};

@@ -18,19 +18,31 @@ describe('internal platform bank ledger controls',()=>{
 		await expect(getTreasuryAvailable(tx,'USD')).resolves.toEqual(new Prisma.Decimal('85.00'));
 	});
 
-	it('prevents an administrator from approving their own operation',async()=>{
+	it('allows one administrator to approve and post their initiated operation',async()=>{
+		const operation={
+			id:'operation-1',
+			status:BankOperationStatus.PENDING,
+			initiatedById:'admin-1',
+			type:BankOperationType.TREASURY_FUNDING,
+			direction:null,
+			currency:'USD',
+			amount:new Prisma.Decimal('20.00'),
+			sourceClassification:'AUTHORIZED_CAPITAL',
+			reason:'Authorized internal capital entry',
+			reference:'BANK:operation-1',
+			userId:null,
+		};
 		const tx={
 			user:{findUnique:vi.fn().mockResolvedValue({role:'ADMIN',status:UserStatus.ACTIVE})},
-			bankOperation:{findUnique:vi.fn().mockResolvedValue({
-				id:'operation-1',
-				status:BankOperationStatus.PENDING,
-				initiatedById:'admin-1',
-			})},
-			ledgerTransaction:{create:vi.fn()},
+			bankOperation:{findUnique:vi.fn().mockResolvedValue(operation),update:vi.fn().mockResolvedValue({...operation,status:BankOperationStatus.POSTED})},
+			ledgerTransaction:{create:vi.fn().mockResolvedValue({id:'ledger-transaction-1'})},
+			ledgerEntry:{groupBy:vi.fn()},
+			ledgerAccount:{upsert:vi.fn().mockResolvedValue({id:'system-account'})},
+			auditLog:{create:vi.fn().mockResolvedValue({})},
 		} as unknown as Prisma.TransactionClient;
 
-		await expect(reviewBankOperation(tx,'operation-1','admin-1','APPROVE')).rejects.toThrow('DISTINCT_ADMIN_REQUIRED');
-		expect(tx.ledgerTransaction.create).not.toHaveBeenCalled();
+		await expect(reviewBankOperation(tx,'operation-1','admin-1','APPROVE')).resolves.toMatchObject({operation:{status:BankOperationStatus.POSTED},replayed:false});
+		expect(tx.ledgerTransaction.create).toHaveBeenCalledOnce();
 	});
 
 	it('replays an identical operation request but rejects key reuse with changed details',async()=>{

@@ -77,94 +77,70 @@ beforeEach(()=>{
 });
 
 describe('administrator withdrawal lifecycle',()=>{
-	it('requires two administrators to approve and to confirm the final payout debit',async()=>{
-		const approvalInitiated=await POST(request('APPROVE'));
-		expect(approvalInitiated.status).toBe(202);
-		expect(current.status).toBe(FundingStatus.PENDING_REVIEW);
-		expect(mocks.postWithdrawalDebitWithFee).not.toHaveBeenCalled();
-
-		mocks.requireAdmin.mockResolvedValue({id:'admin-2'});
+	it('allows one administrator to approve, debit, process, and complete a payout',async()=>{
 		const approved=await POST(request('APPROVE'));
 		expect(approved.status).toBe(200);
 		expect(current.status).toBe(FundingStatus.APPROVED);
+		expect(mocks.postWithdrawalDebitWithFee).toHaveBeenCalledOnce();
+		expect(mocks.postWithdrawalDebitWithFee).toHaveBeenCalledWith(tx,expect.objectContaining({
+			reference:`FUNDING:${withdrawalId}:APPROVED_WITHDRAWAL_DEBIT`,
+			userAccountId:'user-ledger',payoutAccountId:'withdrawal-clearing',feeAccountId:'withdrawal-fee',
+			grossAmount:new Prisma.Decimal('30000.00'),netPayout:new Prisma.Decimal('27000.00'),feeAmount:new Prisma.Decimal('3000.00'),
+		}));
 		expect(mocks.postDoubleEntry).not.toHaveBeenCalled();
 		const processing=await POST(request('PROCESS'));
 		expect(processing.status).toBe(200);
 		expect(current.status).toBe(FundingStatus.PROCESSING);
 		expect(mocks.postDoubleEntry).not.toHaveBeenCalled();
 
-		mocks.requireAdmin.mockResolvedValue({id:'admin-1'});
-		const completionInitiated=await POST(request('COMPLETE',{processingReference:'bank-ref-123',confirmExternalProcessing:true}));
-		expect(completionInitiated.status).toBe(202);
-		expect(current.status).toBe(FundingStatus.PROCESSING);
-		expect(mocks.postWithdrawalDebitWithFee).not.toHaveBeenCalled();
-
-		mocks.requireAdmin.mockResolvedValue({id:'admin-2'});
 		const completed=await POST(request('COMPLETE',{processingReference:'bank-ref-123',confirmExternalProcessing:true}));
 		expect(completed.status).toBe(200);
 		expect(current.status).toBe(FundingStatus.COMPLETED);
 		expect(mocks.postWithdrawalDebitWithFee).toHaveBeenCalledOnce();
 	});
 
-	it('requires the same payout reference and a different administrator before a single ledger debit',async()=>{
+	it('requires confirmed payout reference and does not debit twice at completion',async()=>{
+		await POST(request('APPROVE'));
 		current.status=FundingStatus.PROCESSING;
 		const invalid=await POST(request('COMPLETE',{processingReference:'bank-ref-123'}));
 		expect(invalid.status).toBe(400);
 		expect(mocks.postDoubleEntry).not.toHaveBeenCalled();
-		const initiated=await POST(request('COMPLETE',{processingReference:'bank-ref-123',confirmExternalProcessing:true}));
-		expect(initiated.status).toBe(202);
-		expect(mocks.postWithdrawalDebitWithFee).not.toHaveBeenCalled();
-		const selfApproval=await POST(request('COMPLETE',{processingReference:'bank-ref-123',confirmExternalProcessing:true}));
-		expect(selfApproval.status).toBe(403);
-		mocks.requireAdmin.mockResolvedValue({id:'admin-2'});
-		const changedReference=await POST(request('COMPLETE',{processingReference:'different-ref-456',confirmExternalProcessing:true}));
-		expect(changedReference.status).toBe(409);
 		const completed=await POST(request('COMPLETE',{processingReference:'bank-ref-123',confirmExternalProcessing:true}));
 		const body=await completed.json();
 		expect(completed.status).toBe(200);
 		expect(body.status).toBe(FundingStatus.COMPLETED);
 		expect(body.processingReference).toBe('bank-ref-123');
 		expect(mocks.postWithdrawalDebitWithFee).toHaveBeenCalledTimes(1);
-		expect(mocks.postWithdrawalDebitWithFee).toHaveBeenCalledWith(tx,expect.objectContaining({
-			reference:`FUNDING:${withdrawalId}:EXTERNAL_WITHDRAWAL`,userAccountId:'user-ledger',
-			payoutAccountId:'withdrawal-clearing',feeAccountId:'withdrawal-fee',
-			grossAmount:new Prisma.Decimal('30000.00'),netPayout:new Prisma.Decimal('27000.00'),feeAmount:new Prisma.Decimal('3000.00'),
-		}));
 		expect(mocks.getRealWithdrawableBalance).toHaveBeenCalledWith(tx,'user-1',new Prisma.Decimal('100000.00'),withdrawalId);
 	});
 
-	it('does not advance or debit a withdrawal when a concurrent approval claim wins',async()=>{
+	it('rolls back the approval debit when a concurrent status update wins',async()=>{
 		tx.fundingRequest.updateMany.mockResolvedValueOnce({count:0});
 		const response=await POST(request('APPROVE'));
 		expect(response.status).toBe(409);
 		expect(current.status).toBe(FundingStatus.PENDING_REVIEW);
-		expect(mocks.postWithdrawalDebitWithFee).not.toHaveBeenCalled();
+		expect(mocks.postWithdrawalDebitWithFee).toHaveBeenCalledOnce();
 	});
 
-	it('does not complete a withdrawal that would consume paper-trading collateral',async()=>{
-		current.status=FundingStatus.PROCESSING;
+	it('does not approve a withdrawal that would consume paper-trading collateral',async()=>{
 		mocks.getRealWithdrawableBalance.mockResolvedValue(new Prisma.Decimal('10.00'));
 
-		const response=await POST(request('COMPLETE',{processingReference:'bank-ref-123',confirmExternalProcessing:true}));
+		const response=await POST(request('APPROVE'));
 
 		expect(response.status).toBe(409);
 		expect(mocks.postWithdrawalDebitWithFee).not.toHaveBeenCalled();
 	});
 
-	it('requires the $300 reserve to remain available after the completed payout',async()=>{
-		current.status=FundingStatus.PROCESSING;
+	it('requires the $300 reserve to remain available after approval',async()=>{
 		mocks.getRealWithdrawableBalance.mockResolvedValue(new Prisma.Decimal('30299.99'));
 
-		const blocked=await POST(request('COMPLETE',{processingReference:'bank-ref-123',confirmExternalProcessing:true}));
+		const blocked=await POST(request('APPROVE'));
 		expect(blocked.status).toBe(409);
 		expect(mocks.postWithdrawalDebitWithFee).not.toHaveBeenCalled();
 
 		mocks.getRealWithdrawableBalance.mockResolvedValue(new Prisma.Decimal('30300.00'));
-		const initiated=await POST(request('COMPLETE',{processingReference:'bank-ref-123',confirmExternalProcessing:true}));
-		expect(initiated.status).toBe(202);
-		mocks.requireAdmin.mockResolvedValue({id:'admin-2'});
-		const completed=await POST(request('COMPLETE',{processingReference:'bank-ref-123',confirmExternalProcessing:true}));
-		expect(completed.status).toBe(200);
+		const approved=await POST(request('APPROVE'));
+		expect(approved.status).toBe(200);
 		expect(mocks.postWithdrawalDebitWithFee).toHaveBeenCalledTimes(1);
 	});
 
@@ -205,10 +181,9 @@ describe('administrator withdrawal lifecycle',()=>{
 		expect(mocks.postWithdrawalDebitWithFee).not.toHaveBeenCalled();
 	});
 
-	it('uses a serializable transaction and prevents completion when other reservations consume the balance',async()=>{
-		current.status=FundingStatus.PROCESSING;
+	it('uses a serializable transaction and prevents approval when other reservations consume the balance',async()=>{
 		mocks.getRealWithdrawableBalance.mockResolvedValue(new Prisma.Decimal('10.00'));
-		const response=await POST(request('COMPLETE',{processingReference:'bank-ref-123',confirmExternalProcessing:true}));
+		const response=await POST(request('APPROVE'));
 		expect(response.status).toBe(409);
 		expect(mocks.postDoubleEntry).not.toHaveBeenCalled();
 		expect(mocks.transaction).toHaveBeenCalledWith(expect.any(Function),expect.objectContaining({isolationLevel:Prisma.TransactionIsolationLevel.Serializable}));

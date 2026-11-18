@@ -29,7 +29,7 @@ export async function POST(request:Request,{params}:{params:Promise<{id:string}>
 			if(!current)throw new Error('WITHDRAWAL_NOT_FOUND');
 			if(!cancellable.includes(current.status))throw new Error('WITHDRAWAL_NOT_CANCELLABLE');
 			let refundReference:string|null=null;
-			if([FundingStatus.APPROVED,FundingStatus.PROCESSING].includes(current.status)){
+			if(current.status===FundingStatus.APPROVED||current.status===FundingStatus.PROCESSING){
 				const debitReference=`FUNDING:${current.id}:APPROVED_WITHDRAWAL_DEBIT`;
 				const debit=await tx.ledgerTransaction.findUnique({where:{reference:debitReference},select:{id:true}});
 				if(debit){
