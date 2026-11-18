@@ -144,11 +144,11 @@ New identity submissions use Aurevia Verify exclusively and require an administr
 
 The canonical tool inventory is [`tools/toolchain.json`](tools/toolchain.json). It records versions, purposes, installation and verification steps, and the environments where each tool is used. Project-local versions are locked by `package-lock.json`; no global JavaScript packages are needed.
 
-From a fresh clone or extracted ZIP, open a terminal in `Aurevia-Exchange-main/aurevia` (the directory containing `package.json`). Install and select Node.js 22.19.0 using your existing version manager; for nvm, for example:
+From a fresh clone or extracted ZIP, open a terminal in `Aurevia/aurevia` (the directory containing `package.json`). Install and select Node.js 22.19.0 using your existing version manager; for nvm, for example:
 
 ```sh
 git clone https://github.com/stevenken161-cloud/Aurevia.git
-cd Aurevia/Aurevia-Exchange-main/aurevia
+cd Aurevia/Aurevia/aurevia
 nvm install 22.19.0
 nvm use 22.19.0
 node --version
@@ -159,7 +159,7 @@ npm run tools:verify
 
 The setup command checks the exact pinned runtime and npm 10.x, installs dependencies with `npm ci --include=dev`, generates Prisma Client, installs the Playwright-managed Chromium and available Linux system dependencies, validates the tool manifest and verifies a headless browser launch. Linux system libraries are installed only when root or passwordless sudo is available; otherwise setup prints the authorized manual command. To explicitly request Linux system dependencies, use `npm run setup -- --with-deps`. Firefox and WebKit are optional: `npm run browsers:install -- --all`.
 
-The repository-root `.devcontainer/devcontainer.json` pins Node.js 22.19.0, provides Docker CLI access in Codespaces, and runs the same setup command after creation. Rebuild the container after configuration changes. Git is needed for cloning and contribution workflows but not for a ZIP download. The PostgreSQL test image provides `psql` and `pg_isready`; host-installed PostgreSQL client utilities are not required.
+The repository-root `.devcontainer/devcontainer.json` pins Node.js 22.19.0, provides Docker CLI access in Codespaces, and runs the same setup command after creation. Opening a fresh download in a compatible Dev Container automatically installs the locked npm dependencies, Prisma Client, and Playwright Chromium. Rebuild the container after configuration changes. A regular ZIP does not contain machine-specific `node_modules`, browser binaries, Docker, or PostgreSQL; run `npm run setup` after installing the pinned Node.js runtime to restore the project-local tools. Git is needed for cloning and contribution workflows but not for a ZIP download. The PostgreSQL test image provides `psql` and `pg_isready`; host-installed PostgreSQL client utilities are not required.
 
 Copy `.env.example` to `.env` without overwriting an existing local file (`cp -n .env.example .env` on Linux/macOS/WSL2) and configure only local development values. Use a disposable local PostgreSQL database; never use production database URLs or credentials in local setup, tests, or builds. Setup does not read or require production credentials and does not run database migrations. Configure application integrations only when needed.
 
