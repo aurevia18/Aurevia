@@ -1,5 +1,6 @@
 import type {LiveMarketAsset,MarketCandle,MarketQuote} from '../live-market';
 import {readMarketProviderErrorDetails,sanitizeMarketProviderErrorDetails,type MarketProviderErrorDetails} from './market-data-error';
+import {aggregateChartCandles,normalizeChartCandles} from '@/lib/chart-candles';
 
 export class FinnhubMarketDataError extends Error {
 	constructor(
@@ -88,13 +89,14 @@ export async function getFinnhubQuote(asset:LiveMarketAsset,apiKey:string,fetche
 }
 
 const resolutionByInterval:Record<string,string>={'1m':'1','5m':'5','15m':'15','30m':'30','1h':'60','1d':'D','1wk':'W','1mo':'M'};
-const daysByRange:Record<string,number>={'1d':1,'5d':5,'1mo':31,'3mo':92,'1y':365,'3y':1096,'5y':1826,max:3650};
+const daysByRange:Record<string,number>={'1d':1,'5d':5,'1mo':31,'3mo':92,'1y':366,'5y':1827};
 
 export async function getFinnhubHistory(asset:LiveMarketAsset,range:string,interval:string,apiKey:string,fetcher:typeof fetch=fetch){
 	const now=Math.floor(Date.now()/1000);
 	const start=range==='ytd'?Date.UTC(new Date().getUTCFullYear(),0,1)/1000:now-(daysByRange[range]??1)*86400;
 	const symbol=providerSymbol(asset);
-	const query=new URLSearchParams({symbol,resolution:resolutionByInterval[interval]??'D',from:String(Math.floor(start)),to:String(now)});
+	const providerInterval=interval==='4h'?'1h':interval;
+	const query=new URLSearchParams({symbol,resolution:resolutionByInterval[providerInterval]??'D',from:String(Math.floor(start)),to:String(now)});
 	const candleEndpoint=asset.type==='CRYPTO'?'crypto/candle':'stock/candle';
 	const data=await request(`${candleEndpoint}?${query}`,apiKey,fetcher);
 	if(data.s!=='ok'||!Array.isArray(data.t)||!Array.isArray(data.o)||!Array.isArray(data.h)||!Array.isArray(data.l)||!Array.isArray(data.c)){
@@ -109,5 +111,10 @@ export async function getFinnhubHistory(asset:LiveMarketAsset,range:string,inter
 		candles.push({time,open,high,low,close,volume});
 	}
 	if(!candles.length)throw new FinnhubMarketDataError(`Finnhub has no valid historical data for ${asset.id}.`,503);
-	return {quote:null,candles,source:'Finnhub'};
+	const normalized=normalizeChartCandles(candles);
+	return {
+		quote:null,
+		candles:interval==='4h'?aggregateChartCandles(normalized,'4h'):normalized,
+		source:'Finnhub',
+	};
 }

@@ -12,7 +12,7 @@ export type AlpacaStockQuote={
 };
 
 export type AlpacaStockBar={time:string;open:number;high:number;low:number;close:number;volume:number|null};
-export type AlpacaStockBarTimeframe='1Min'|'5Min'|'15Min'|'1Hour'|'1Day';
+export type AlpacaStockBarTimeframe='1Min'|'5Min'|'15Min'|'30Min'|'1Hour'|'4Hour'|'1Day'|'1Week'|'1Month';
 
 export class AlpacaStockMarketDataError extends Error{
 	readonly provider='Alpaca';

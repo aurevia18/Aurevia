@@ -205,35 +205,49 @@ describe('Finnhub market service',()=>{
 		}
 		expect(fetcher).toHaveBeenCalledTimes(4);
 		expect(fetcher.mock.calls.every(([url])=>String(url).includes('feed=iex'))).toBe(true);
-		expect(fetcher.mock.calls.every(([url])=>String(url).includes('timeframe=1Min'))).toBe(true);
+		expect(fetcher.mock.calls.every(([url])=>String(url).includes('timeframe=1Day'))).toBe(true);
 	});
 
-	it('maps all requested chart intervals to Alpaca bar timeframes',async()=>{
+	it('maps all twelve chart intervals to provider-backed Alpaca bars',async()=>{
 		const fetcher=vi.fn().mockImplementation(()=>Promise.resolve(new Response(JSON.stringify({
 			bars:[{t:'2026-10-15T14:00:00Z',o:188,h:192,l:187,c:190,v:10}],
 		}),{status:200})));
 		const asset={id:'ALPACA_INTERVAL_TEST',ticker:'AAPL',name:'Apple interval test',type:'STOCK' as const,currency:'USD'};
 		const options={apiKey:'alpaca-interval-key',apiSecret:'alpaca-interval-secret',fetcher};
 		const expected:Array<[TimeframeId,string]>=[
-			['1d','1Min'],['5d','5Min'],['1m','15Min'],['1h','1Hour'],['3m','1Day'],
+			['1m','1Min'],['5m','5Min'],['15m','15Min'],['30m','30Min'],['1h','1Hour'],
+			['4h','1Hour'],['1d','1Day'],['1w','1Week'],['1mo','1Month'],['ytd','1Day'],['1y','1Day'],['5y','1Week'],
 		];
 		for(const [timeframe] of expected)await getMarketHistory(asset,timeframe,'',options);
 		const timeframes=fetcher.mock.calls.map(([url])=>new URL(String(url)).searchParams.get('timeframe'));
 		expect(timeframes).toEqual(expected.map(([,value])=>value));
 	});
 
-	it('maps Finnhub minute, hourly, and daily resolutions consistently',async()=>{
+	it('maps all twelve chart intervals to Finnhub-supported resolutions',async()=>{
 		const fetcher=vi.fn().mockImplementation(()=>Promise.resolve(new Response(JSON.stringify({
 			s:'ok',t:[Math.floor(Date.now()/1000)],o:[188],h:[192],l:[187],c:[190],v:[10],
 		}),{status:200})));
 		vi.stubGlobal('fetch',fetcher);
 		const asset={id:'FINNHUB_INTERVAL_TEST',ticker:'AAPL',name:'Apple interval test',type:'STOCK' as const,currency:'USD'};
 		const expected:Array<[TimeframeId,string]>=[
-			['1d','1'],['5d','5'],['1m','15'],['1h','60'],['3m','D'],
+			['1m','1'],['5m','5'],['15m','15'],['30m','30'],['1h','60'],
+			['4h','60'],['1d','D'],['1w','W'],['1mo','M'],['ytd','D'],['1y','D'],['5y','W'],
 		];
 		for(const [timeframe] of expected)await getMarketHistory(asset,timeframe,'finnhub-interval-key');
 		const resolutions=fetcher.mock.calls.map(([url])=>new URL(String(url)).searchParams.get('resolution'));
 		expect(resolutions).toEqual(expected.map(([,value])=>value));
+	});
+
+	it('aggregates Finnhub hourly candles into UTC-aligned four-hour OHLCV bars',async()=>{
+		const start=Date.parse('2026-11-18T08:00:00Z')/1000;
+		const fetcher=vi.fn().mockResolvedValue(new Response(JSON.stringify({
+			s:'ok',t:[start,start+3_600,start+7_200,start+10_800],
+			o:[10,11,12,13],h:[12,13,14,15],l:[9,10,11,12],c:[11,12,13,14],v:[2,3,4,5],
+		}),{status:200}));
+		vi.stubGlobal('fetch',fetcher);
+		const history=await getMarketHistory({id:'FINNHUB_4H_TEST',ticker:'AAPL',name:'Four hour test',type:'STOCK',currency:'USD'},'4h','four-hour-test-key');
+		expect(history.candles).toEqual([{time:start,open:10,high:15,low:9,close:14,volume:14}]);
+		expect(new URL(String(fetcher.mock.calls[0][0])).searchParams.get('resolution')).toBe('60');
 	});
 
 	it('falls back from failed Alpaca history to Finnhub and exposes both provider results',async()=>{
@@ -265,7 +279,7 @@ describe('Finnhub market service',()=>{
 			return Promise.resolve(new Response('{}',{status:401}));
 		});
 		const asset={id:'NO_FABRICATED_HISTORY_TEST',ticker:'AAPL',name:'Apple failure test',type:'STOCK' as const,currency:'USD'};
-		await expect(getMarketHistory(asset,'5d','finnhub-invalid-key',{
+		await expect(getMarketHistory(asset,'5m','finnhub-invalid-key',{
 			apiKey:'alpaca-failure-key',apiSecret:'alpaca-failure-secret',fetcher,
 		})).rejects.toMatchObject({
 			status:503,

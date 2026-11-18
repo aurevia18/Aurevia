@@ -2582,12 +2582,6 @@ section.floating-support-panel{
 }
 .crypto-trade-refresh:hover{background:rgba(212,167,44,.16)}
 
-.price-chart-shell{
-  border-radius:12px;
-  background:rgba(0,0,0,.2);
-  border:1px solid rgba(255,255,255,.04);
-}
-
 .ribbon-disclaimer,.home-hero-note,.paper-environment-footer{display:none!important}
 
 /* Global rotating testimonials */
@@ -5101,7 +5095,7 @@ html[data-theme="light"] .user-tier-progress-link{color:#725723}
 .home-root.home-motion-ready>.home-section,.home-root.home-motion-ready>.experience-section,.home-root.home-motion-ready>.preview-section,.home-root.home-motion-ready>.education-section,.home-root.home-motion-ready>.home-cta{opacity:0;transform:translate3d(0,16px,0);transition:opacity .55s ease,transform .55s cubic-bezier(.2,.7,.25,1)}
 .home-root.home-motion-ready>.home-section.is-revealed,.home-root.home-motion-ready>.experience-section.is-revealed,.home-root.home-motion-ready>.preview-section.is-revealed,.home-root.home-motion-ready>.education-section.is-revealed,.home-root.home-motion-ready>.home-cta.is-revealed{opacity:1;transform:translate3d(0,0,0)}
 .market-stage,.market-instrument,.trade-chart-panel,.trade-orderbook,.investment-opportunity{transition:border-color .22s ease,box-shadow .22s ease,background-color .22s ease}
-.price-chart-shell,.trade-live-chart{animation:market-chart-entrance .35s ease-out both}
+.trade-live-chart{animation:market-chart-entrance .35s ease-out both}
 .investment-opportunity{position:relative;isolation:isolate;overflow:hidden;background:radial-gradient(ellipse at 100% 0,rgba(197,164,107,.075),transparent 38%),rgba(255,255,255,.018)}
 .investment-opportunity:after{position:absolute;z-index:-1;top:10px;right:10px;width:62px;height:62px;border:1px solid rgba(197,164,107,.17);border-radius:50%;box-shadow:0 0 0 9px rgba(197,164,107,.025),0 0 0 19px rgba(143,179,154,.018);content:"";pointer-events:none;transform:rotateX(58deg) rotateY(-14deg)}
 .trade-terminal .card:hover{transform:none}
@@ -5128,7 +5122,7 @@ html[data-theme="light"] .home-market-depth:has(.market-depth-canvas){opacity:.1
 @media(prefers-reduced-motion:reduce){
 	.home-market-depth,.home-root.home-motion-ready>.home-section,.home-root.home-motion-ready>.experience-section,.home-root.home-motion-ready>.preview-section,.home-root.home-motion-ready>.education-section,.home-root.home-motion-ready>.home-cta,.card,.investment-opportunity,.market-instrument{transition:none!important}
 	.home-root.home-motion-ready>.home-section,.home-root.home-motion-ready>.experience-section,.home-root.home-motion-ready>.preview-section,.home-root.home-motion-ready>.education-section,.home-root.home-motion-ready>.home-cta{opacity:1;transform:none}
-	.price-chart-shell,.trade-live-chart,.startup-emblem svg{animation:none}
+	.trade-live-chart,.startup-emblem svg{animation:none}
 }
 
 /* Public stories */

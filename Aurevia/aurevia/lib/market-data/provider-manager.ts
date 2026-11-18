@@ -7,6 +7,7 @@ import {AlphaVantageMarketProvider} from '@/lib/providers/alpha-vantage-market-d
 import {FmpMarketProvider} from '@/lib/providers/fmp-market-data';
 import {TwelveDataMarketProvider} from '@/lib/providers/twelve-data-market-data';
 import type {MarketProviderHttpError} from '@/lib/providers/market-data-http';
+import {aggregateChartCandles,normalizeChartCandles} from '@/lib/chart-candles';
 
 export type MarketProviderKeys={
 	twelveDataApiKey:string;
@@ -113,9 +114,14 @@ export async function getConfiguredMarketHistory(
 ):Promise<{candles:MarketCandle[];source:string}|null>{
 	const selection=TIMEFRAMES.find(item=>item.id===timeframe)??TIMEFRAMES[0];
 	const end=new Date();
-	const days:Record<TimeframeId,number>={'1d':1,'1h':1,'5d':5,'1m':31,'3m':92,'ytd':Math.ceil((end.getTime()-Date.UTC(end.getUTCFullYear(),0,1))/86_400_000),'1y':366,'3y':1097,'5y':1827,'max':3650};
-	const start=new Date(end.getTime()-days[timeframe]*86_400_000);
-	const candidates=adapters(keys).filter(adapter=>adapter.categories.includes(asset.type)&&adapter.getHistory&&(!adapter.historyIntervals||adapter.historyIntervals.includes(selection.interval)));
+	const daysByRange:Record<string,number>={'1d':1,'5d':5,'1mo':31,'3mo':92,'1y':366,'5y':1827};
+	const start=selection.range==='ytd'
+		?new Date(Date.UTC(end.getUTCFullYear(),0,1))
+		:new Date(end.getTime()-(daysByRange[selection.range]??1)*86_400_000);
+	const candidates=adapters(keys).filter(adapter=>adapter.categories.includes(asset.type)&&adapter.getHistory&&(
+		!adapter.historyIntervals||adapter.historyIntervals.includes(selection.interval)||
+		(['1wk','1mo'].includes(selection.interval)&&adapter.historyIntervals.includes('1d'))
+	));
 	if(!candidates.length)return null;
 	if(process.env.NODE_ENV==='production'&&!keys.productionLicenseConfirmed)return null;
 	for(const adapter of candidates){
@@ -124,7 +130,15 @@ export async function getConfiguredMarketHistory(
 		const cached=historyCache.get(cacheKey);
 		if(cached)return {candles:await cached,source:adapter.name};
 		try{
-			const pending=attempt(adapter,()=>adapter.getHistory!(asset,start.toISOString(),end.toISOString(),selection.interval));
+			const pending=attempt(adapter,async()=>{
+				const sourceInterval=selection.interval==='4h'?'1h':selection.interval;
+				const candles=await adapter.getHistory!(asset,start.toISOString(),end.toISOString(),sourceInterval);
+				if(selection.interval==='4h')return aggregateChartCandles(candles,'4h');
+				if(adapter.historyIntervals&&!adapter.historyIntervals.includes(selection.interval)&&(['1wk','1mo'].includes(selection.interval))){
+					return aggregateChartCandles(candles,selection.interval as '1wk'|'1mo');
+				}
+				return normalizeChartCandles(candles);
+			});
 			historyCache.set(cacheKey,pending);
 			let candles:MarketCandle[];
 			try{candles=await pending}catch(error){historyCache.delete(cacheKey);throw error}

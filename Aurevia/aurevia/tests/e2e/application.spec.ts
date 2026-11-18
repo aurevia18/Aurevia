@@ -577,7 +577,7 @@ test('market view labels internal reference prices when no live provider is conf
 	expect(historyResponse.ok()).toBe(true);
 	expect((await historyResponse.json()).source).toBe('Aurevia Internal');
 	await page.goto('/markets');
-	await expect(page.getByRole('img',{name:'Interactive live market candlestick and volume chart'})).toBeVisible();
+	await expect(page.getByRole('status').filter({hasText:'Provider-backed candles are unavailable'})).toBeVisible();
 	await expect(page.locator('.live-market-heading').first()).toContainText('INDICATIVE PRICES');
 	await expect(page.locator('.live-source-status')).toContainText('Price status: Indicative');
 	await expect(page.locator('.live-disclaimer')).toContainText('Internal reference prices are indicative, not executable quotes.');
@@ -2045,11 +2045,11 @@ test('DEMO trading supports cash-backed buy and owned-unit sell execution',async
 		const instrument=tradePage.getByRole('button',{name:new RegExp(symbol.replace('/','\\/'))});
 		await expect(instrument).toBeVisible();
 		await instrument.click();
-		await expect(tradePage.getByRole('img',{name:'Market candlestick chart'})).toBeVisible();
-		await expect(tradePage.getByText('DEMO price feed · internal reference prices for practice orders.')).toBeVisible();
+		await expect(tradePage.locator('.trade-chart-unavailable')).toContainText('Provider market history is unavailable for this instrument.');
+		await expect(tradePage.getByText('Provider market data is shown independently from Demo account prices and execution.')).toBeVisible();
 		const orderResponsePromise=tradePage.waitForResponse(response=>response.url().endsWith('/api/orders')&&response.request().method()==='POST');
 		await tradePage.getByRole('button',{name:'Place BUY order'}).click();
-		await expect(tradePage.getByRole('status')).toContainText('Order filled.');
+		await expect(tradePage.locator('.trade-message')).toContainText('Order filled.');
 		const orderResponse=await orderResponsePromise;
 		expect(orderResponse.ok()).toBeTruthy();
 		const order=await orderResponse.json();
@@ -2058,7 +2058,7 @@ test('DEMO trading supports cash-backed buy and owned-unit sell execution',async
 		await tradePage.getByRole('button',{name:'Sell',exact:true}).click();
 		const sellResponsePromise=tradePage.waitForResponse(response=>response.url().endsWith('/api/orders')&&response.request().method()==='POST');
 		await tradePage.getByRole('button',{name:'Place SELL order'}).click();
-		await expect(tradePage.getByRole('status')).toContainText('Order filled.');
+		await expect(tradePage.locator('.trade-message')).toContainText('Order filled.');
 		const sellResponse=await sellResponsePromise;
 		expect(sellResponse.ok()).toBeTruthy();
 		expect((await sellResponse.json()).status).toBe('FILLED');
@@ -2103,7 +2103,7 @@ test('dashboard presents the current account portfolio hub',async({page})=>{
 	await expect(page.getByRole('link',{name:/Deposit/})).toHaveCount(0);
 	await expect(page.getByRole('link',{name:'Order history'})).toHaveAttribute('href','/orders');
 	await expect(page.getByRole('button',{name:'1D'})).toBeVisible();
-	await expect(page.getByRole('button',{name:'ALL',exact:true})).toBeVisible();
+	await expect(page.getByRole('button',{name:'5Y',exact:true})).toBeVisible();
 });
 
 test('closing a DEMO position records a sell execution, reconciles portfolio, and notifies',async({page})=>{

@@ -14,11 +14,17 @@ describe('market-data provider adapters',()=>{
 			}),{status:200}))
 			.mockResolvedValueOnce(new Response(JSON.stringify({values:[{
 				datetime:'2026-11-04',open:'190',high:'193',low:'189',close:'192.5',volume:'1000',
+			}]}),{status:200}))
+			.mockResolvedValueOnce(new Response(JSON.stringify({values:[{
+				datetime:'2026-11-04',open:'190',high:'193',low:'189',close:'192.5',volume:'1000',
 			}]}),{status:200}));
 		const provider=new TwelveDataMarketProvider({apiKey:'twelve-test-secret',fetcher});
 
 		await expect(provider.getQuote(asset)).resolves.toMatchObject({price:192.5,changePercent:1.3158,source:'Twelve Data'});
 		await expect(provider.getHistory(asset,'2026-11-01','2026-11-05','1d')).resolves.toEqual([
+			{time:expect.any(Number),open:190,high:193,low:189,close:192.5,volume:1000},
+		]);
+		await expect(provider.getHistory(asset,'2026-11-01','2026-11-05','4h')).resolves.toEqual([
 			{time:expect.any(Number),open:190,high:193,low:189,close:192.5,volume:1000},
 		]);
 		expect(fetcher.mock.calls[0][0]).toContain('apikey=twelve-test-secret');

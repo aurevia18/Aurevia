@@ -18,7 +18,7 @@ export function getInternalInstrumentSymbols(assetId:string){
 	return instrumentSymbols[assetId.toUpperCase()]||[];
 }
 
-const timeframeDays:Record<TimeframeId,number>={'1d':1,'1h':1,'5d':5,'1m':30,'3m':90,'ytd':365,'1y':365,'3y':1095,'5y':1825,'max':3650};
+const timeframeDays:Record<TimeframeId,number>={'1m':1,'5m':5,'15m':31,'30m':92,'1h':366,'4h':366,'1d':1827,'1w':1827,'1mo':1827,'ytd':365,'1y':366,'5y':1827};
 
 function hash(value:string){
 	let result=2166136261;
@@ -109,8 +109,8 @@ function referenceMarketQuote(asset:LiveMarketAsset,now:number):MarketQuote{
 function marketHistoryFromQuote(asset:LiveMarketAsset,timeframe:TimeframeId,quote:MarketQuote){
 	const span=timeframeDays[timeframe]*86_400;
 	const interval=TIMEFRAMES.find(item=>item.id===timeframe)?.interval??'1d';
-	const [,amount,unit]=interval.match(/^(\d+)(m|h|d|w|mo)$/)||[];
-	const unitSeconds:Record<string,number>={m:60,h:3_600,d:86_400,w:604_800,mo:2_592_000};
+	const [,amount,unit]=interval.match(/^(\d+)(m|h|d|w|wk|mo)$/)||[];
+	const unitSeconds:Record<string,number>={m:60,h:3_600,d:86_400,w:604_800,wk:604_800,mo:2_592_000};
 	const step=Number(amount)*unitSeconds[unit];
 	const count=Math.max(1,Math.ceil(span/step));
 	const lastTime=Math.floor(Date.now()/1000/step)*step;

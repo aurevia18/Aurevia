@@ -10,7 +10,7 @@ export async function GET(request:Request,{params}:{params:Promise<{symbol:strin
   const {symbol}=await params;
   const asset=getMarketAsset(decodeURIComponent(symbol));
   if(!asset)return NextResponse.json({error:'Unsupported market symbol.'},{status:404});
-  const requested=new URL(request.url).searchParams.get('timeframe')||'1d';
+  const requested=new URL(request.url).searchParams.get('timeframe')||'1m';
   if(!TIMEFRAMES.some(timeframe=>timeframe.id===requested))return NextResponse.json({error:'Unsupported timeframe.'},{status:400});
   try{
     const config=getServerConfiguration();

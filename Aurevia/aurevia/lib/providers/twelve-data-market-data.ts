@@ -37,7 +37,7 @@ export class TwelveDataMarketProvider{
 	}
 
 	async getHistory(asset:LiveMarketAsset,from:string,to:string,interval:string):Promise<MarketCandle[]>{
-		const intervalMap:Record<string,string>={'1m':'1min','5m':'5min','15m':'15min','30m':'30min','1h':'1h','1d':'1day','1wk':'1week','1mo':'1month'};
+		const intervalMap:Record<string,string>={'1m':'1min','5m':'5min','15m':'15min','30m':'30min','1h':'1h','4h':'4h','1d':'1day','1wk':'1week','1mo':'1month'};
 		const url=new URL('https://api.twelvedata.com/time_series');
 		url.search=new URLSearchParams({
 			symbol:symbolFor(asset),interval:intervalMap[interval]||'1day',

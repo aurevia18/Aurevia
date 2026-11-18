@@ -17,7 +17,7 @@ import DemoAiTradingPanel from '@/components/DemoAiTradingPanel';
 import DemoAccountControls from '@/components/DemoAccountControls';
 import AccountTierBadge from '@/components/AccountTierBadge';
 import {useAccountTier} from '@/components/useAccountTier';
-import {DEFAULT_WATCHLIST,MARKET_ASSETS,MARKET_UI_REFRESH_INTERVAL_MS,isExternalMarketDataSource,type MarketCandle,type MarketQuote,type TimeframeId} from '@/lib/live-market';
+import {DEFAULT_WATCHLIST,MARKET_ASSETS,MARKET_UI_REFRESH_INTERVAL_MS,TIMEFRAMES,isExternalMarketDataSource,type MarketCandle,type MarketQuote,type TimeframeId} from '@/lib/live-market';
 import {formatUsd} from '@/lib/currency-format';
 import AureviaExchangeId from '@/components/AureviaExchangeId';
 
@@ -48,10 +48,6 @@ type MarketCategory='Favorites'|'Forex'|'Crypto'|'Stocks'|'Indices';
 const displayUsd=(value:string|null)=>value===null?'Unavailable':formatUsd(value);
 
 const categoryFilters:MarketCategory[]=['Favorites','Forex','Crypto','Stocks','Indices'];
-const timeframes:Array<{label:string;value:TimeframeId}>=[
-	{label:'1H',value:'1h'},{label:'1D',value:'1d'},{label:'1W',value:'5d'},{label:'1M',value:'1m'},
-	{label:'3M',value:'3m'},{label:'1Y',value:'1y'},{label:'ALL',value:'max'},
-];
 const allocationColors=['var(--theme-accent)','var(--theme-positive)','var(--theme-chart-2)','var(--theme-chart-3)','var(--theme-chart-4)','var(--theme-chart-5)'];
 
 function formatMarketPrice(value:number,currency:string){
@@ -98,11 +94,11 @@ function UserMetric({label,value,detail,active,icon:Icon}:{label:string;value:st
 	</article>;
 }
 
-function MarketChartPanel({selectedSymbol,quotes,internalInstrumentId,accountMode}:{selectedSymbol:string;quotes:Map<string,MarketQuote|QuoteError>;internalInstrumentId?:string;accountMode:'DEMO'|'REAL'}){
+function MarketChartPanel({selectedSymbol,quotes}:{selectedSymbol:string;quotes:Map<string,MarketQuote|QuoteError>}){
 	const [history,setHistory]=useState<HistoryResponse|null>(null);
 	const [loading,setLoading]=useState(false);
 	const [error,setError]=useState('');
-	const [timeframe,setTimeframe]=useState<TimeframeId>('1d');
+	const [timeframe,setTimeframe]=useState<TimeframeId>('1m');
 	const [historyRetry,setHistoryRetry]=useState(0);
 	useEffect(()=>{
 		let active=true;
@@ -113,32 +109,11 @@ function MarketChartPanel({selectedSymbol,quotes,internalInstrumentId,accountMod
 				const body=await response.json();
 				if(!response.ok)throw new Error(typeof body.error==='string'?body.error:'Market history is unavailable.');
 				const result=body as HistoryResponse;
-				if(accountMode==='REAL'){
-					if(!isExternalMarketDataSource(result.source)){
-						throw new Error('Provider historical data is unavailable in REAL mode; demo and internal candles were not used.');
-					}
-					if(active)setHistory(result);
-					return;
-				}
-				if(result.source==='Aurevia Internal'){
-					if(active)setHistory(await loadStoredDemoHistory(internalInstrumentId,timeframe));
-					return;
+				if(!isExternalMarketDataSource(result.source)){
+					throw new Error('Provider historical data is unavailable; internal and simulated candles are not shown as market history.');
 				}
 				if(active)setHistory(result);
 			}catch(exception){
-				if(accountMode==='DEMO'&&internalInstrumentId){
-					try{
-						const storedHistory=await loadStoredDemoHistory(internalInstrumentId,timeframe);
-						if(active)setHistory(storedHistory);
-						return;
-					}catch{
-						if(active){
-							setHistory(null);
-							setError('Provider history is unavailable and no saved demo candles exist for this range.');
-						}
-						return;
-					}
-				}
 				if(active){
 					setHistory(null);
 					setError(exception instanceof Error?exception.message:'Market history is unavailable.');
@@ -149,7 +124,7 @@ function MarketChartPanel({selectedSymbol,quotes,internalInstrumentId,accountMod
 		};
 		void load();
 		return()=>{active=false};
-	},[selectedSymbol,timeframe,internalInstrumentId,accountMode,historyRetry]);
+	},[selectedSymbol,timeframe,historyRetry]);
 	const quoteValue=quotes.get(selectedSymbol);
 	const quote=isQuote(quoteValue)?quoteValue:history?.quote;
 	return <section className="user-dashboard-panel user-market-chart-panel" aria-labelledby="user-market-overview">
@@ -157,24 +132,10 @@ function MarketChartPanel({selectedSymbol,quotes,internalInstrumentId,accountMod
 			<div><span className="user-dashboard-eyebrow">MARKET OVERVIEW</span><h2 id="user-market-overview">Market overview</h2><p>{quote?.asset.name||selectedSymbol}{quote?.updatedAt?` · Updated ${timeAgo(quote.updatedAt)}`:''}</p></div>
 			<div className="user-market-quote">{quote?<><strong>{formatMarketPrice(quote.price,quote.asset.currency)}</strong><span className={quote.changePercent>=0?'is-positive':'is-negative'}>{quote.changePercent>=0?'+':''}{quote.changePercent.toFixed(2)}%</span></>:<span className="user-dashboard-muted">Quote unavailable</span>}</div>
 		</header>
-		<div className="user-chart-toolbar"><div className="user-chart-timeframes" role="group" aria-label="Market chart range">{timeframes.map(item=><button key={item.value} type="button" aria-pressed={timeframe===item.value} className={timeframe===item.value?'is-selected':''} onClick={()=>setTimeframe(item.value)}>{item.label}</button>)}</div><Link href={`/markets?symbol=${encodeURIComponent(selectedSymbol)}`} className="user-dashboard-panel-link">Full market view <ExternalLink size={13}/></Link></div>
-		{history?<LivePriceChart candles={history.candles} quote={history.source==='Aurevia DEMO market feed'?undefined:quote??undefined} timeframe={timeframe} interval={history.interval} loading={loading} error={error}/>:loading?<div className="user-chart-empty" role="status">Loading market history…</div>:<div className="user-chart-empty" role={error?'alert':'status'}>{error||'No historical market data is available for this range.'}{error&&<button type="button" className="button-secondary mt-3" onClick={()=>setHistoryRetry(value=>value+1)}>Retry history</button>}</div>}
-		<p className="user-dashboard-footnote">Quotes may be delayed. DEMO prices are internal reference values; charts use available historical market data.</p>
+		<div className="user-chart-toolbar"><div className="user-chart-timeframes" role="group" aria-label="Market chart interval">{TIMEFRAMES.map(item=><button key={item.id} type="button" aria-pressed={timeframe===item.id} className={timeframe===item.id?'is-selected':''} onClick={()=>setTimeframe(item.id)}>{item.label}</button>)}</div><Link href={`/markets?symbol=${encodeURIComponent(selectedSymbol)}`} className="user-dashboard-panel-link">Full market view <ExternalLink size={13}/></Link></div>
+		{history?<LivePriceChart candles={history.candles} quote={quote??undefined} timeframe={timeframe} interval={history.interval} source={history.source} loading={loading} error={error}/>:loading?<div className="user-chart-empty" role="status">Loading market history…</div>:<div className="user-chart-empty" role={error?'alert':'status'}>{error||'No historical market data is available for this range.'}{error&&<button type="button" className="button-secondary mt-3" onClick={()=>setHistoryRetry(value=>value+1)}>Retry history</button>}</div>}
+		<p className="user-dashboard-footnote">Provider-backed charts are independent of Demo and Real account mode. Internal and simulated prices are not plotted as live market history.</p>
 	</section>;
-}
-
-async function loadStoredDemoHistory(instrumentId:string|undefined,timeframe:TimeframeId):Promise<HistoryResponse>{
-	if(!instrumentId)throw new Error('No configured demo instrument is available.');
-	const response=await fetch(`/api/candles?instrumentId=${encodeURIComponent(instrumentId)}&range=${timeframe}`,{cache:'no-store'});
-	if(!response.ok)throw new Error('Stored demo candles are unavailable.');
-	const rows=await response.json() as Array<{ts:string;open:string;high:string;low:string;close:string;volume:string|null}>;
-	const candles=rows.map(row=>({
-		time:Math.floor(new Date(row.ts).getTime()/1000),
-		open:Number(row.open),high:Number(row.high),low:Number(row.low),close:Number(row.close),
-		volume:row.volume===null||row.volume===''?null:Number(row.volume),
-	})).filter(candle=>Number.isFinite(candle.time)&&[candle.open,candle.high,candle.low,candle.close].every(value=>Number.isFinite(value)&&value>0));
-	if(candles.length<2)throw new Error('There is not enough stored demo history for this range.');
-	return {quote:null,candles,timeframe,interval:'1d',source:'Aurevia DEMO market feed'};
 }
 
 function AssetAllocation({overview}:{overview:Overview}){
@@ -280,7 +241,6 @@ export default function UserDashboardExperience(){
 	const toggleFavorite=useCallback((symbol:string)=>{
 		setFavorites(current=>current.includes(symbol)?current.filter(item=>item!==symbol):[...current,symbol]);
 	},[]);
-	const internalInstrumentId=overview?.internalMarketInstruments.find(item=>item.assetId===selectedSymbol)?.instrumentId;
 	const visibleRecentActivity=overview?.accountMode==='DEMO'
 		?overview.recentActivity.filter(item=>['trade','personal-trade','order','position'].includes(item.category))
 		:overview?.recentActivity||[];
@@ -361,7 +321,7 @@ export default function UserDashboardExperience(){
 			<FavoriteMarkets assets={favoriteAssets} quotes={quotes} onRemove={toggleFavorite}/>
 			<div className="user-dashboard-columns">
 				<div className="user-dashboard-primary">
-					<MarketChartPanel selectedSymbol={selectedSymbol} quotes={quotes} internalInstrumentId={internalInstrumentId} accountMode={overview.accountMode}/>
+					<MarketChartPanel selectedSymbol={selectedSymbol} quotes={quotes}/>
 					{overview.accountMode==='REAL'&&overview.activeInvestments.length>0&&<section className="user-dashboard-panel" aria-labelledby="user-live-investments-heading">
 						<header className="user-dashboard-panel-heading"><div><span className="user-dashboard-eyebrow">ACTIVE {overview.accountMode} MODE</span><h2 id="user-live-investments-heading">Live investments</h2><p>Per-second estimates use your recorded investment terms.</p></div><Link className="user-dashboard-panel-link" href="/investments">Investment activity <ArrowRight size={14}/></Link></header>
 						<div className="investment-live-grid">{overview.activeInvestments.map(investment=><InvestmentProgressCard key={investment.id} investment={investment} onMaturity={refreshOverview}/>)}</div>

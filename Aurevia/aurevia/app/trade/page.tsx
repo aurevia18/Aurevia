@@ -3,9 +3,8 @@ import { FormEvent, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import Nav from "@/components/Nav";
 import { useLocale } from "@/lib/i18n-context";
-import PriceChart from "@/components/PriceChart";
 import LivePriceChart from "@/components/LivePriceChart";
-import type {MarketQuote,TimeframeId} from "@/lib/live-market";
+import {TIMEFRAMES,getMarketAssetForTradingSymbol,isExternalMarketDataSource,type MarketQuote,type TimeframeId} from "@/lib/live-market";
 import { useTradingStore } from "@/lib/store";
 import { io, type Socket } from "socket.io-client";
 import { AlertCircle, CheckCircle2, X } from "lucide-react";
@@ -49,7 +48,6 @@ type TradeMessage={text:string;kind:'error'|'success'|'info'};
 const LIVE_TRADE_ASSET_IDS=["BTC","AAPL","MSFT","NVDA","AMZN","GOOGL","TSLA"];
 
 function normalizedSymbol(value:string){return value.toUpperCase().replace(/[^A-Z0-9]/g,"")}
-function isExternalMarketDataSource(source:string){return source==='Finnhub'||source.startsWith('Alpaca')}
 function isFailedOrder(order:Order){return order.status==='REJECTED'||order.status==='FAILED'}
 
 async function loadTradingMarkets(mode:"DEMO"|"REAL"):Promise<I[]>{
@@ -111,8 +109,10 @@ export default function Trade() {
   const [paperAvailableBalance,setPaperAvailableBalance]=useState(0);
   const [accountMode, setAccountMode] = useState<'DEMO'|'REAL'|'LOADING'>('LOADING');
   const [placing, setPlacing] = useState(false);
-  const [chartTimeframe,setChartTimeframe]=useState<TimeframeId>("1d");
+  const [chartTimeframe,setChartTimeframe]=useState<TimeframeId>("1m");
   const [liveCandles,setLiveCandles]=useState<Array<{time:number;open:number;high:number;low:number;close:number;volume:number|null}>>([]);
+  const [chartSource,setChartSource]=useState<string>();
+  const [demoChartQuote,setDemoChartQuote]=useState<MarketQuote>();
   const [chartLoading,setChartLoading]=useState(false);
   const [chartError,setChartError]=useState("");
   useEffect(()=>{
@@ -259,6 +259,7 @@ export default function Trade() {
     return () => {active=false;clearInterval(t);};
   }, [selected,accountMode]);
   const cur = items.find((i) => i.id === selected);
+  const chartAssetId=cur?.assetId||getMarketAssetForTradingSymbol(cur?.symbol||'')?.id;
   function selectInstrument(instrument:I){
     setSelected(instrument.id);
     if(accountMode==="REAL"&&instrument.assetType==="CRYPTO"&&type==="STOP"){
@@ -274,16 +275,19 @@ export default function Trade() {
     return p.side==="BUY"?(price-p.entryPrice)*p.quantity:(p.entryPrice-price)*p.quantity;
   };
   useEffect(()=>{
-    if(accountMode!=="REAL"||!cur?.assetId){
+    if(!chartAssetId||!['DEMO','REAL'].includes(accountMode)){
       setLiveCandles([]);
+      setChartSource(undefined);
       setChartLoading(false);
-      setChartError(accountMode==="REAL"?"A current market quote is unavailable for this instrument.":"");
+      setChartError(selected?"Provider market history is unavailable for this instrument.":"");
       return;
     }
     let active=true;
     setChartLoading(true);
     setChartError("");
-    fetch(`/api/live-markets/${encodeURIComponent(cur.assetId)}?timeframe=${chartTimeframe}`,{cache:"no-store"})
+    setLiveCandles([]);
+    setChartSource(undefined);
+    fetch(`/api/live-markets/${encodeURIComponent(chartAssetId)}?timeframe=${chartTimeframe}`,{cache:"no-store"})
       .then(async response=>{
         const result=await response.json();
         if(!response.ok)throw new Error(typeof result.error==="string"?result.error:"Market chart data is unavailable.");
@@ -291,11 +295,43 @@ export default function Trade() {
         if(!history.source||!isExternalMarketDataSource(history.source))throw new Error("Market chart data is unavailable.");
         return history;
       })
-      .then(result=>{if(active)setLiveCandles(result.candles);})
-      .catch(error=>{if(active){setLiveCandles([]);setChartError(error instanceof Error?error.message:"Market chart data is unavailable.");}})
+      .then(result=>{if(active){setLiveCandles(result.candles);setChartSource(result.source);}})
+      .catch(error=>{if(active){setLiveCandles([]);setChartSource(undefined);setChartError(error instanceof Error?error.message:"Market chart data is unavailable.");}})
       .finally(()=>{if(active)setChartLoading(false);});
-    return()=>{active=false;};
-  },[accountMode,cur?.assetId,chartTimeframe]);
+    const timer=window.setInterval(()=>{
+      if(document.visibilityState!=='visible')return;
+      fetch(`/api/live-markets/${encodeURIComponent(chartAssetId)}?timeframe=${chartTimeframe}`,{cache:"no-store"})
+        .then(async response=>{
+          const result=await response.json();
+          if(!response.ok)throw new Error(typeof result.error==="string"?result.error:"Market chart data is unavailable.");
+          const history=result as {candles:typeof liveCandles;source?:string};
+          if(!history.source||!isExternalMarketDataSource(history.source))throw new Error("Market chart data is unavailable.");
+          if(active){setLiveCandles(history.candles);setChartSource(history.source);setChartError("");}
+        })
+        .catch(error=>{if(active)setChartError(error instanceof Error?error.message:"Market chart data is unavailable.");});
+    },chartTimeframe==="1m"||chartTimeframe==="5m"?15_000:60_000);
+    return()=>{active=false;window.clearInterval(timer);};
+  },[accountMode,chartAssetId,chartTimeframe,selected]);
+  useEffect(()=>{
+    if(accountMode!=="DEMO"||!chartAssetId){setDemoChartQuote(undefined);return}
+    let active=true;
+    const loadQuote=async()=>{
+      try{
+        const response=await fetch(`/api/live-markets?symbols=${encodeURIComponent(chartAssetId)}`,{cache:"no-store"});
+        const result=await response.json() as {quotes?:Array<MarketQuote|{asset:MarketQuote['asset'];error:string}>};
+        if(!response.ok)throw new Error("Provider market quote is unavailable.");
+        const quote=result.quotes?.find(item=>"price"in item) as MarketQuote|undefined;
+        const age=quote?Date.now()-Date.parse(quote.updatedAt):Infinity;
+        if(!quote||!isExternalMarketDataSource(quote.source)||quote.isStale||age>5*60_000||age< -5_000)throw new Error("Provider market quote is unavailable.");
+        if(active)setDemoChartQuote(quote);
+      }catch{
+        if(active)setDemoChartQuote(undefined);
+      }
+    };
+    void loadQuote();
+    const timer=window.setInterval(()=>{if(document.visibilityState==='visible')void loadQuote()},30_000);
+    return()=>{active=false;window.clearInterval(timer);};
+  },[accountMode,chartAssetId]);
   const requestedQuantity = Number(qty);
   const enteredOrderPrice=Number(price);
   const realReferencePrice=type==="MARKET"
@@ -479,7 +515,7 @@ export default function Trade() {
                   </div>
                   <span className="status-pill">{accountMode==="REAL"?(cur?.liveQuote?"Market quote":"Quote unavailable"):translate('simulatedPrice')}</span>
                 </div>
-                {accountMode==="DEMO"&&<div className="sr-only">{translate('currentSimulatedPriceChart')}</div>}
+                {accountMode==="DEMO"&&<div className="sr-only">Provider market data is shown independently from Demo account prices and execution.</div>}
                 <div className="hidden">
                   <div className="mb-2 text-4xl font-black">
                   {cur?.price.toLocaleString(undefined, {
@@ -487,20 +523,15 @@ export default function Trade() {
                   })}
                   </div>
                 </div>
-                {accountMode==="REAL"?
-                  <div className="trade-live-chart">
-                    <div className="trade-chart-timeframes" role="group" aria-label="Chart timeframe">
-                      {(["1h","1d","5d","1m","3m","1y"] as TimeframeId[]).map(timeframe=><button type="button" key={timeframe} aria-pressed={chartTimeframe===timeframe} onClick={()=>setChartTimeframe(timeframe)}>{timeframe.toUpperCase()}</button>)}
-                    </div>
-                    {cur?.liveQuote?
-                      <LivePriceChart candles={liveCandles} quote={cur.liveQuote} timeframe={chartTimeframe} loading={chartLoading} error={dismissedChartError?'':chartError}/>
-                      :<div className="trade-chart-unavailable" role="status"><span>{chartError||"Waiting for a current market quote."}</span>{chartError&&!dismissedChartError&&<button type="button" aria-label="Dismiss chart notice" onClick={()=>setDismissedChartError(true)}><X size={15}/></button>}</div>}
-                    <p className="trade-chart-note">{cur?.liveQuote?`Quote updated ${new Date(cur.liveQuote.updatedAt).toLocaleTimeString()}`:"Current market prices are required for REAL account orders."}</p>
+                <div className="trade-live-chart">
+                  <div className="trade-chart-timeframes" role="group" aria-label="Chart interval">
+                    {TIMEFRAMES.map(item=><button type="button" key={item.id} aria-pressed={chartTimeframe===item.id} onClick={()=>setChartTimeframe(item.id)}>{item.label}</button>)}
                   </div>
-                  :<>
-                    <PriceChart price={cur?.price ?? 0} instrumentId={cur?.id}/>
-                    <p className="trade-chart-note">{translate('internalSimulatedMarket')}</p>
-                  </>}
+                  {chartAssetId?
+                    <LivePriceChart candles={liveCandles} quote={(accountMode==="REAL"?cur?.liveQuote:demoChartQuote)||undefined} timeframe={chartTimeframe} source={chartSource} loading={chartLoading} error={dismissedChartError?'':chartError}/>
+                    :<div className="trade-chart-unavailable" role="status"><span>{chartError||"Provider market data is unavailable for this instrument."}</span></div>}
+                  <p className="trade-chart-note">Provider market data is independent of Demo and Real account mode. It does not change order prices, balances, or execution.</p>
+                </div>
               </div>
               <div className="trade-orderbook">
                 <h3 className="font-bold">{accountMode==="REAL"?"Market quotes":translate('orderBook')} {accountMode==="DEMO"&&<small>{translate('demoFeedOnly')}</small>}</h3>

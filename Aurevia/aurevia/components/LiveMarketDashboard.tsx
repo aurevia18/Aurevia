@@ -14,7 +14,7 @@ import {setMarketWatchlistUserScope,useMarketWatchlists} from '@/lib/market-watc
 
 type QuoteError={asset:NonNullable<ReturnType<typeof getMarketAsset>>;error:string};
 type QuotesResponse={quotes:Array<MarketQuote|QuoteError>;source:string};
-type HistoryResponse={quote:MarketQuote|null;candles:MarketCandle[];timeframe:TimeframeId;interval:string;source?:string};
+type HistoryResponse={quote:MarketQuote|null;candles:MarketCandle[];timeframe:TimeframeId;interval:string;source:string};
 type ReturnMetric={label:string;days:number;value:number|null};
 type MarketAnalysis={summary:string;observations:Array<{symbol:string;observation:string}>;caveat:string};
 type MarketDataExplanation={symbol:string;dataType:'quote'|'history';status:'current_provider'|'stale_provider'|'internal_reference'|'unavailable';explanation:{explanation:string;recommendedAction:'refresh'|'configure_market_provider'|'try_later'|'contact_support';caveat:string}};
@@ -43,7 +43,7 @@ function LiveMarketDashboardContent(){
   const addSymbol=useMarketWatchlists(state=>state.addSymbol);
   const removeSymbol=useMarketWatchlists(state=>state.removeSymbol);
   const reorderSymbol=useMarketWatchlists(state=>state.reorderSymbol);
-  const [timeframe,setTimeframe]=useState<TimeframeId>('1d');
+  const [timeframe,setTimeframe]=useState<TimeframeId>('1m');
   const [streamUpdates,setStreamUpdates]=useState<Record<string, Partial<MarketQuote>>>({});
   const [sidebarOpen,setSidebarOpen]=useState(false);
   const [showAddSymbol,setShowAddSymbol]=useState(false);
@@ -64,7 +64,7 @@ function LiveMarketDashboardContent(){
   const selectedAsset=getMarketAsset(selectedSymbol)||getMarketAsset('DJI')!;
   const quoteIds=Array.from(new Set([...activeList.symbols,...DEFAULT_WATCHLIST,...COMPARISON_SYMBOLS,selectedAsset.id]));
   const batchQuery=useQuery({queryKey:['live-market-quotes',quoteIds.join(',')],queryFn:()=>fetchQuotes(quoteIds),refetchInterval:30_000});
-  const historyQuery=useQuery({queryKey:['live-market-history',selectedAsset.id,timeframe],queryFn:()=>fetchHistory(selectedAsset.id,timeframe),refetchInterval:timeframe==='1d'||timeframe==='5d'?15_000:60_000});
+  const historyQuery=useQuery({queryKey:['live-market-history',selectedAsset.id,timeframe],queryFn:()=>fetchHistory(selectedAsset.id,timeframe),refetchInterval:timeframe==='1m'||timeframe==='5m'?15_000:60_000});
   const annualQuery=useQuery({queryKey:['live-market-history',selectedAsset.id,'1y'],queryFn:()=>fetchHistory(selectedAsset.id,'1y'),refetchInterval:60_000,staleTime:45_000,enabled:timeframe!=='1y'});
   const batchQuotes=useMemo(()=>{
     const map=new Map((batchQuery.data?.quotes||[]).map(item=>[item.asset.id,item]));
@@ -306,7 +306,7 @@ function LiveMarketDashboardContent(){
             </div>}
           </section>}
           <div className="live-timeframes" role="group" aria-label="Chart interval">{TIMEFRAMES.map(item=><button type="button" key={item.id} className={timeframe===item.id?'is-active':''} aria-pressed={timeframe===item.id} onClick={()=>setTimeframe(item.id)}>{item.label}</button>)}</div>
-          <LivePriceChart candles={historyQuery.data?.candles||[]} quote={activeQuote||undefined} timeframe={timeframe} interval={historyQuery.data?.interval} loading={historyQuery.isLoading} error={historyQuery.error instanceof Error?historyQuery.error.message:''}/>
+          <LivePriceChart candles={historyQuery.data?.candles||[]} quote={activeQuote||undefined} timeframe={timeframe} interval={historyQuery.data?.interval} source={historyQuery.data?.source} loading={historyQuery.isLoading} error={historyQuery.error instanceof Error?historyQuery.error.message:''}/>
           {error&&<div className="live-data-alert" role="alert">The chart could not be updated. Available historical data is preserved. <button type="button" onClick={()=>void historyQuery.refetch()}>Retry</button></div>}
           <div className="live-chart-stats">
             <Metric label="Volume" value={activeQuote?.volume===null||activeQuote?.volume===undefined?'—':formatCompact(activeQuote.volume)}/>
