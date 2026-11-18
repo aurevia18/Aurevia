@@ -142,6 +142,9 @@ export default function LivePriceChart({candles,quote,timeframe,interval,loading
 	},[chartStyle]);
 
 	useEffect(()=>{
+		if(!displayCandles.length&&(loading||error)){
+			return;
+		}
 		candlesRef.current=displayCandles;
 		if(!chartRef.current||!candleSeries.current||!volumeSeries.current)return;
 		setPriceSeriesData(candleSeries.current,chartStyle,displayCandles);
@@ -159,7 +162,7 @@ export default function LivePriceChart({candles,quote,timeframe,interval,loading
 		}else if(autoFollowRef.current){
 			chartRef.current.timeScale().scrollToRealTime();
 		}
-	},[displayCandles,chartStyle,timeframe]);
+	},[displayCandles,chartStyle,timeframe,loading,error]);
 
 	useEffect(()=>{
 		const chart=chartRef.current;
