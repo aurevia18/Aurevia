@@ -8,17 +8,22 @@ import {db} from '@/lib/db';
 import {balance,reservedWithdrawalAmount} from '@/lib/ledger';
 import {getAccountTier} from '@/lib/production-policy';
 import {getTierProfileRequirements} from '@/lib/production-policy';
-import {MARKET_ASSETS} from '@/lib/live-market';
-import {getAlpacaMarketDataOptions,getMarketQuoteWithFallback} from '@/lib/market-data-service';
+import {MARKET_ASSETS,isExternalMarketDataSource} from '@/lib/live-market';
+import {getAdditionalMarketProviderKeys,getAlpacaMarketDataOptions,getMarketHistoryWithFallback,getMarketQuoteWithFallback} from '@/lib/market-data-service';
 import {getServerConfiguration} from '@/lib/config/env';
 import {getSupportContact} from '@/lib/config';
 import {calculateTradePlan,formatTradePlan,hasDemoOrderIntent,missingTradePlanInputs,parseDemoOrderIntent,parseTradePlan,requestsUnsupportedOrderType} from '@/lib/nova-assistant';
+import {detectNovaSpecialist,detectNovaTimeframe,formatNovaMarketAnalysis} from '@/lib/nova-market-analysis';
 import {rateLimit} from '@/lib/rate-limit';
 import {isIP} from 'node:net';
 import {openAiChat,NOVA_SYSTEM_PROMPT} from '@/lib/openai-client';
 import {removeSimulatedLabels} from '@/lib/display-copy';
 
-const schema=z.object({question:z.string().trim().min(1).max(800),conversationId:z.string().uuid().optional()});
+const schema=z.object({
+	question:z.string().trim().min(1).max(800),
+	conversationId:z.string().uuid().optional(),
+	history:z.array(z.object({role:z.enum(['user','assistant']),content:z.string().trim().min(1).max(800)})).max(12).optional(),
+});
 
 function clientIp(request:Request){
 	const forwarded=request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()||'';
@@ -26,14 +31,39 @@ function clientIp(request:Request){
 	return forwarded&&isIP(forwarded)?forwarded:real&&isIP(real)?real:'unknown';
 }
 
+function findMarketAsset(question:string){
+	const normalized=question.toUpperCase();
+	const aliases:Record<string,string>={BITCOIN:'BTC',ETHEREUM:'ETH',ETHER:'ETH',SOLANA:'SOL'};
+	for(const asset of MARKET_ASSETS){
+		const symbols=[asset.id,asset.ticker,...Object.entries(aliases).filter(([,id])=>id===asset.id).map(([name])=>name)];
+		if(symbols.some(symbol=>new RegExp(`(^|[^A-Z0-9])${symbol.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}([^A-Z0-9]|$)`).test(normalized)))return asset;
+	}
+	return undefined;
+}
+
+function isOtherUserAccountRequest(question:string){
+	const target=/\b(?:another user|other user|someone else|another person's|someone else's|their|his|her)\b/i;
+	const accountData=/\b(?:account|wallet|balance|portfolio|positions?|holdings?|orders?|trades?|withdrawals?|deposits?|payments?|notifications?|verification|transaction)\b/i;
+	return target.test(question)&&accountData.test(question);
+}
+
+function asksOwnAccountData(question:string){
+	return /\b(?:my|mine|our|my own)\b/i.test(question)
+		||/\b(?:do i have|have i|am i|did i)\b/i.test(question)
+		||/\b(?:wallet balance|account balance|order history|pending withdrawal|withdrawal status|deposit status|account mode)\b/i.test(question);
+}
+
 const education:[RegExp,string][]=[
 	[/\b(tax service|tax intake|tax return preparation)\b/i,'Tax preparation intake is available only when an authorized administrator enables the tax module and grants your account access. Open /tax-services if you have access. Submission is a request for review, not an IRS filing. Nova cannot grant tax access or file returns.'],
+	[/\b(?:guaranteed|guarantee|risk.free|certain)\b.{0,50}\b(?:return|profit|investment|earnings)\b|\b(?:return|profit|investment|earnings)\b.{0,50}\b(?:guaranteed|guarantee|risk.free|certain)\b/i,'No investment return or profit is guaranteed. Markets can lose value, and projected or historical returns are not promises. I can explain a product’s disclosed risks and assumptions if you share its public details; this is not a personalized recommendation.'],
+	[/\b(rsi|relative strength index)\b/i,'RSI (Relative Strength Index) is a momentum indicator, commonly calculated over 14 periods, that ranges from 0 to 100. Readings above 70 or below 30 are often called overbought or oversold, but these are context-dependent heuristics—not automatic reversal signals. RSI does not predict price direction.'],
+	[/\b(macd|moving average convergence divergence)\b/i,'MACD (Moving Average Convergence Divergence) compares a 12-period EMA with a 26-period EMA; its signal line is commonly a 9-period EMA of MACD. Traders examine crossovers and the zero line for momentum context. It can lag price and produce false signals, especially in sideways markets.'],
 	[/\b(etf|exchange.traded fund)\b/i,'An ETF is a fund that trades on an exchange and may hold a basket of assets. Its price can move during the trading day and it carries the risks of its underlying holdings.'],
 	[/\b(bid.ask|spread)\b/i,'The bid is the highest displayed price a buyer is offering and the ask is the lowest displayed price a seller is offering. The spread is the difference; it may widen when liquidity is lower.'],
 	[/\b(volume|liquidity)\b/i,'Volume is the amount traded over a stated period. Liquidity describes how readily an asset can be traded without materially affecting its price; volume alone does not guarantee liquidity.'],
 	[/\b(volatility)\b/i,'Volatility describes how much an asset price varies over time. Higher volatility can increase both potential gains and losses; it does not predict the direction of the next move.'],
 	[/\b(diversif|portfolio)\b/i,'Diversification spreads exposure across different holdings and risk sources. It can reduce concentration risk, but does not remove market risk or guarantee a return.'],
-	[/\b(position size|sizing|risk.re.?ward|stop.loss|take.profit)\b/i,'Position size should reflect a defined risk budget and the distance between the entry and exit levels. Stop-loss and take-profit orders have execution risks and do not guarantee a specific fill price. I can explain the math, but this is not a recommendation.'],
+	[/\b(position size|sizing|risk.re.?ward|stop.loss|take.profit|trading risk)\b/i,'A basic risk estimate is account equity × chosen risk percentage. Position size can then be estimated as the risk budget ÷ the absolute entry-to-stop distance (adjust for contract multipliers, currency conversion, fees, and slippage). For example, risking $100 with a $5 entry-to-stop distance implies 20 units before those costs. Stops can slip or gap and do not guarantee the planned loss. This is educational, not a recommendation.'],
 	[/\b(limit order|market order|order type)\b/i,'A market order seeks execution at the best available prices, which may differ from the last quote. A limit order specifies a maximum buy price or minimum sell price and may not execute. Review the order details in Trade before submitting.'],
 	[/\b(order status|filled|execution)\b/i,'Order status comes from the order history and the execution provider. A submitted or open order is not a fill; check the order details for the recorded provider status. Nova does not claim execution independently.'],
 	[/\b(stock|share|equity)\b/i,'A stock represents an ownership interest in a company. Its market price can change rapidly and there is no guaranteed return. For current instrument details, ask about a symbol and I will check available provider data.'],
@@ -49,11 +79,20 @@ export async function POST(request:Request){
 		rateLimit(userId?`nova-user:${userId}`:`nova-ip:${clientIp(request)}`,30,60_000);
 		const user=userId?await db.user.findUnique({where:{id:userId},select:{id:true,role:true,status:true,accountMode:true,approvedTier:true,kycStatus:true,name:true,country:true,phone:true,phoneVerified:true,kycVerifications:{take:1,orderBy:{createdAt:'desc'},select:{status:true}},kycDocuments:{where:{kind:'PROOF_OF_ADDRESS'},select:{status:true}}}}):null;
 		if(userId&&(!user||user.status!==UserStatus.ACTIVE||user.role!=='USER'))return NextResponse.json({error:'This account is unavailable.'},{status:403});
+		const contextualQuestion=[...(input.history||[]).map(message=>message.content),input.question].join('\n');
+		if(isOtherUserAccountRequest(contextualQuestion)){
+			return NextResponse.json({answer:'I can only help with information for your own authenticated Aurevia account. I cannot access or disclose another user’s account details.',aiAssisted:false,contextSafe:false},{headers:{'Cache-Control':'private, no-store'}});
+		}
+		const demoProfitWithdrawal=/\bdemo\b/i.test(input.question)
+			&&/\b(profit|profits|gain|gains|earnings)\b/i.test(input.question)
+			&&/\bwithdraw(?:n|al|als)?\b|\b(cash out|transfer|convert|real account)\b/i.test(input.question);
 		const orderIntent=parseDemoOrderIntent(input.question);
 		const orderIntentRequested=hasDemoOrderIntent(input.question);
 		let orderDraft:{instrumentId:string;symbol:string;side:'BUY'|'SELL';type:'MARKET';quantity:number;expectedPrice:number;observedAt:string;estimatedValue:number;accountMode:'DEMO'}|undefined;
 		let orderAnswer:string|undefined;
-		if(orderIntentRequested){
+		if(demoProfitWithdrawal){
+			orderAnswer='DEMO funds and profits are simulated practice values. They cannot be transferred to a REAL wallet or withdrawn as cash. DEMO activity never credits withdrawable REAL funds.';
+		}else if(orderIntentRequested){
 			if(requestsUnsupportedOrderType(input.question)){
 				orderAnswer='Nova can currently prepare DEMO market-order previews only. Limit and stop orders are not prepared here; review their conditions in Trade. No order has been created.';
 			}else if(!orderIntent){
@@ -98,21 +137,65 @@ export async function POST(request:Request){
 					}
 				}
 			}
-		const normalized=input.question.toUpperCase();
-		const asset=MARKET_ASSETS.find(item=>new RegExp(`(^|[^A-Z0-9])${item.id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}([^A-Z0-9]|$)`).test(normalized));
-		let quoteAnswer:string|undefined;
-		let quoteAudit:Record<string,string|boolean>|undefined;
-		if(asset&&/\b(price|quote|market|movement|trading at|value|ticker)\b/i.test(input.question)){
+		const fixed=education.find(([pattern])=>pattern.test(input.question))?.[1];
+		const asset=findMarketAsset(input.question)||findMarketAsset(contextualQuestion);
+		let marketAnswer:string|undefined;
+		let marketData:{symbol:string;provider:string|null;status:string;asOf:string|null;timeframe:string|null}|undefined;
+		let quoteAudit:Record<string,string|number|boolean>|undefined;
+		const fundamentalQuestion=Boolean(asset&&/\b(fundamental|valuation|earnings|revenue|profit margin|p\/e|pe ratio|balance sheet|cash flow|financial statements)\b/i.test(input.question));
+		const marketQuestion=/\b(price|quote|market|movement|trading at|value|ticker|analysis|analy[sz]e|bullish|bearish|trend|outlook|technical|rsi|macd|ema|sma|atr|support|resistance|historical|candles?|volume)\b/i.test(input.question);
+		const analysisQuestion=/\b(analysis|analy[sz]e|bullish|bearish|trend|outlook|technical|rsi|macd|ema|sma|atr|support|resistance|historical|candles?)\b/i.test(input.question);
+		const contextualMarketQuestion=marketQuestion||Boolean(asset&&/\b(what about|how about|and|those levels|the trend|support|resistance|bullish|bearish)\b/i.test(input.question));
+		const analysisRequested=analysisQuestion||Boolean(asset&&/\b(what about|how about|and|those levels|the trend|support|resistance|bullish|bearish)\b/i.test(input.question));
+		const timeframe=detectNovaTimeframe(input.question)||detectNovaTimeframe(contextualQuestion);
+		if(asset&&fundamentalQuestion&&!/\b(technical|price|quote|trend|bullish|bearish|support|resistance|rsi|macd|ema|sma|atr)\b/i.test(input.question)){
+			marketAnswer=`I do not have a verified company-fundamentals or valuation feed connected for ${asset.id}. I will not invent financial-statement, earnings, or P/E figures. Share a public filing or verified figures if you would like help interpreting them; this is educational, not a recommendation.`;
+			marketData={symbol:asset.id,provider:null,status:'unavailable',asOf:null,timeframe:null};
+		}else if(asset&&(contextualMarketQuestion||fundamentalQuestion)){
+			const config=getServerConfiguration();
+			const additionalProviders=getAdditionalMarketProviderKeys(config.marketData);
+			let quote:Awaited<ReturnType<typeof getMarketQuoteWithFallback>>|undefined;
 			try{
-				const config=getServerConfiguration();
-				const quote=await getMarketQuoteWithFallback(asset,config.marketData.finnhubApiKey,getAlpacaMarketDataOptions(config.execution));
-				const ageMinutes=Math.max(0,Math.round((Date.now()-Date.parse(quote.updatedAt))/60_000));
-				const freshness=quote.isStale||ageMinutes>5?'STALE PROVIDER DATA':quote.source==='Finnhub'?'FINNHUB DATA':`${quote.source.toUpperCase()} MARKET DATA`;
-				quoteAnswer=`${asset.name} (${asset.id}): ${quote.price} ${asset.currency}; daily change ${quote.change} (${quote.changePercent}%). Source: ${quote.source}. Timestamp: ${quote.updatedAt}. Status: ${freshness}. This is market information, not a trade recommendation.`;
-				quoteAudit={symbol:asset.id,source:quote.source,freshness:quote.isStale?'STALE':'UNVERIFIED',updatedAt:quote.updatedAt,externalAction:false,providerResult:'quote-returned'};
-			}catch{
-				quoteAnswer=`I could not retrieve provider market data for ${asset.id} right now. No price is available to report; try again later or open Markets for its current status.`;
+				quote=await getMarketQuoteWithFallback(asset,config.marketData.finnhubApiKey,getAlpacaMarketDataOptions(config.execution),additionalProviders);
+			}catch(error){
+				console.warn(`Nova market quote unavailable (${asset.id}, ${error instanceof Error?error.name:'UnknownError'}).`);
+			}
+			const quoteAge=quote?Date.now()-Date.parse(quote.updatedAt):Number.POSITIVE_INFINITY;
+			const freshQuote=quote&&isExternalMarketDataSource(quote.source)&&!quote.isStale&&Number.isFinite(quoteAge)&&quoteAge>=0&&quoteAge<=5*60_000?quote:null;
+			if(quote){
+				quoteAudit={symbol:asset.id,source:quote.source,freshness:freshQuote?'FRESH_PROVIDER_TIMESTAMP':quote.isStale?'STALE':'UNAVAILABLE',updatedAt:quote.updatedAt,externalAction:false,providerResult:freshQuote?'quote-returned':'not-verified-current'};
+			}else{
 				quoteAudit={symbol:asset.id,freshness:'UNAVAILABLE',externalAction:false,providerResult:'unavailable'};
+			}
+			if(analysisRequested&&!timeframe){
+				marketAnswer=freshQuote
+					?`Market overview\n${asset.name} (${asset.id}): ${freshQuote.price} ${asset.currency}; daily change ${freshQuote.change} (${freshQuote.changePercent}%).\n\nCurrent verified conditions\nProvider: ${freshQuote.source}; timestamp: ${freshQuote.updatedAt}. This integration does not declare whether the quote is live or delayed.\n\nA trend and indicator reading depends on timeframe. Which timeframe should I use (for example 1h, 4h, 1d, or 1w)? I have not inferred a bullish or bearish outlook without that context.`
+					:`I could not retrieve a fresh external quote for ${asset.id}. Internal reference prices are not presented as verified market data. Which timeframe would you like analyzed (for example 1h, 4h, 1d, or 1w)? Historical data will be used only if an external provider returns it.`;
+				marketData={symbol:asset.id,provider:freshQuote?.source||null,status:freshQuote?'provider-timestamped':'unavailable',asOf:freshQuote?.updatedAt||null,timeframe:null};
+			}else if(analysisRequested&&timeframe){
+				let history:Awaited<ReturnType<typeof getMarketHistoryWithFallback>>|undefined;
+				try{
+					history=await getMarketHistoryWithFallback(asset,timeframe,config.marketData.finnhubApiKey,getAlpacaMarketDataOptions(config.execution),additionalProviders);
+				}catch(error){
+					console.warn(`Nova market history unavailable (${asset.id}, ${error instanceof Error?error.name:'UnknownError'}).`);
+				}
+				if(history&&isExternalMarketDataSource(history.source)&&history.candles.length){
+					marketAnswer=formatNovaMarketAnalysis({
+						symbol:asset.id,name:asset.name,timeframe,provider:history.source,candles:history.candles,
+						quote:freshQuote?{price:freshQuote.price,updatedAt:freshQuote.updatedAt,source:freshQuote.source,change:freshQuote.change,changePercent:freshQuote.changePercent}:null,
+					});
+					const asOf=freshQuote?.updatedAt||new Date(history.candles.at(-1)!.time*1000).toISOString();
+					marketData={symbol:asset.id,provider:history.source,status:freshQuote?'provider-timestamped':'historical',asOf,timeframe};
+					quoteAudit={...quoteAudit,symbol:asset.id,historySource:history.source,historyTimeframe:timeframe,historyCandles:history.candles.length,historyAsOf:asOf};
+				}else{
+					marketAnswer=`Market analysis for ${asset.id} on ${timeframe} is unavailable: no verified external historical candles were returned. Internal reference values are excluded from technical analysis.${freshQuote?` A fresh ${freshQuote.source} quote is available at ${freshQuote.updatedAt}, but it is insufficient to calculate the requested timeframe indicators.`:''}`;
+					marketData={symbol:asset.id,provider:freshQuote?.source||null,status:'unavailable',asOf:freshQuote?.updatedAt||null,timeframe};
+				}
+			}else if(marketQuestion){
+				marketAnswer=freshQuote
+					?`${asset.name} (${asset.id}): ${freshQuote.price} ${asset.currency}; daily change ${freshQuote.change} (${freshQuote.changePercent}%). Provider: ${freshQuote.source}. Timestamp: ${freshQuote.updatedAt}. Live-versus-delayed status is not declared by this integration. Informational market data only.`
+					:`A fresh external quote for ${asset.id} is unavailable. I will not substitute an internal reference price for current market data.`;
+				marketData={symbol:asset.id,provider:freshQuote?.source||null,status:freshQuote?'provider-timestamped':'unavailable',asOf:freshQuote?.updatedAt||null,timeframe:null};
 			}
 		}
 		let accountAnswer:string|undefined;
@@ -127,7 +210,35 @@ export async function POST(request:Request){
 				auditAction='trade-plan-calculation';
 			}
 		}
-		if(user&&/\b(i|my|mine|account|balance|wallet|portfolio|positions?|holdings?|orders?|trades?|investments?|watchlists?|tickets?|tiers?|kyc|verification|notifications?|deposits?|withdrawals?|payments?)\b/i.test(input.question)){
+		let newsAnswer:string|undefined;
+		const economicTopic=/\b(economic|fed|federal reserve|fomc|inflation|cpi|payroll|employment|interest rate)\b/i.test(input.question);
+		const newsQuestion=/\b(news|headlines?|current|latest|recent|today|upcoming|next|announcement|release|decision)\b/i.test(input.question)
+			&&(/\b(news|headlines?|announcement|release|decision)\b/i.test(input.question)||economicTopic);
+		if(newsQuestion){
+			try{
+				const articles=await db.newsFeedItem.findMany({
+					where:{status:'ACTIVE',source:{enabled:true}},
+					select:{title:true,summary:true,publisher:true,canonicalUrl:true,category:true,publishedAt:true,source:{select:{displayName:true,lastSuccessAt:true}}},
+					orderBy:[{publishedAt:'desc'},{importedAt:'desc'}],
+					take:16,
+				});
+				const economicPattern=/\b(fed|federal reserve|fomc|inflation|cpi|payroll|employment|interest rate|central bank|economic)\b/i;
+				const relevant=economicTopic?articles.filter(article=>economicPattern.test(`${article.title} ${article.summary||''} ${article.category}`)):articles;
+				if(relevant.length){
+					newsAnswer=`Publisher-sourced items in Aurevia’s stored news feed${economicTopic?' relevant to the economic topic':''}:\n${relevant.slice(0,4).map(article=>{
+						const published=article.publishedAt?.toISOString()||'publication timestamp unavailable';
+						const refreshed=article.source.lastSuccessAt?.toISOString();
+						return `- ${article.title} — ${article.publisher||article.source.displayName}; published ${published}; feed provider ${article.source.displayName}${refreshed?`, last refreshed ${refreshed}`:''}. ${article.canonicalUrl}`;
+					}).join('\n')}\n\nThese are publisher headlines, not independently verified market impacts or forecasts.${economicTopic?' Aurevia does not currently connect an economic-calendar endpoint, so I cannot verify the next scheduled release from this feed.':''}`;
+				}else{
+					newsAnswer=`No relevant publisher-sourced ${economicTopic?'economic-announcement':'news'} item is currently available in Aurevia’s stored feed.${economicTopic?' The platform does not currently connect an economic-calendar endpoint, so I cannot verify an upcoming release or its scheduled time.':''}`;
+				}
+			}catch(error){
+				console.warn(`Nova news feed unavailable (${error instanceof Error?error.name:'UnknownError'}).`);
+				newsAnswer='Aurevia’s publisher-sourced news feed is temporarily unavailable. I cannot verify the requested headline or economic announcement right now.';
+			}
+		}
+		if(user&&asksOwnAccountData(input.question)){
 				const requested=input.question.toLowerCase();
 				const answers:string[]=[];
 				const eventTypes:string[]=[];
@@ -221,18 +332,37 @@ export async function POST(request:Request){
 		}
 		if(userId&&quoteAudit)await db.auditLog.create({data:{actorId:userId,action:'NOVA_MARKET_DATA_LOOKUP',entity:'NOVA_ACTIVITY',entityId:input.conversationId||null,metadata:quoteAudit}});
 		const contact=getSupportContact();
-		const fixed=education.find(([pattern])=>pattern.test(input.question))?.[1];
-		let answer=orderAnswer||tradePlanAnswer||quoteAnswer||accountAnswer||fixed||'';
+		const platformAnswer= /\b(alpaca|paper trading|paper execution|live exchange|live execution)\b/i.test(input.question)
+			?'Alpaca Paper Trading is a simulated brokerage environment, not live exchange execution. An order or fill recorded there must not be described as a live-market trade. Check the execution mode and provider-confirmed order record in Aurevia before relying on any status.'
+			:/\b(demo|real|account mode)\b/i.test(input.question)
+			?'Aurevia keeps DEMO and REAL activity in separate account ledgers. DEMO funds and profits are simulated, cannot be withdrawn, and never credit the REAL wallet. REAL wallet balances come from the Aurevia ledger; funding and withdrawal requests remain subject to the existing administrator review workflow.'
+			:/\b(deposit|funding|withdraw|payout|payment)\b/i.test(input.question)
+				?user?.accountMode===AccountMode.DEMO
+					?'Deposits, withdrawals, and payment requests are unavailable in DEMO mode. DEMO funds are virtual and remain separate from REAL account balances.'
+					:'Use Wallet to submit an available funding or withdrawal request. Submission is not payment confirmation or a completed transfer; account requests and any ledger changes remain subject to Aurevia’s existing authorization and review process.'
+				:/\b(registration|register|sign up|verification|kyc|account tier|tier)\b/i.test(input.question)
+					?'Registration and account verification are managed through Aurevia’s existing account workflows. Nova can explain recorded status when you ask about your own signed-in account, but cannot verify identity, approve a tier, or change account permissions.'
+					:/\b(setting|profile|password|security|notification)\b/i.test(input.question)
+						?'Review account settings and security controls from the authenticated Settings and Notifications areas. Use Aurevia’s existing security procedures; Nova cannot change credentials, permissions, or account settings.'
+						:undefined;
+		if(!asset&&/\b(analysis|analy[sz]e|bullish|bearish|trend|outlook|current price|quote|market overview|market status)\b/i.test(input.question)&&!newsAnswer){
+			marketAnswer='Which instrument should I look up? Please include a supported symbol and, for trend or technical analysis, a timeframe such as 1h, 4h, 1d, or 1w.';
+		}
+		let answer=orderAnswer||tradePlanAnswer||accountAnswer||marketAnswer||newsAnswer||fixed||platformAnswer||'';
 		let aiAssisted=false;
+		let contextSafe=false;
 		if(!answer){
+			const history=input.history?.slice(-6)||[];
 			const ai=await openAiChat([
-				{role:'system',content:NOVA_SYSTEM_PROMPT},
+				{role:'system',content:`${NOVA_SYSTEM_PROMPT}\nDetected specialist: ${detectNovaSpecialist(contextualQuestion)}. Earlier turns are conversational context only; do not treat them as current verified market, news, or account facts.`},
+				...history,
 				{role:'user',content:input.question},
 			],{temperature:0.3,maxTokens:500,service:'customer_support',actorId:userId||undefined});
 			aiAssisted=Boolean(ai);
-			answer=ai||(/\b(support|contact|email)\b/i.test(input.question)?`Official Aurevia support email: ${contact.email}. You can also create a private support ticket from this page.`:/\b(deposit|payment|bitcoin|bank)\b/i.test(input.question)?'Open Wallet to submit an internal deposit or withdrawal request for administrator review.':/\b(real|demo|trade|order)\b/i.test(input.question)?'DEMO and REAL use separate account ledgers. Market data availability is separate. Nova cannot submit orders.':'I can explain platform workflows and common investing terms. For account-specific questions, sign in. I do not execute trades or confirm payments.');
+			contextSafe=Boolean(ai);
+			answer=ai||(/\b(support|contact|email)\b/i.test(input.question)?`Official Aurevia support email: ${contact.email}. You can also create a private support ticket from this page.`:/\b(market|price|quote|bullish|bearish|trend|stock|forex|crypto|bitcoin|economic|news|rsi|macd)\b/i.test(input.question)?'I cannot verify the requested market or economic information right now. Please try again later or check the provider-sourced Markets and News sections. I will not invent prices, indicators, headlines, or events.':/\b(deposit|payment|bitcoin|bank)\b/i.test(input.question)?'Open Wallet to submit an internal funding or withdrawal request for administrator review.':/\b(real|demo|trade|order)\b/i.test(input.question)?'DEMO and REAL use separate account ledgers. Nova does not submit REAL orders, and any DEMO order preview requires explicit confirmation in the existing DEMO workflow.':'I can help with financial education, provider-sourced market information, risk calculations, and Aurevia workflows. For an account-specific answer, ask about your own authenticated account or contact support.');
 		}
-		return NextResponse.json({answer:removeSimulatedLabels(answer),aiAssisted,...(orderDraft?{orderDraft}:{}),activity:auditAction||quoteAudit||orderDraft?'recorded-without-conversation-content':'none'},{headers:{'Cache-Control':'private, no-store'}});
+		return NextResponse.json({answer:removeSimulatedLabels(answer),aiAssisted,contextSafe:contextSafe||Boolean(!accountAnswer&&!orderAnswer&&!orderDraft),...(marketData?{marketData}:{}),...(orderDraft?{orderDraft}:{}),activity:auditAction||quoteAudit||orderDraft?'recorded-without-conversation-content':'none'},{headers:{'Cache-Control':'private, no-store'}});
 	}catch(error){
 		if(error instanceof ZodError)return NextResponse.json({error:'Ask a question of at most 800 characters.'},{status:400});
 		if(error instanceof Error&&error.message==='RATE_LIMITED')return NextResponse.json({error:'Nova requests are temporarily rate limited. Try again shortly.'},{status:429});
