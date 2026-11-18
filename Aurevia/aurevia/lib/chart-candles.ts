@@ -83,3 +83,7 @@ export function updateChartCandle(candles:ChartCandle[],price:number,timestamp:n
 		{time,open:price,high:price,low:price,close:price,volume:null},
 	].slice(-limit);
 }
+
+export function createQuoteOnlyCandle(price:number,timestamp:number,interval:string):ChartCandle[]{
+	return updateChartCandle([],price,timestamp,1,chartIntervalSeconds(interval),interval);
+}

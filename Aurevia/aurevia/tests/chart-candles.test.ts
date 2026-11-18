@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest';
-import {aggregateChartCandles,chartIntervalSeconds,normalizeChartCandles,updateChartCandle,type ChartCandle} from '@/lib/chart-candles';
+import {aggregateChartCandles,chartIntervalSeconds,createQuoteOnlyCandle,normalizeChartCandles,updateChartCandle,type ChartCandle} from '@/lib/chart-candles';
 
 const initial:ChartCandle[]=[{time:120,open:10,high:11,low:9,close:10.5,volume:12}];
 
@@ -53,6 +53,18 @@ describe('chart candle updates',()=>{
 	it('starts a candle at the next interval boundary and keeps the configured history length',()=>{
 		const updated=updateChartCandle(initial,12,180_000,1,60);
 		expect(updated).toEqual([{time:180,open:12,high:12,low:12,close:12,volume:null}]);
+	});
+
+	it('creates a single timestamp-aligned marker for a verified provider quote',()=>{
+		expect(createQuoteOnlyCandle(42_000,Date.parse('2026-11-18T19:02:42Z'),'5m')).toEqual([{
+			time:Math.floor(Date.parse('2026-11-18T19:02:42Z')/300_000)*300,
+			open:42_000,
+			high:42_000,
+			low:42_000,
+			close:42_000,
+			volume:null,
+		}]);
+		expect(createQuoteOnlyCandle(0,Date.now(),'1m')).toEqual([]);
 	});
 
 	it('aggregates updates within a five-minute candle',()=>{

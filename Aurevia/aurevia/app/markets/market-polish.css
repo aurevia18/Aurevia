@@ -81,6 +81,8 @@
 .live-chart-data-status{margin-left:4px;color:#aab8ad;font-size:9px;font-weight:700;letter-spacing:.07em}
 .live-chart-data-status.is-current{color:#69c99a}
 .live-chart-data-status.is-delayed{color:#d2b778}
+.live-chart-data-status.is-simulated{color:#d2b778}
+.live-chart-data-status.is-quote-only{color:#d2b778}
 .live-chart-data-status.is-unavailable{color:#d2b778}
 .live-chart-wrap.is-fullscreen{position:fixed;inset:0;z-index:1000;display:flex;flex-direction:column;overflow:auto;padding:16px 24px;background:#08120d}
 .live-chart-wrap.is-fullscreen .live-chart-canvas{height:auto;min-height:0;flex:1}

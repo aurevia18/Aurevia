@@ -1876,6 +1876,54 @@ test('account-mode changes initialize and isolate wallet, trade, history, and su
 	await expect(page.getByRole('button').filter({hasText:subject})).toBeVisible();
 });
 
+test('REAL trade chart displays provider candles and falls back to a verified quote',async({page})=>{
+	await loginAs(page,fixture('USER_EMAIL'),fixture('USER_PASSWORD'));
+	await selectAccountMode(page,'REAL');
+	let historyAvailable=false;
+	await page.route('**/api/live-markets**',async route=>{
+		const url=new URL(route.request().url());
+		if(url.pathname==='/api/live-markets'){
+			return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({quotes:[{
+				asset:{id:'BTC',ticker:'BTC-USD',name:'Bitcoin USD',type:'CRYPTO',currency:'USD'},
+				price:42_000,bid:41_990,ask:42_010,change:100,changePercent:0.24,
+				previousClose:41_900,open:41_900,volume:100,dayLow:41_800,dayHigh:42_100,
+				fiftyTwoWeekLow:null,fiftyTwoWeekHigh:null,updatedAt:new Date().toISOString(),
+				isStale:false,sparkline:[],source:'Alpaca Crypto',
+			}]})});
+		}
+		if(url.pathname==='/api/live-markets/BTC'){
+			if(!historyAvailable)return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Provider candle history is unavailable.'})});
+			return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({
+				source:'Alpaca Crypto',
+				candles:[{
+					time:Math.floor(Date.now()/60_000)*60,
+					open:41_900,high:42_100,low:41_800,close:42_000,volume:125,
+				}],
+			})});
+		}
+		return route.continue();
+	});
+	await page.route('**/api/orderbook**',route=>route.fulfill({
+		status:200,
+		contentType:'application/json',
+		body:JSON.stringify({kind:'TOP_OF_BOOK',symbol:'BTC/USD',last:42_000,bid:41_990,ask:42_010,spread:20,depthAvailable:false}),
+	}));
+	await page.goto('/trade');
+	await expect(page.getByRole('button',{name:/BTC\/USD/})).toBeVisible();
+	await page.getByRole('button',{name:/BTC\/USD/}).click();
+	await expect(page.locator('.live-chart-data-status')).toContainText('QUOTE ONLY · Alpaca Crypto');
+	await expect(page.locator('.live-chart-canvas')).toHaveAttribute('aria-hidden','false');
+	await expect(page.locator('.live-chart-readout')).toContainText('Latest provider quote 42,000.00');
+	await expect(page.locator('.live-chart-message')).toContainText('Historical candles unavailable. Showing the latest verified provider quote only.');
+
+	historyAvailable=true;
+	await page.getByRole('button',{name:'5m',exact:true}).click();
+	await expect(page.locator('.live-chart-data-status')).toContainText('CURRENT · Alpaca Crypto');
+	await expect(page.locator('.live-chart-readout')).toContainText('O 41,900.00');
+	await expect(page.locator('.live-chart-readout')).toContainText('H 42,100.00');
+	await expect(page.locator('.live-chart-message')).toHaveCount(0);
+});
+
 test('REAL funding remains available while trading stays disabled without brokerage',async({browser,page})=>{
 	await loginAs(page,fixture('INVESTOR_EMAIL'),fixture('INVESTOR_PASSWORD'));
 	expect((await page.request.get('/api/admin/providers/status')).status()).toBe(403);
@@ -2045,8 +2093,9 @@ test('DEMO trading supports cash-backed buy and owned-unit sell execution',async
 		const instrument=tradePage.getByRole('button',{name:new RegExp(symbol.replace('/','\\/'))});
 		await expect(instrument).toBeVisible();
 		await instrument.click();
-		await expect(tradePage.locator('.trade-chart-unavailable')).toContainText('Provider market history is unavailable for this instrument.');
-		await expect(tradePage.getByText('Provider market data is shown independently from Demo account prices and execution.')).toBeVisible();
+		await expect(tradePage.locator('.live-chart-data-status')).toContainText('SIMULATED · Aurevia DEMO');
+		await expect(tradePage.locator('.live-chart-canvas')).toHaveAttribute('aria-hidden','false');
+		await expect(tradePage.getByText('Simulated DEMO chart data is independent of order execution.')).toBeVisible();
 		const orderResponsePromise=tradePage.waitForResponse(response=>response.url().endsWith('/api/orders')&&response.request().method()==='POST');
 		await tradePage.getByRole('button',{name:'Place BUY order'}).click();
 		await expect(tradePage.locator('.trade-message')).toContainText('Order filled.');

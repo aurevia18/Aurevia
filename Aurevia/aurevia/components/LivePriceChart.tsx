@@ -16,7 +16,7 @@ type PriceSeries=CandleSeries|LineSeriesApi|AreaSeriesApi;
 type ChartStyle='candles'|'line'|'area';
 type IndicatorValue={time:number;value:number};
 
-export default function LivePriceChart({candles,quote,timeframe,interval,loading,error,source,ariaLabel}:{candles:MarketCandle[];quote?:MarketQuote;timeframe:TimeframeId;interval?:string;loading:boolean;error:string;source?:string;ariaLabel?:string}){
+export default function LivePriceChart({candles,quote,timeframe,interval,loading,error,source,ariaLabel,allowSimulatedHistory=false,quoteOnly=false}:{candles:MarketCandle[];quote?:MarketQuote;timeframe:TimeframeId;interval?:string;loading:boolean;error:string;source?:string;ariaLabel?:string;allowSimulatedHistory?:boolean;quoteOnly?:boolean}){
 	const wrap=useRef<HTMLDivElement>(null);
 	const host=useRef<HTMLDivElement>(null);
 	const chartRef=useRef<IChartApi|null>(null);
@@ -42,7 +42,9 @@ export default function LivePriceChart({candles,quote,timeframe,interval,loading
 	const [now,setNow]=useState<number|null>(null);
 
 	const externalHistory=!!source&&isExternalMarketDataSource(source);
-	const displayCandles=useMemo(()=>externalHistory?normalizeChartCandles(candles):[],[candles,externalHistory]);
+	const simulatedHistory=allowSimulatedHistory&&(source==='Aurevia Internal'||source==='Aurevia DEMO');
+	const chartHistoryAvailable=externalHistory||simulatedHistory;
+	const displayCandles=useMemo(()=>chartHistoryAvailable?normalizeChartCandles(candles):[],[candles,chartHistoryAvailable]);
 	const activeInterval=interval||TIMEFRAMES.find(item=>item.id===timeframe)?.interval||'1m';
 	const candleIntervalSeconds=chartIntervalSeconds(activeInterval);
 	const quoteTimestamp=quote?Date.parse(quote.updatedAt):NaN;
@@ -271,8 +273,8 @@ export default function LivePriceChart({candles,quote,timeframe,interval,loading
 	}
 
 	const shown=hovered||currentCandle||displayCandles[displayCandles.length-1];
-	const marketStatus=quoteIsCurrent?'CURRENT':quotePrice!==undefined?'DELAYED':externalHistory?'HISTORY':'UNAVAILABLE';
-	const unavailableMessage=!externalHistory&&source
+	const marketStatus=quoteOnly?'QUOTE ONLY':quoteIsCurrent?'CURRENT':quotePrice!==undefined?'DELAYED':simulatedHistory?'SIMULATED':externalHistory?'HISTORY':'UNAVAILABLE';
+	const unavailableMessage=!chartHistoryAvailable&&source
 		?`Provider-backed candles are unavailable (${source} is indicative, not live market history).`
 		:!source?'Market data source is unavailable.':undefined;
 
@@ -290,20 +292,21 @@ export default function LivePriceChart({candles,quote,timeframe,interval,loading
 				<button type="button" aria-pressed={autoFollow} onClick={followLatest}>Latest</button>
 				<button type="button" aria-label={isFullscreen?'Exit full screen':'Enter full screen'} onClick={()=>void toggleFullscreen()}>{isFullscreen?'Exit full screen':'Full screen'}</button>
 			</div>
-			<span className={`live-chart-data-status is-${marketStatus.toLowerCase()}`}>{marketStatus}{quote&&quoteIsCurrent?` · ${quote.source}`:source?` · ${source}`:''}</span>
+			<span className={`live-chart-data-status is-${quoteOnly?'quote-only':marketStatus.toLowerCase()}`}>{marketStatus}{quote&&quoteIsCurrent?` · ${quote.source}`:source?` · ${source}`:''}</span>
 		</div>
 		<div className="live-chart-readout" aria-live="polite">
-			{shown?<><span className="live-chart-candle-time">{formatCandleTime(shown.time,activeInterval)}</span><span>O {formatChartPrice(shown.open)}</span><span>H {formatChartPrice(shown.high)}</span><span>L {formatChartPrice(shown.low)}</span><span>C {formatChartPrice(shown.close)}</span><span>V {shown.volume===null?'—':formatVolume(shown.volume)}</span></>:<span>{loading?'Loading chart…':unavailableMessage||'OHLC values unavailable'}</span>}
+			{shown?quoteOnly?<><span className="live-chart-candle-time">{formatCandleTime(shown.time,activeInterval)}</span><span>Latest provider quote {formatChartPrice(shown.close)}</span></>:<><span className="live-chart-candle-time">{formatCandleTime(shown.time,activeInterval)}</span><span>O {formatChartPrice(shown.open)}</span><span>H {formatChartPrice(shown.high)}</span><span>L {formatChartPrice(shown.low)}</span><span>C {formatChartPrice(shown.close)}</span><span>V {shown.volume===null?'—':formatVolume(shown.volume)}</span></>:<span>{loading?'Loading chart…':unavailableMessage||'OHLC values unavailable'}</span>}
 			{quote&&quoteIsUsable&&<span className="live-chart-update">{quoteIsCurrent?'QUOTE':'LAST QUOTE'} {new Date(quote.updatedAt).toLocaleTimeString()}</span>}
 		</div>
-		<div className="live-chart-canvas" ref={host} role={externalHistory?'img':undefined} aria-label={externalHistory?(ariaLabel||(
+		<div className="live-chart-canvas" ref={host} role={chartHistoryAvailable?'img':undefined} aria-label={chartHistoryAvailable?(quoteOnly?'Latest provider quote marker; historical candles unavailable':ariaLabel||(
 			chartStyle==='candles'?'Interactive live market candlestick and volume chart':`Interactive live market ${chartStyle} chart with price and volume`
-		)):undefined} aria-hidden={!externalHistory}/>
+		)):undefined} aria-hidden={!chartHistoryAvailable}/>
 		{(showRsi||showMacd)&&<div className="live-chart-indicators">
 			{showRsi&&<IndicatorPanel title="RSI 14" values={rsiValues} fixedRange={[0,100]} lastValue={rsiValues.at(-1)?.value}/>}
 			{showMacd&&<IndicatorPanel title="MACD 12 · 26 · 9" values={macdValues} lastValue={macdValues.at(-1)?.value}/>}
 		</div>}
 		{unavailableMessage&&<div className="live-chart-message" role="status">{unavailableMessage}</div>}
+		{quoteOnly&&<div className="live-chart-message" role="status">Historical candles unavailable. Showing the latest verified provider quote only.</div>}
 		{error&&<div className="live-chart-message" role="status">{error}</div>}
 		{loading&&!displayCandles.length&&<div className="live-chart-message" role="status">Fetching historical candles…</div>}
 		{fullscreenError&&<div className="live-chart-message" role="alert">{fullscreenError}</div>}

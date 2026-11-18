@@ -1,10 +1,12 @@
 "use client";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import Nav from "@/components/Nav";
 import { useLocale } from "@/lib/i18n-context";
 import LivePriceChart from "@/components/LivePriceChart";
 import {TIMEFRAMES,getMarketAssetForTradingSymbol,isExternalMarketDataSource,type MarketQuote,type TimeframeId} from "@/lib/live-market";
+import {normalizeDemoTradeCandles} from "@/lib/demo-trade-chart";
+import {createQuoteOnlyCandle} from "@/lib/chart-candles";
 import { useTradingStore } from "@/lib/store";
 import { io, type Socket } from "socket.io-client";
 import { AlertCircle, CheckCircle2, X } from "lucide-react";
@@ -46,6 +48,7 @@ type LiveQuotesResponse={quotes:Array<MarketQuote|{asset:MarketQuote['asset'];er
 type MarketUpdate={symbol:string;price:number;change:number;changePercent:number;source:string;dataMode:'SIMULATED'|'LIVE';lastUpdatedAt:string};
 type TradeMessage={text:string;kind:'error'|'success'|'info'};
 const LIVE_TRADE_ASSET_IDS=["BTC","AAPL","MSFT","NVDA","AMZN","GOOGL","TSLA"];
+const DEMO_CANDLE_RANGES:Record<TimeframeId,string>={ "1m":"1d","5m":"5d","15m":"1m","30m":"3m","1h":"1y","4h":"1y","1d":"max","1w":"max","1mo":"max",ytd:"max","1y":"max","5y":"max"};
 
 function normalizedSymbol(value:string){return value.toUpperCase().replace(/[^A-Z0-9]/g,"")}
 function isFailedOrder(order:Order){return order.status==='REJECTED'||order.status==='FAILED'}
@@ -115,6 +118,9 @@ export default function Trade() {
   const [demoChartQuote,setDemoChartQuote]=useState<MarketQuote>();
   const [chartLoading,setChartLoading]=useState(false);
   const [chartError,setChartError]=useState("");
+  const [chartQuoteOnly,setChartQuoteOnly]=useState(false);
+  const providerHistoryLoaded=useRef(false);
+  const currentLiveQuote=useRef<MarketQuote|undefined>(undefined);
   useEffect(()=>{
     if(!session?.user?.id||(accountMode!=="DEMO"&&accountMode!=="REAL")){
       setDismissedFailedOrderIds([]);
@@ -260,6 +266,7 @@ export default function Trade() {
   }, [selected,accountMode]);
   const cur = items.find((i) => i.id === selected);
   const chartAssetId=cur?.assetId||getMarketAssetForTradingSymbol(cur?.symbol||'')?.id;
+  const demoMark=chartAssetId?undefined:cur?.price;
   const demoProviderQuote=demoChartQuote?.asset.id===chartAssetId?demoChartQuote:undefined;
   function selectInstrument(instrument:I){
     setSelected(instrument.id);
@@ -275,8 +282,9 @@ export default function Trade() {
     if(price===null)return null;
     return p.side==="BUY"?(price-p.entryPrice)*p.quantity:(p.entryPrice-price)*p.quantity;
   };
+  useEffect(()=>{currentLiveQuote.current=cur?.liveQuote},[cur?.liveQuote]);
   useEffect(()=>{
-    if(!chartAssetId||!['DEMO','REAL'].includes(accountMode)){
+    if(!['DEMO','REAL'].includes(accountMode)||(!chartAssetId&&accountMode!=="DEMO")){
       setLiveCandles([]);
       setChartSource(undefined);
       setChartLoading(false);
@@ -284,35 +292,60 @@ export default function Trade() {
       return;
     }
     let active=true;
-    setChartLoading(true);
-    setChartError("");
     setLiveCandles([]);
     setChartSource(undefined);
-    fetch(`/api/live-markets/${encodeURIComponent(chartAssetId)}?timeframe=${chartTimeframe}`,{cache:"no-store"})
-      .then(async response=>{
-        const result=await response.json();
-        if(!response.ok)throw new Error(typeof result.error==="string"?result.error:"Market chart data is unavailable.");
-        const history=result as {candles:typeof liveCandles;source?:string};
-        if(!history.source||!isExternalMarketDataSource(history.source))throw new Error("Market chart data is unavailable.");
-        return history;
-      })
-      .then(result=>{if(active){setLiveCandles(result.candles);setChartSource(result.source);}})
-      .catch(error=>{if(active){setLiveCandles([]);setChartSource(undefined);setChartError(error instanceof Error?error.message:"Market chart data is unavailable.");}})
-      .finally(()=>{if(active)setChartLoading(false);});
-    const timer=window.setInterval(()=>{
-      if(document.visibilityState!=='visible')return;
-      fetch(`/api/live-markets/${encodeURIComponent(chartAssetId)}?timeframe=${chartTimeframe}`,{cache:"no-store"})
-        .then(async response=>{
+    setChartQuoteOnly(false);
+    providerHistoryLoaded.current=false;
+    const loadHistory=async()=>{
+      setChartLoading(true);
+      setChartError("");
+      try{
+        let history:{candles:typeof liveCandles;source:string};
+        if(!chartAssetId){
+          const response=await fetch(`/api/candles?instrumentId=${encodeURIComponent(selected)}&range=${DEMO_CANDLE_RANGES[chartTimeframe]}&limit=500`,{cache:"no-store"});
+          if(!response.ok)throw new Error("Simulated market candles are unavailable.");
+          const rows=await response.json() as Array<{ts:string;open:number|string;high:number|string;low:number|string;close:number|string;volume:number|string|null}>;
+          const interval=TIMEFRAMES.find(item=>item.id===chartTimeframe)?.interval||"1m";
+          history={candles:normalizeDemoTradeCandles(rows,demoMark??NaN,Date.now(),interval),source:"Aurevia DEMO"};
+        }else{
+          const response=await fetch(`/api/live-markets/${encodeURIComponent(chartAssetId)}?timeframe=${chartTimeframe}`,{cache:"no-store"});
           const result=await response.json();
           if(!response.ok)throw new Error(typeof result.error==="string"?result.error:"Market chart data is unavailable.");
-          const history=result as {candles:typeof liveCandles;source?:string};
-          if(!history.source||!isExternalMarketDataSource(history.source))throw new Error("Market chart data is unavailable.");
-          if(active){setLiveCandles(history.candles);setChartSource(history.source);setChartError("");}
-        })
-        .catch(error=>{if(active)setChartError(error instanceof Error?error.message:"Market chart data is unavailable.");});
+          const providerHistory=result as {candles:typeof liveCandles;source?:string};
+          const external=!!providerHistory.source&&isExternalMarketDataSource(providerHistory.source);
+          const demoInternal=accountMode==="DEMO"&&providerHistory.source==="Aurevia Internal";
+          if(!providerHistory.source||(!external&&!demoInternal)||!Array.isArray(providerHistory.candles)||!providerHistory.candles.length)throw new Error("Market chart data is unavailable.");
+          history={candles:providerHistory.candles,source:providerHistory.source};
+        }
+        if(active){
+          providerHistoryLoaded.current=true;
+          setLiveCandles(history.candles);
+          setChartSource(history.source);
+          setChartQuoteOnly(false);
+        }
+      }catch(error){
+        if(active){
+          const quote=currentLiveQuote.current;
+          const quoteAge=quote?Date.now()-Date.parse(quote.updatedAt):Infinity;
+          const quoteIsFresh=accountMode==="REAL"&&!!quote&&isExternalMarketDataSource(quote.source)&&
+            !quote.isStale&&Number.isFinite(quote.price)&&quote.price>0&&quoteAge>=-5_000&&quoteAge<=30_000;
+          if(!providerHistoryLoaded.current&&quoteIsFresh&&quote){
+            const interval=TIMEFRAMES.find(item=>item.id===chartTimeframe)?.interval||"1m";
+            setLiveCandles(createQuoteOnlyCandle(quote.price,Date.parse(quote.updatedAt),interval));
+            setChartSource(quote.source);
+            setChartQuoteOnly(true);
+            setChartError("");
+          }else setChartError(error instanceof Error?error.message:"Market chart data is unavailable.");
+        }
+      }finally{if(active)setChartLoading(false);}
+    };
+    void loadHistory();
+    const timer=window.setInterval(()=>{
+      if(document.visibilityState!=='visible')return;
+      void loadHistory();
     },chartTimeframe==="1m"||chartTimeframe==="5m"?15_000:60_000);
     return()=>{active=false;window.clearInterval(timer);};
-  },[accountMode,chartAssetId,chartTimeframe,selected]);
+  },[accountMode,chartAssetId,chartTimeframe,selected,demoMark]);
   useEffect(()=>{
     if(accountMode!=="DEMO"||!chartAssetId){setDemoChartQuote(undefined);return}
     let active=true;
@@ -528,10 +561,10 @@ export default function Trade() {
                   <div className="trade-chart-timeframes" role="group" aria-label="Chart interval">
                     {TIMEFRAMES.map(item=><button type="button" key={item.id} aria-pressed={chartTimeframe===item.id} onClick={()=>setChartTimeframe(item.id)}>{item.label}</button>)}
                   </div>
-                  {chartAssetId?
-                    <LivePriceChart candles={liveCandles} quote={(accountMode==="REAL"?cur?.liveQuote:demoChartQuote)||undefined} timeframe={chartTimeframe} source={chartSource} loading={chartLoading} error={dismissedChartError?'':chartError}/>
+                  {chartAssetId||accountMode==="DEMO"&&selected?
+                    <LivePriceChart candles={liveCandles} quote={(accountMode==="REAL"?cur?.liveQuote:demoChartQuote)||undefined} timeframe={chartTimeframe} source={chartSource} loading={chartLoading} error={dismissedChartError?'':chartError} allowSimulatedHistory={accountMode==="DEMO"} quoteOnly={chartQuoteOnly}/>
                     :<div className="trade-chart-unavailable" role="status"><span>{chartError||"Provider market data is unavailable for this instrument."}</span></div>}
-                  <p className="trade-chart-note">Provider market data is independent of Demo and Real account mode. It does not change order prices, balances, or execution.</p>
+                  <p className="trade-chart-note">{accountMode==="DEMO"&&chartSource&&!isExternalMarketDataSource(chartSource)?"Simulated DEMO chart data is independent of order execution.":"Provider market data is independent of Demo and Real account mode. It does not change order prices, balances, or execution."}</p>
                 </div>
               </div>
               <div className="trade-orderbook">
