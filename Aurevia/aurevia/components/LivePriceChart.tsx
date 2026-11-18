@@ -26,6 +26,7 @@ export default function LivePriceChart({candles,quote,timeframe,interval,loading
 	const slowAverageSeries=useRef<LineSeriesApi|null>(null);
 	const currentPriceLine=useRef<IPriceLine|null>(null);
 	const currentTimeframe=useRef(timeframe);
+	const fullscreenFallback=useRef(false);
 	const hasFit=useRef(false);
 	const candlesRef=useRef<ChartCandle[]>([]);
 	const autoFollowRef=useRef(true);
@@ -211,10 +212,30 @@ export default function LivePriceChart({candles,quote,timeframe,interval,loading
 	},[chartStyle,quoteIsCurrent,quotePrice]);
 
 	useEffect(()=>{
-		const onFullscreenChange=()=>setIsFullscreen(document.fullscreenElement===wrap.current);
+		const onFullscreenChange=()=>{
+			const nativeFullscreen=document.fullscreenElement===wrap.current;
+			setIsFullscreen(nativeFullscreen||fullscreenFallback.current);
+		};
 		document.addEventListener('fullscreenchange',onFullscreenChange);
 		return()=>document.removeEventListener('fullscreenchange',onFullscreenChange);
 	},[]);
+
+	useEffect(()=>{
+		if(!fullscreenFallback.current)return;
+		const previousOverflow=document.body.style.overflow;
+		const onKeyDown=(event:KeyboardEvent)=>{
+			if(event.key==='Escape'){
+				fullscreenFallback.current=false;
+				setIsFullscreen(false);
+			}
+		};
+		document.body.style.overflow='hidden';
+		window.addEventListener('keydown',onKeyDown);
+		return()=>{
+			document.body.style.overflow=previousOverflow;
+			window.removeEventListener('keydown',onKeyDown);
+		};
+	},[isFullscreen]);
 
 	function zoom(direction:'in'|'out'){
 		const timeScale=chartRef.current?.timeScale();
@@ -230,9 +251,16 @@ export default function LivePriceChart({candles,quote,timeframe,interval,loading
 		setFullscreenError('');
 		try{
 			if(document.fullscreenElement)await document.exitFullscreen();
-			else await wrap.current?.requestFullscreen();
+			else if(fullscreenFallback.current){
+				fullscreenFallback.current=false;
+				setIsFullscreen(false);
+			}else{
+				if(!wrap.current?.requestFullscreen)throw new Error('NATIVE_FULLSCREEN_UNAVAILABLE');
+				await wrap.current.requestFullscreen();
+			}
 		}catch{
-			setFullscreenError('Full-screen mode is unavailable in this browser.');
+			fullscreenFallback.current=true;
+			setIsFullscreen(true);
 		}
 	}
 

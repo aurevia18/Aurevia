@@ -6,9 +6,11 @@ import {useParams} from 'next/navigation';
 import {useSession} from 'next-auth/react';
 import {ArrowLeft,Clock3,FileClock,ShieldCheck} from 'lucide-react';
 import Nav from '@/components/Nav';
+import StatusNotice from '@/components/StatusNotice';
 import DisplayCurrencyPanel from '@/components/DisplayCurrencyPanel';
 import ReceiptGenerator,{type ReceiptData} from '@/components/ReceiptGenerator';
 import {formatUsd} from '@/lib/currency-format';
+import {getFundingStatusNotice} from '@/lib/funding-status-notice';
 
 type FundingTransaction={
 	id:string;
@@ -68,11 +70,13 @@ export default function TransactionDetailPage(){
 	},[id,session?.user?.accountMode]);
 	const transaction=data?.transaction;
 	const status=transaction?receiptStatus(transaction.status):null;
+	const statusNotice=transaction?getFundingStatusNotice(transaction.type,transaction.status):null;
 	const displayValues=transaction?.currency?.toUpperCase()==='USD'?[{label:'Amount requested',amount:String(transaction.amount)},...(transaction.feeAmount!==null&&transaction.feeAmount!==undefined?[{label:`Deposit fee (${transaction.feePercent??10}%)`,amount:String(transaction.feeAmount)}]:[]),...(transaction.creditedAmount!==null&&transaction.creditedAmount!==undefined?[{label:'Amount credited',amount:String(transaction.creditedAmount)}]:[])]:[];
 	return <><Nav/><main className="account-page">
 		<Link href="/wallet" className="text-link"><ArrowLeft size={15}/> Back to wallet</Link>
 		{error?<section className="account-panel card mt-4 p-5"><p className="text-loss" role="alert">{error}</p></section>:!transaction?<section className="account-panel card mt-4 p-5" role="status">Loading transaction details…</section>:<>
 			<header className="account-heading mt-5"><div><span className="account-kicker">{transaction.accountMode} ACCOUNT · Transaction detail</span><h1>{transaction.type==='DEPOSIT'?'Deposit':'Withdrawal'} request</h1><p>Internal request reference <span className="font-mono">{transaction.id}</span></p></div><span className="status-pill">{labels[transaction.status]||transaction.status}</span></header>
+			{statusNotice&&<StatusNotice {...statusNotice}/>}
 			<DisplayCurrencyPanel values={displayValues}/>
 			{status?<section className="mt-5" aria-label="Printable transaction receipt"><ReceiptGenerator receipt={{
 				id:transaction.id,

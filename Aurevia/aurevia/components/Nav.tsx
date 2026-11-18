@@ -269,7 +269,6 @@ export default function Nav(){
    <Link href="/" className="brand" onClick={close}><Image className="brand-logo-image" src="/aurevia-logo.png" alt="" width={38} height={38}/><span className="brand-copy"><strong>Aurevia</strong><small>EXCHANGE</small></span></Link>
    {status==='unauthenticated'&&<nav className="public-primary-nav" aria-label="Website navigation">
     <Link href="/#platform">Platform</Link>
-    <Link href="/markets">{translate('markets')}</Link>
     <Link href="/#how-it-works">How it works</Link>
     <Link href="/#education">Education</Link>
     <Link href="/support">{translate('support')}</Link>
@@ -287,13 +286,14 @@ export default function Nav(){
      <section className="nav-menu-group" aria-labelledby="nav-overview-heading">
       <h2 className="nav-menu-section" id="nav-overview-heading">OVERVIEW</h2>
       <Link href="/" onClick={close} aria-current={pathname==='/'?'page':undefined}>{translate('home')}</Link>
-      <Link href="/dashboard" onClick={close} aria-current={active('/dashboard')?'page':undefined}><LayoutDashboard size={16} aria-hidden="true"/>{translate('dashboard')}</Link>
+      {status==='authenticated'&&<Link href="/dashboard" onClick={close} aria-current={active('/dashboard')?'page':undefined}><LayoutDashboard size={16} aria-hidden="true"/>{translate('dashboard')}</Link>}
       {status==='authenticated'&&data?.user?.role==='ADMIN'&&<Link href="/admin" className="nav-admin-entry" onClick={close} aria-current={active('/admin')?'page':undefined}><ShieldCheck size={16} aria-hidden="true"/>Open Admin Console</Link>}
      </section>
      <section className="nav-menu-group" aria-labelledby="nav-explore-heading">
       <h2 className="nav-menu-section" id="nav-explore-heading">EXPLORE</h2>
       <Link href="/stories" onClick={close} aria-current={active('/stories')?'page':undefined}><Radio size={16} aria-hidden="true"/>Stories</Link>
      </section>
+     {status==='authenticated'&&<>
      <section className="nav-menu-group" aria-labelledby="nav-investing-heading">
       <h2 className="nav-menu-section" id="nav-investing-heading">INVESTING</h2>
       <Link href="/markets" onClick={close} aria-current={active('/markets')?'page':undefined}><LineChart size={16} aria-hidden="true"/>{translate('markets')}</Link>
@@ -307,13 +307,17 @@ export default function Nav(){
         <Link href="/broadcasts" onClick={close} aria-current={active('/broadcasts')?'page':undefined}><Radio size={16} aria-hidden="true"/>Live broadcasts</Link>
      </section>
      <section className="nav-menu-group" aria-labelledby="nav-account-heading">
-      <h2 className="nav-menu-section" id="nav-account-heading">ACCOUNT &amp; SUPPORT</h2>
+      <h2 className="nav-menu-section" id="nav-account-heading">ACCOUNT</h2>
       <Link href="/wallet" onClick={close} aria-current={active('/wallet')?'page':undefined}><Wallet size={16} aria-hidden="true"/>{translate('wallet')}</Link>
       <Link href="/cards" onClick={close} aria-current={active('/cards')?'page':undefined}><CreditCard size={16} aria-hidden="true"/>Cards</Link>
       {status==='authenticated'&&taxServicesAvailable&&<Link href="/tax-services" onClick={close} aria-current={active('/tax-services')?'page':undefined}><FileText size={16} aria-hidden="true"/>Tax Services</Link>}
       <Link href="/kyc" onClick={close} aria-current={active('/kyc')?'page':undefined}><ShieldCheck size={16} aria-hidden="true"/>{translate('verification')}</Link>
       <Link href="/settings" onClick={close} aria-current={active('/settings')?'page':undefined}><Settings size={16} aria-hidden="true"/>{translate('settings')}</Link>
       <Link href="/notifications" onClick={close} aria-current={active('/notifications')?'page':undefined}>{translate('notifications')}</Link>
+     </section>
+     </>}
+     <section className="nav-menu-group" aria-labelledby="nav-support-heading">
+      <h2 className="nav-menu-section" id="nav-support-heading">SUPPORT</h2>
       <Link href="/support" onClick={close} aria-current={active('/support')?'page':undefined}>{translate('support')}</Link>
       <a className="nav-contact" href="tel:+12105047697" onClick={close}><PhoneCall size={16} aria-hidden="true"/><span><b>Call Support</b><small>+1 (210) 504-7697</small></span></a>
       <a className="nav-contact" href="mailto:aureviainvest@gmail.com" onClick={close}><Mail size={16} aria-hidden="true"/><span><b>Email</b><small>aureviainvest@gmail.com</small></span></a>

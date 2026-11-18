@@ -6,6 +6,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import {Eye,EyeOff,LoaderCircle,ShieldCheck} from 'lucide-react';
 import Nav from '@/components/Nav';
+import StatusNotice from '@/components/StatusNotice';
 import {useLocale} from '@/lib/i18n-context';
 import {safeInternalPath} from '@/lib/navigation';
 
@@ -19,6 +20,7 @@ export default function Login(){
 	const [passwordVisible,setPasswordVisible]=useState(false);
 	const [error,setError]=useState('');
 	const [registered,setRegistered]=useState(false);
+	const [loginSuccess,setLoginSuccess]=useState(false);
 	const [callbackUrl,setCallbackUrl]=useState('/dashboard');
 	const [busy,setBusy]=useState(false);
 	const {update}=useSession();
@@ -48,7 +50,7 @@ export default function Login(){
 	},[]);
 
 	async function submit(event:FormEvent<HTMLFormElement>){
-		event.preventDefault();if(busy)return;setBusy(true);setError('');
+		event.preventDefault();if(busy)return;setBusy(true);setError('');setLoginSuccess(false);
 		try{
 			const result=await signIn('credentials',{username:identifier,email:identifier,password,redirect:false});
 			if(result?.ok){
@@ -57,6 +59,8 @@ export default function Login(){
 					else localStorage.removeItem(rememberedEmailKey);
 				}catch(storageError){console.warn('Unable to save the remembered sign-in email.',{errorName:storageError instanceof Error?storageError.name:'UnknownError'})}
 				try{await update()}catch(error){console.error('Session refresh after sign-in failed.',error instanceof Error?error.name:'UnknownError')}
+				setLoginSuccess(true);
+				await new Promise<void>(resolve=>window.setTimeout(resolve,900));
 				window.location.replace(callbackUrl);
 			}else if(result?.error==='CredentialsSignin'){
 				setError('Email address or password is incorrect.');
@@ -88,7 +92,9 @@ export default function Login(){
 			<h1 id="signin-title" className="auth-heading">{translate('welcomeBack')}</h1>
 			<p className="auth-subtitle">Sign in to pick up where you left off. No subscription or payment method is required.</p>
 			<div className="auth-market-line" aria-hidden="true"/>
-			{registered&&<p className="mt-4 text-sm text-profit" role="status">{translate('registeredSignIn')}</p>}
+			{registered&&!busy&&<StatusNotice tone="success" title="Registration complete" description={translate('registeredSignIn')} emoji="😊"/>}
+			{busy&&!loginSuccess&&<StatusNotice tone="pending" title="Signing in securely…" description="Please wait while Aurevia verifies your account." processing/>}
+			{loginSuccess&&<StatusNotice tone="success" title="Welcome back!" description="Sign-in confirmed. Opening your account…" emoji="😊"/>}
 			<form onSubmit={submit} className="mt-5 space-y-4">
 				<label className="auth-field-label">{translate('emailOrUsername')}<input className="auth-input" name="username" type="text" autoComplete="username" value={identifier} onChange={event=>{setIdentifier(event.target.value);setError('')}} required/></label>
 				<div><label className="auth-field-label" htmlFor="login-password">{translate('password')}</label><div className="auth-password-wrap"><input id="login-password" className="auth-input" name="password" type={passwordVisible?'text':'password'} autoComplete="current-password" value={password} onChange={event=>{setPassword(event.target.value);setError('')}} required/><button type="button" className="auth-password-toggle" aria-label={passwordVisible?translate('hidePassword'):translate('showPassword')} aria-pressed={passwordVisible} onClick={()=>setPasswordVisible(value=>!value)}>{passwordVisible?<EyeOff size={18}/>:<Eye size={18}/>}</button></div></div>
@@ -100,8 +106,8 @@ export default function Login(){
 						catch(storageError){console.warn('Unable to clear the remembered sign-in email.',{errorName:storageError instanceof Error?storageError.name:'UnknownError'})}
 					}
 				}}/><span>Remember my email on this device</span></label><Link className="auth-link" href="/forgot-password">{translate('forgotPassword')}</Link></div>
-				{error&&<p className="auth-error" role="alert">{error}</p>}
-				<button type="submit" disabled={busy} className="auth-submit flex w-full items-center justify-center gap-2" aria-busy={busy}>{busy?<><LoaderCircle size={16} className="animate-spin" aria-hidden="true"/>{translate('loading')}</> : translate('signIn')}</button>
+				{error&&<StatusNotice tone={error==='Email address or password is incorrect.'?'declined':'neutral'} title={error==='Email address or password is incorrect.'?'Sign-in details not accepted':'Sign-in could not be completed'} description={error} role="alert"/>}
+				<button type="submit" disabled={busy} className="auth-submit flex w-full items-center justify-center gap-2" aria-busy={busy}>{busy?<><LoaderCircle size={16} className="animate-spin" aria-hidden="true"/>{loginSuccess?'Opening account…':translate('loading')}</> : translate('signIn')}</button>
 			</form>
 			<p className="auth-footer">{translate('newToAurevia')} <Link className="auth-link" href="/register">{translate('createAccount')}</Link></p>
 			<div className="auth-assurance"><ShieldCheck size={17} className="gold" aria-hidden="true"/><span><b>{translate('protectedSession')}</b><small>Sessions expire after 8 hours. Your password is never displayed in the app.</small></span></div>

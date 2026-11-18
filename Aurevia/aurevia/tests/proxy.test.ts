@@ -41,6 +41,13 @@ describe('admin route middleware',()=>{
 		expect(response?.headers.get('location')).toBe('https://aurevia.test/login?callbackUrl=%2Fbroadcasts%3Ffilter%3Dunread');
 	});
 
+	it.each(['/markets','/bank','/cards/apply','/community','/tax-services'])('requires sign-in for %s',async(pathname)=>{
+		const response=await middleware(request(pathname),{} as never);
+
+		expect(response?.status).toBe(307);
+		expect(response?.headers.get('location')).toBe(`https://aurevia.test/login?callbackUrl=${encodeURIComponent(pathname)}`);
+	});
+
 	it('sends an administrator away from the user sign-in page',async()=>{
 		const response=await middleware(request('/login','ADMIN'),{} as never);
 

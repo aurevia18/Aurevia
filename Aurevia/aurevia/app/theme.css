@@ -137,7 +137,7 @@ html[data-theme-name] :is(.site-nav,.site-nav-user-shell,.user-topbar,.user-bott
 	color:var(--theme-text);
 }
 html[data-theme-name] :is(.brand,.nav-links a,.nav-links button,.user-topbar-identity b,.user-topbar-identity small,.admin-profile-copy b,.admin-topbar-heading>b){color:var(--theme-nav-text)}
-html[data-theme-name] :is(.nav-links a:hover,.nav-links button:hover,.nav-links a[aria-current="page"],.user-bottom-navigation a.is-active,.admin-command-group a[aria-current="page"]){
+html[data-theme-name] :is(.nav-links a:hover,.nav-links button:hover,.nav-links a:focus-visible,.nav-links button:focus-visible,.admin-command-group a[aria-current="page"]){
 	background:var(--theme-selected);
 	color:var(--theme-text);
 }

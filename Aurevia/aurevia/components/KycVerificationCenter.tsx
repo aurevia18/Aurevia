@@ -6,6 +6,8 @@ import Image from 'next/image';
 import Link from 'next/link';
 import {Camera,CheckCircle2,ChevronLeft,ChevronRight,LoaderCircle,RefreshCw,ScanLine,ShieldCheck,SwitchCamera,Upload,Zap} from 'lucide-react';
 import {parseKycIdentityInformation} from '@/lib/kyc-identity';
+import {getKycVerificationNotice} from '@/lib/kyc-status-notice';
+import StatusNotice from '@/components/StatusNotice';
 
 type DocumentType='PASSPORT'|'NATIONAL_ID'|'DRIVING_LICENCE'|'RESIDENCE_PERMIT'|'OTHER';
 type DocumentRequirement={type:DocumentType;label:string;sides:string[];expiryRequired:boolean};
@@ -28,7 +30,6 @@ const statusCopy:Record<string,string>={
 	CANCELLED:'Superseded',
 	EXPIRED:'Expired',
 };
-
 function stopTracks(stream:MediaStream|null){
 	stream?.getTracks().forEach(track=>track.stop());
 }
@@ -84,6 +85,7 @@ export default function KycVerificationCenter({currentTier,onUpdated}:{currentTi
 
 	const selectedRequirement=useMemo(()=>requirements.find(item=>item.type===documentType),[documentType,requirements]);
 	const latest=verifications[0]||null;
+	const statusNotice=latest?getKycVerificationNotice(latest.status):null;
 	const canSubmit=!submitting&&Boolean(country&&legalName.trim()&&dateOfBirth&&front&&selfie&&consent)
 		&&(!selectedRequirement?.expiryRequired||Boolean(documentExpiryDate))
 		&&(!selectedRequirement?.sides.includes('BACK')||Boolean(back))
@@ -383,8 +385,9 @@ export default function KycVerificationCenter({currentTier,onUpdated}:{currentTi
 		<p className="mt-3 text-sm leading-6 muted">Submitted identity documents undergo an initial file and quality review to ensure they meet submission requirements.</p>
 		<p className="mt-3 text-sm leading-6 muted">All identity documents are subject to review and approval by an authorized Aurevia administrator before verification is completed.</p>
 		{error&&<p className="mt-3 text-sm text-loss" role="alert">{error}</p>}
-		{message&&<p className="mt-3 text-sm text-profit" role="status">{message}</p>}
+		{message&&!statusNotice&&<p className="mt-3 text-sm text-profit" role="status">{message}</p>}
 		{loading?<p className="mt-4 muted"><LoaderCircle className="mr-2 inline animate-spin" size={16}/>Loading verification history…</p>:<>
+			{statusNotice&&<StatusNotice {...statusNotice}/>}
 			{latest&&<article className="mt-4 rounded-lg border border-white/10 p-4">
 				<div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="font-semibold">{latest.documentType.replaceAll('_',' ')} · {latest.documentCountry}</h3><p className="mt-1 text-sm muted">{statusCopy[latest.status]||latest.status.replaceAll('_',' ')} · {latest.submittedAt?`Submitted ${new Date(latest.submittedAt).toLocaleString()}`:'Not submitted'}{latest.reviewedAt?` · Reviewed ${new Date(latest.reviewedAt).toLocaleString()}`:''}</p></div><span className="status-pill">{latest.assessment?.riskLevel?.replaceAll('_',' ')||'Manual review'}</span></div>
 				{latest.decisionReason&&<p className="mt-3 text-sm leading-6">{latest.decisionReason}</p>}

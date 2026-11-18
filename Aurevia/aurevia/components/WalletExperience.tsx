@@ -7,11 +7,13 @@ import {ArrowDownLeft,ArrowRight,ArrowUpRight,Check,Copy,Eye,EyeOff,RefreshCw,Sh
 import Nav from '@/components/Nav';
 import ReceiptGenerator,{type ReceiptData} from '@/components/ReceiptGenerator';
 import AureviaExchangeId from '@/components/AureviaExchangeId';
+import StatusNotice from '@/components/StatusNotice';
 import WithdrawalDestinationPanel from '@/components/WithdrawalDestinationPanel';
 import {useLocale} from '@/lib/i18n-context';
 import {SUPPORTED_CURRENCIES} from '@/lib/config/simulation';
 import {formatUsd} from '@/lib/currency-format';
 import {calculateWithdrawalAmounts,getWithdrawalEligibilityIssue,MAX_REAL_WITHDRAWAL_USD,MIN_REAL_WITHDRAWAL_USD,REQUIRED_REAL_WITHDRAWAL_RESERVE_USD,WITHDRAWAL_COMMISSION_PERCENT} from '@/lib/withdrawal-fee';
+import {getFundingStatusNotice} from '@/lib/funding-status-notice';
 import {useSearchParams} from 'next/navigation';
 
 type PaymentMethod={id:string;name:string;currencies:string[];destination:string|null;instructions:string|null;minimumAmount:string|number;maximumAmount:string|number|null;depositEnabled:boolean;withdrawalEnabled:boolean;requiresNetwork:boolean;demoOnly:boolean};
@@ -137,6 +139,12 @@ export default function WalletExperience(){
 	const availableBalance=data.accountMode==='REAL'&&currency==='USD'
 		?(data.withdrawableBalance===undefined||data.withdrawableBalance===null?null:Number(data.withdrawableBalance))
 		:ledgerAvailableBalance;
+	const trackedSubmittedReceipt=submittedReceipt
+		?data.transactions.find(transaction=>transaction.id===submittedReceipt.id)||submittedReceipt
+		:null;
+	const submittedStatusNotice=trackedSubmittedReceipt
+		?getFundingStatusNotice(trackedSubmittedReceipt.type,trackedSubmittedReceipt.status)
+		:null;
 	const withdrawalAmounts=calculateWithdrawalAmounts(amount);
 	const currentDisplayRate=currencyRate?.rate!==null&&currencyRate?.rate!==undefined&&Number.isFinite(Number(currencyRate.rate))&&Number(currencyRate.rate)>0?Number(currencyRate.rate):null;
 	const displayMoney=(amount:number|null|undefined)=>{
@@ -284,7 +292,7 @@ export default function WalletExperience(){
 
 	async function confirmSubmit(){
 		if((!selectedMethod&&!manualRealFunding)||submitting)return;
-		setSubmitting(true);setError('');
+		setSubmitting(true);setError('');setMessage('');
 		const payload={type,amount:Number(amount),currency:'USD',transactionReference:transactionReference||undefined,note:note||undefined,...(btcWithdrawalSubmissionEnabled?{network:'BITCOIN_MAINNET',senderEmail:senderEmail||undefined,senderWalletName:senderWalletName||undefined,senderWalletAddress:senderWalletAddress||undefined,transactionDateTime:transactionDateTime?new Date(transactionDateTime).toISOString():undefined}:{}),...(type==='WITHDRAWAL'?{withdrawalDestinationId,destinationConfirmed:true as const}:{})};
 		const fingerprint=JSON.stringify(payload);
 		const key=idempotencyKey&&keyFingerprint===fingerprint?idempotencyKey:window.crypto.randomUUID();setIdempotencyKey(key);setKeyFingerprint(fingerprint);
@@ -309,11 +317,6 @@ export default function WalletExperience(){
 			const result=await response.json();
 			if(!response.ok)throw new Error(result.error||'Unable to submit this request.');
 			setSubmittedReceipt(result as FundingRecord);
-			setMessage(response.status===200
-				?`Request already exists · ${String(result.status).replaceAll('_',' ')}.`
-				:type==='DEPOSIT'
-					?'Request submitted for administrator review. The ledger has not been posted.'
-					:'Withdrawal request submitted for administrator review. No external payout has been initiated.');
 			setAmount('');setTransactionReference('');setNote('');setProofFile(null);setIdempotencyKey('');setKeyFingerprint('');setConfirming(false);setReauthPassword('');
 			await load();
 		}catch(exception){setError(exception instanceof Error?exception.message:'Unable to submit this request.');}
@@ -347,7 +350,7 @@ export default function WalletExperience(){
 		try{
 			const response=await fetch(`/api/funding/${encodeURIComponent(request.id)}/cancel`,{method:'POST',headers:{'content-type':'application/json','Idempotency-Key':window.crypto.randomUUID()},body:JSON.stringify({})});
 			const result=await response.json();if(!response.ok)throw new Error(result.error||'Unable to cancel withdrawal.');
-			setMessage('Request cancelled. Reservation released.');
+			setSubmittedReceipt(result as FundingRecord);
 			await load();
 		}catch(exception){setError(exception instanceof Error?exception.message:'Unable to cancel withdrawal.')}
 		finally{setSubmitting(false)}
@@ -355,6 +358,7 @@ export default function WalletExperience(){
 
 	return <><Nav/><main className="account-page wallet-premium-page" data-wallet-view={workflow?'workflow':'overview'}>
 		<header className="wallet-page-heading"><div><span className="wallet-eyebrow">{data.accountMode} ACCOUNT · PRIVATE WALLET</span><h1>{workflow?`${type==='DEPOSIT'?'Deposit':'Withdraw'} funds`:'Wallet'}</h1><p>{data.accountMode==='DEMO'?'Virtual USD practice wallet.':'REAL account ledger.'}</p></div><div className="wallet-heading-actions"><span className={`status-pill ${data.accountMode==='DEMO'?'mode-demo':'mode-real'}`}>{data.accountMode==='DEMO'?'DEMO · VIRTUAL':'REAL · LEDGER'}</span><button type="button" className="wallet-refresh" aria-label="Refresh wallet" title="Refresh wallet" onClick={()=>void load(true)} disabled={loading}><RefreshCw size={16}/></button></div></header>
+		{submittedStatusNotice&&<StatusNotice {...submittedStatusNotice}/>}
 		{!workflow&&<>
 			{error&&<p className="wallet-feedback is-error" role="alert">{error}</p>}
 			<section className="wallet-balance-panel wallet-signature-card">
@@ -433,7 +437,7 @@ export default function WalletExperience(){
 		{error&&<p className="mt-3 text-sm text-loss" role="alert">{error}</p>}
 		{message&&<p className="mt-3 text-sm text-profit" role="status">{message}</p>}
 		<div className="account-metrics mt-3"><div className="account-metric"><span>{translate('pendingReview')}</span><b>{hasWalletData?data.transactions.filter(item=>reserves.includes(item.status)).length:'—'}</b><small>{translate('noLedgerPosting')}</small></div><div className="account-metric"><span>{translate('withdrawalReservations')}</span><b>{hasWalletData?availableBalance===null?'Unavailable':money(pendingWithdrawal,currency):'—'}</b><small>{translate('requestsAwaitingReview',{currency})}</small></div><div className="account-metric"><span>{translate('enabledPaymentMethods')}</span><b>{methodLoadError?'—':methods.length}</b><small>{translate('configuredByAdministrator')}</small></div><div className="account-metric"><span>{translate('recentRequests')}</span><b>{hasWalletData?data.transactions.length:'—'}</b><small>{translate('latest100')}</small></div></div>
-				{submittedReceipt&&<section className="account-panel card mt-4 p-5"><div className="account-panel-title"><div><h2>Withdrawal request confirmation</h2><p className="account-panel-subtitle">This receipt confirms the request only. It is not proof of payment.</p></div></div><ReceiptGenerator receipt={{...submittedReceipt,id:submittedReceipt.id,reference:submittedReceipt.id,status:receiptStatus(submittedReceipt.status),type:submittedReceipt.type,accountMode:submittedReceipt.accountMode,aureviaExchangeId:data.aureviaExchangeId,simulated:submittedReceipt.type==='DEPOSIT'||submittedReceipt.accountMode==='DEMO',createdAt:submittedReceipt.createdAt,reviewedAt:submittedReceipt.reviewedAt,completedAt:submittedReceipt.settledAt,adminNote:submittedReceipt.adminNote,name:session?.user?.name||'',email:session?.user?.email||'',amount:submittedReceipt.amount,currency:submittedReceipt.currency,fee:submittedReceipt.feeAmount??undefined,feeTreatment:submittedReceipt.feeAmount!==undefined&&submittedReceipt.feeAmount!==null?'DEDUCTED':undefined,creditedAmount:submittedReceipt.creditedAmount??undefined,creditedCurrency:submittedReceipt.creditedCurrency,method:submittedReceipt.method,accountReference:`USER:${session?.user?.id||'account'}:${submittedReceipt.accountMode}:${submittedReceipt.currency}`,externalReference:submittedReceipt.type==='WITHDRAWAL'?submittedReceipt.processingReference:submittedReceipt.transactionReference,processingReference:submittedReceipt.processingReference,recipientName:submittedReceipt.withdrawalDestination?.nickname,recipientNumber:submittedReceipt.withdrawalDestination?.maskedLabel,purpose:submittedReceipt.note}}/></section>}
+				{trackedSubmittedReceipt&&<section className="account-panel card mt-4 p-5"><div className="account-panel-title"><div><h2>{trackedSubmittedReceipt.type==='DEPOSIT'?'Deposit':'Withdrawal'} request confirmation</h2><p className="account-panel-subtitle">This receipt confirms the request only. It is not proof of payment.</p></div></div><ReceiptGenerator receipt={{...trackedSubmittedReceipt,id:trackedSubmittedReceipt.id,reference:trackedSubmittedReceipt.id,status:receiptStatus(trackedSubmittedReceipt.status),type:trackedSubmittedReceipt.type,accountMode:trackedSubmittedReceipt.accountMode,aureviaExchangeId:data.aureviaExchangeId,simulated:trackedSubmittedReceipt.type==='DEPOSIT'||trackedSubmittedReceipt.accountMode==='DEMO',createdAt:trackedSubmittedReceipt.createdAt,reviewedAt:trackedSubmittedReceipt.reviewedAt,completedAt:trackedSubmittedReceipt.settledAt,adminNote:trackedSubmittedReceipt.adminNote,name:session?.user?.name||'',email:session?.user?.email||'',amount:trackedSubmittedReceipt.amount,currency:trackedSubmittedReceipt.currency,fee:trackedSubmittedReceipt.feeAmount??undefined,feeTreatment:trackedSubmittedReceipt.feeAmount!==undefined&&trackedSubmittedReceipt.feeAmount!==null?'DEDUCTED':undefined,creditedAmount:trackedSubmittedReceipt.creditedAmount??undefined,creditedCurrency:trackedSubmittedReceipt.creditedCurrency,method:trackedSubmittedReceipt.method,accountReference:`USER:${session?.user?.id||'account'}:${trackedSubmittedReceipt.accountMode}:${trackedSubmittedReceipt.currency}`,externalReference:trackedSubmittedReceipt.type==='WITHDRAWAL'?trackedSubmittedReceipt.processingReference:trackedSubmittedReceipt.transactionReference,processingReference:trackedSubmittedReceipt.processingReference,recipientName:trackedSubmittedReceipt.withdrawalDestination?.nickname,recipientNumber:trackedSubmittedReceipt.withdrawalDestination?.maskedLabel,purpose:trackedSubmittedReceipt.note}}/></section>}
 		{data.transactions.length>0&&<section className="account-panel card mt-4 p-5"><div className="account-panel-title"><div><h2>Funding receipts</h2><p className="account-panel-subtitle">Download request and approval receipts for deposits and withdrawals recorded in this account.</p></div></div><div className="mt-4 grid gap-3">{data.transactions.slice(0,10).map(transaction=>{
 			const name=transaction.user?.name||session?.user?.name||'';
 			const email=transaction.user?.email||session?.user?.email||'';

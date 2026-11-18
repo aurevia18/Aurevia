@@ -1,7 +1,7 @@
 import {NextResponse} from 'next/server';
 import {withAuth,type NextRequestWithAuth} from 'next-auth/middleware';
 
-const protectedRoutes=['/dashboard','/trade','/portfolio','/orders','/investments','/wallet','/kyc','/settings','/notifications','/activity','/tier','/broadcasts'];
+const protectedRoutes=['/dashboard','/markets','/trade','/portfolio','/orders','/investments','/wallet','/bank','/cards','/kyc','/settings','/notifications','/activity','/tier','/broadcasts','/community','/tax-services'];
 const isProtectedRoute=(pathname:string)=>protectedRoutes.some(route=>pathname===route||pathname.startsWith(`${route}/`));
 
 export default withAuth(function middleware(request:NextRequestWithAuth){
