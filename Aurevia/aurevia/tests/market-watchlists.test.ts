@@ -20,6 +20,7 @@ describe('per-account market watchlists',()=>{
 		localStore.set('aurevia-live-market-watchlists',JSON.stringify({state:{watchlists:[{id:'market-default',name:'Mi lista de control',symbols:['DJI']}],activeWatchlistId:'market-default',selectedSymbol:'DJI'},version:0}));
 		await setMarketWatchlistUserScope(null);
 		expect(useMarketWatchlists.getState().watchlists[0].name).toBe('My Watchlist');
+		expect(useMarketWatchlists.getState().selectedSymbol).toBe('BTC');
 	});
 
 	it('keeps saved watchlists separate when users share a browser',async()=>{

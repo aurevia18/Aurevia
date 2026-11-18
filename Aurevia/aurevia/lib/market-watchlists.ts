@@ -33,13 +33,13 @@ function isPersistedWatchlistState(value:unknown):value is Pick<MarketWatchlistS
 }
 
 function defaultWatchlistState(state:MarketWatchlistState){
-  return {...state,watchlists:[{...initialWatchlist,symbols:[...initialWatchlist.symbols]}],activeWatchlistId:initialWatchlist.id,selectedSymbol:'DJI'};
+  return {...state,watchlists:[{...initialWatchlist,symbols:[...initialWatchlist.symbols]}],activeWatchlistId:initialWatchlist.id,selectedSymbol:'BTC'};
 }
 
 export const useMarketWatchlists=create<MarketWatchlistState>()(persist(set=>({
   watchlists:[initialWatchlist],
   activeWatchlistId:initialWatchlist.id,
-  selectedSymbol:'DJI',
+  selectedSymbol:'BTC',
   setActiveWatchlist:id=>set({activeWatchlistId:id}),
   selectSymbol:selectedSymbol=>set({selectedSymbol}),
   createWatchlist:name=>set(state=>{
@@ -71,7 +71,18 @@ export const useMarketWatchlists=create<MarketWatchlistState>()(persist(set=>({
   partialize:state=>({watchlists:state.watchlists,activeWatchlistId:state.activeWatchlistId,selectedSymbol:state.selectedSymbol}),
   merge:(persistedState,currentState)=>{
     if(!isPersistedWatchlistState(persistedState))return defaultWatchlistState(currentState);
-    return {...currentState,...persistedState,watchlists:persistedState.watchlists.map(list=>list.id==='market-default'&&list.name==='Mi lista de control'?{...list,name:initialWatchlist.name}:list)};
+    return {
+      ...currentState,
+      ...persistedState,
+      watchlists:persistedState.watchlists.map(list=>list.id==='market-default'&&list.name==='Mi lista de control'?{...list,name:initialWatchlist.name}:list),
+    };
+  },
+  version:1,
+  migrate:persistedState=>{
+    if(isPersistedWatchlistState(persistedState)&&persistedState.selectedSymbol==='DJI'){
+      return {...persistedState,selectedSymbol:'BTC'};
+    }
+    return persistedState as Pick<MarketWatchlistState,'watchlists'|'activeWatchlistId'|'selectedSymbol'>;
   },
   skipHydration:true,
 }));
