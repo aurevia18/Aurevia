@@ -147,6 +147,23 @@ test('public navigation is balanced in the desktop header and remains accessible
 	await expectNoHorizontalOverflow(page);
 });
 
+test('slow page navigation keeps the current page usable with a lightweight progress indicator',async({page})=>{
+	await page.setViewportSize({width:1280,height:900});
+	await page.goto('/');
+	await page.route('**/login**',async route=>{
+		await new Promise(resolve=>setTimeout(resolve,900));
+		await route.continue();
+	});
+
+	await page.locator('.home-hero-actions a[href="/login"]').click();
+	const progress=page.locator('.page-transition-progress');
+	await expect(progress).toBeVisible();
+	await expect(page.locator('.home-hero h1').first()).toBeVisible();
+	await expect(page.locator('.scene-content > div').first()).not.toHaveJSProperty('inert',true);
+	await page.waitForURL(/\/login$/);
+	await expect(progress).toHaveCount(0);
+});
+
 test('homepage hero actions remain usable with reduced motion',async({browser,page})=>{
 	await page.setViewportSize({width:1280,height:900});
 	await page.goto('/');

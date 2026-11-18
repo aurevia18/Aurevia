@@ -27,14 +27,19 @@ async function prepareFirstVisit(page:Page,playResult:'resolve'|'reject'){
 	},{result:playResult});
 }
 
-test('fresh visits start intro playback when media is ready and never time out early',async({page})=>{
+test('fresh visits show the homepage immediately and load the intro only when requested',async({page})=>{
 	await page.setViewportSize({width:1440,height:900});
 	await page.emulateMedia({reducedMotion:'no-preference'});
 	await prepareFirstVisit(page,'resolve');
 	await page.goto('/');
 	const intro=page.getByRole('dialog',{name:'Aurevia Exchange introduction'});
 	const video=page.locator('.exchange-intro-video');
-	await expect(page.locator('link[rel="preload"][as="video"]')).toHaveAttribute('href','/Videos/aurevia-intro-desktop.mp4');
+	await expect(page.locator('h1:visible').first()).toBeVisible();
+	await expect(page.locator('link[rel="preload"][as="video"]')).toHaveCount(0);
+	await expect(intro).toHaveCount(0);
+	await expect(page.getByRole('button',{name:'Replay video'})).toBeVisible();
+	expect(await page.evaluate(()=>((window as Window&{__aureviaStartupPlayCalls?:number}).__aureviaStartupPlayCalls)||0)).toBe(0);
+	await page.getByRole('button',{name:'Replay video'}).click();
 	await expect(intro).toBeVisible();
 	await expect(video).toHaveAttribute('autoplay','');
 	await expect(video).toHaveJSProperty('muted',true);
@@ -67,6 +72,7 @@ test('desktop intro falls back to the available orientation, ends, skips, and st
 	});
 	try{
 		await page.goto('/');
+		await page.getByRole('button',{name:'Replay video'}).click();
 		const intro=page.getByRole('dialog',{name:'Aurevia Exchange introduction'});
 		await expect(intro).toBeVisible();
 		await expect(page.getByRole('button',{name:'Retry video'})).toHaveCount(0);
@@ -107,10 +113,11 @@ test('portrait devices select the mobile video and autoplay failures offer playb
 	const releaseVideoRequests=await holdVideoRequests(page);
 	try{
 		await page.goto('/');
+		await page.getByRole('button',{name:'Replay video'}).click();
 		await expect(page.getByRole('dialog',{name:'Aurevia Exchange introduction'})).toBeVisible();
 		const video=page.locator('.exchange-intro-video');
 		await expect(video).toHaveAttribute('src','/Videos/aurevia-intro-mobile.mp4');
-		await expect(page.locator('link[rel="preload"][as="video"]')).toHaveAttribute('href','/Videos/aurevia-intro-mobile.mp4');
+		await expect(page.locator('link[rel="preload"][as="video"]')).toHaveCount(0);
 		expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
 		await video.evaluate(element=>{
 			Object.defineProperty(element,'readyState',{configurable:true,value:HTMLMediaElement.HAVE_CURRENT_DATA});
@@ -141,6 +148,7 @@ test('video network failures can be retried after connectivity returns',async({p
 		return route.continue();
 	});
 	await page.goto('/');
+	await page.getByRole('button',{name:'Replay video'}).click();
 	await expect(page.locator('.exchange-intro-actions [role="status"]')).toHaveText('The introduction video could not be loaded.');
 	await expect(page.getByRole('button',{name:'Retry video'})).toBeVisible();
 	await page.getByRole('button',{name:'Retry video'}).click();
@@ -170,6 +178,7 @@ test('real intro videos are served and autoplay is attempted with browser-safe s
 	});
 
 	await page.goto('/');
+	await page.getByRole('button',{name:'Replay video'}).click();
 	for(const source of ['/Videos/aurevia-intro-desktop.mp4','/Videos/aurevia-intro-mobile.mp4']){
 		const response=await page.request.get(new URL(source,page.url()).toString());
 		expect(response.status()).toBe(200);

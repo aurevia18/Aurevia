@@ -345,7 +345,6 @@ export default function Trade() {
   const heldSellQuantity=positions.filter(position=>position.instrumentId===selected&&position.side==="BUY").reduce((total,position)=>total+position.quantity,0);
   const reservedSellQuantity=orders.filter(order=>order.instrument.symbol===cur?.symbol&&order.side==="SELL"&&["OPEN","PARTIALLY_FILLED","PENDING_CANCEL"].includes(order.status)).reduce((total,order)=>total+Math.max(0,order.quantity-order.filledQuantity),0);
   const availableSellQuantity=Math.max(0,heldSellQuantity-reservedSellQuantity);
-  const marketQuoteTime=book.updatedAt??cur?.liveQuote?.updatedAt;
   const hiddenFailedOrderIds=new Set(dismissedFailedOrderIds);
   const failedOrders=orders.filter(isFailedOrder);
   const visibleFailedOrders=failedOrders.filter(order=>!hiddenFailedOrderIds.has(order.id));
@@ -536,17 +535,12 @@ export default function Trade() {
                 </div>
               </div>
               <div className="trade-orderbook">
-                <h3 className="font-bold">{accountMode==="REAL"?"Market quotes":translate('orderBook')} {accountMode==="DEMO"&&<small>{translate('demoFeedOnly')}</small>}</h3>
+                <h3 className="font-bold">{accountMode==="REAL"?"Best bid and ask":translate('orderBook')} {accountMode==="DEMO"&&<small>{translate('demoFeedOnly')}</small>}</h3>
                 {accountMode==="REAL"?
                   <div className="mt-3 space-y-3 text-xs">
                     <p className="muted">Best bid and ask only. Level 2 market depth is not provided.</p>
-                    <div className="flex justify-between"><span>Last</span><b>{(book.last??cur?.price)?.toLocaleString(undefined,{maximumFractionDigits:6})??"Unavailable"}</b></div>
                     <div className="flex justify-between text-loss"><span>Best ask</span><b>{(book.ask===undefined?cur?.ask:book.ask)?.toLocaleString(undefined,{maximumFractionDigits:6})??"Unavailable"}</b></div>
                     <div className="flex justify-between text-profit"><span>Best bid</span><b>{(book.bid===undefined?cur?.bid:book.bid)?.toLocaleString(undefined,{maximumFractionDigits:6})??"Unavailable"}</b></div>
-                    <div className="flex justify-between"><span>Spread</span><b>{book.spread!==undefined&&book.spread!==null?book.spread.toLocaleString(undefined,{maximumFractionDigits:6}):cur?.bid!==null&&cur?.bid!==undefined&&cur?.ask!==null&&cur?.ask!==undefined?(cur.ask-cur.bid).toLocaleString(undefined,{maximumFractionDigits:6}):"Unavailable"}</b></div>
-                    <div className="flex justify-between"><span>Daily change</span><b>{book.changePercent!==undefined?`${book.change?.toLocaleString(undefined,{maximumFractionDigits:6})??"—"} (${book.changePercent.toFixed(2)}%)`:cur?.liveQuote?`${cur.liveQuote.change.toLocaleString(undefined,{maximumFractionDigits:6})} (${cur.liveQuote.changePercent.toFixed(2)}%)`:"Unavailable"}</b></div>
-                    <div className="flex justify-between"><span>Market status</span><b>{cur?.assetType==='CRYPTO'?"24/7":book.marketStatus&&book.marketStatus!=='UNKNOWN'?book.marketStatus:"Unavailable"}</b></div>
-                    <div className="flex justify-between"><span>Updated</span><b>{marketQuoteTime?new Date(marketQuoteTime).toLocaleTimeString():"Waiting for quote"}</b></div>
                     {book.error&&<div className="trade-inline-notice" role="status"><span>{book.error}</span><button type="button" aria-label="Dismiss market data notice" onClick={()=>setBook(current=>({...current,error:undefined}))}><X size={15}/></button></div>}
                   </div>
                   :<div className="mt-3 text-xs">

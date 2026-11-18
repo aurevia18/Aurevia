@@ -5,14 +5,13 @@ import type {MouseEvent,ReactNode} from 'react';
 import {usePathname} from 'next/navigation';
 import {useSession} from 'next-auth/react';
 import AureviaStartup,{AureviaStartupLoader} from '@/components/AureviaStartup';
-import AureviaLoading from '@/components/AureviaLoading';
 
 const startupKey='aurevia-startup-complete';
 const introKey='aurevia-cinematic-intro-complete';
-const exitDurationMs=180;
+const exitDurationMs=120;
 const introExitDurationMs=450;
-const maximumStartupWaitMs=1200;
-const navigationLoaderDelayMs=100;
+const maximumStartupWaitMs=350;
+const navigationLoaderDelayMs=250;
 const navigationLoaderTimeoutMs=15_000;
 type StartupMode='loading'|'hidden';
 
@@ -40,7 +39,7 @@ export default function StartupShell({children}:{children:ReactNode}){
 	},[]);
 
 	const startNavigation=useCallback(()=>{
-		if(!ready||startupMode!=='hidden'||window.matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+		if(!ready||startupMode!=='hidden')return;
 		clearNavigationTimers();
 		navigationLoaderTimer.current=window.setTimeout(()=>setShowPageTransition(true),navigationLoaderDelayMs);
 		navigationTimeoutTimer.current=window.setTimeout(()=>{
@@ -104,17 +103,8 @@ export default function StartupShell({children}:{children:ReactNode}){
 			setShowIntro(false);
 			return;
 		}
-		let introSeen=false;
-		try{introSeen=localStorage.getItem(introKey)==='1'}catch{
-			try{introSeen=sessionStorage.getItem(introKey)==='1'}catch{}
-		}
-		if(introSeen){
-			delete document.documentElement.dataset.aureviaIntroPending;
-			setShowIntro(false);
-			return;
-		}
-		document.documentElement.dataset.aureviaIntroPending='true';
-		setShowIntro(true);
+		delete document.documentElement.dataset.aureviaIntroPending;
+		setShowIntro(false);
 	},[pathname]);
 
 	useEffect(()=>()=>{if(introExitTimer.current!==undefined)window.clearTimeout(introExitTimer.current)},[]);
@@ -171,9 +161,9 @@ export default function StartupShell({children}:{children:ReactNode}){
 
 	return <div className="app-shell" onClickCapture={handleNavigationClick}>
 		<div className="scene-depth" aria-hidden="true"/>
-		<div className="scene-content"><div inert={showStartup||showPageTransition||showIntro} aria-hidden={showStartup||showPageTransition||showIntro}>{children}</div>
+		<div className="scene-content"><div inert={showStartup||showIntro} aria-hidden={showStartup||showIntro}>{children}</div>
 			{startupMode==='loading'&&<AureviaStartupLoader isExiting={isExiting}/>}
-			{showPageTransition&&<AureviaLoading label="Loading the next page" detail="Moving securely through Aurevia Exchange"/>}
+			{showPageTransition&&<div className="page-transition-progress" role="status" aria-label="Loading the next page"/>}
 			{pathname==='/'&&<AureviaStartup isVisible={showIntro} isExiting={isIntroExiting} onSkip={finishIntro} onReplay={replayIntro}/>}
 		</div>
 	</div>;

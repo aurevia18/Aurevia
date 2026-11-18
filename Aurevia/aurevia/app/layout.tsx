@@ -57,23 +57,5 @@ export default async function RootLayout({children}:{children:ReactNode}){
   }
   const legacyTheme=initialTheme==='premium-dashboard'?'light':'dark';
   const themeBootstrap=`try{if(sessionStorage.getItem('aurevia-startup-complete')==='1')document.documentElement.dataset.aureviaStartupComplete='true'}catch{}try{const root=document.documentElement;if(root.dataset.themeAccount!=='true'){const cookie=document.cookie.split('; ').find(value=>value.startsWith('aurevia-anonymous-theme='))?.split('=')[1];let theme=cookie==='premium-dashboard'?'premium-dashboard':cookie==='forest-green'?'forest-green':root.dataset.themeName;const cached=localStorage.getItem('aurevia-anonymous-theme');if(cached==='premium-dashboard'||cached==='forest-green')theme=cached;else{const legacy=localStorage.getItem('aurevia-theme');if(legacy==='light')theme='premium-dashboard';else if(legacy==='dark')theme='forest-green'}root.dataset.themeName=theme;root.dataset.theme=theme==='premium-dashboard'?'light':'dark';if(cookie!=='premium-dashboard'&&cookie!=='forest-green')document.cookie='aurevia-anonymous-theme='+theme+'; Path=/; Max-Age=31536000; SameSite=Lax';localStorage.removeItem('aurevia-theme')}root.style.colorScheme=root.dataset.themeName==='premium-dashboard'?'light':'dark';const meta=document.querySelector('meta[name="theme-color"]');if(meta)meta.content=root.dataset.themeName==='premium-dashboard'?'#F7F8F5':'#07110D'}catch{}`;
-  const introBootstrap=`if(location.pathname==='/'&&!window.matchMedia('(prefers-reduced-motion: reduce)').matches){
-	let introSeen=false;
-	try{introSeen=localStorage.getItem('aurevia-cinematic-intro-complete')==='1'}catch{
-		try{introSeen=sessionStorage.getItem('aurevia-cinematic-intro-complete')==='1'}catch{}
-	}
-	if(!introSeen){
-		document.documentElement.dataset.aureviaIntroPending='true';
-		const preload=document.createElement('link');
-		preload.rel='preload';
-		preload.as='video';
-		preload.type='video/mp4';
-		preload.fetchPriority='high';
-		preload.href=window.matchMedia('(orientation: portrait)').matches
-			?'/Videos/aurevia-intro-mobile.mp4'
-			:'/Videos/aurevia-intro-desktop.mp4';
-		document.head.append(preload);
-	}
-}`;
-  return <html lang={initialLocale} dir={direction} data-theme={legacyTheme} data-theme-name={initialTheme} data-theme-account={initialUserId?'true':'false'} suppressHydrationWarning><body><Script id="aurevia-startup-state" strategy="beforeInteractive">{themeBootstrap}</Script><Script id="aurevia-intro-state" strategy="beforeInteractive">{introBootstrap}</Script><Providers initialLocale={initialLocale} initialTheme={initialTheme} initialUserId={initialUserId} initialSession={initialSession}><StartupShell>{children}</StartupShell></Providers></body></html>;
+  return <html lang={initialLocale} dir={direction} data-theme={legacyTheme} data-theme-name={initialTheme} data-theme-account={initialUserId?'true':'false'} suppressHydrationWarning><body><Script id="aurevia-startup-state" strategy="beforeInteractive">{themeBootstrap}</Script><Providers initialLocale={initialLocale} initialTheme={initialTheme} initialUserId={initialUserId} initialSession={initialSession}><StartupShell>{children}</StartupShell></Providers></body></html>;
 }
