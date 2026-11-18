@@ -6,14 +6,18 @@ const mocks=vi.hoisted(()=>({
 	userFindUnique:vi.fn(),
 	getRecommendations:vi.fn(),
 	rateLimit:vi.fn(),
+	placeOrder:vi.fn(),
+	getDemoConfig:vi.fn(),
 }));
 
 vi.mock('@/lib/auth',()=>({requireUser:mocks.requireUser}));
 vi.mock('@/lib/db',()=>({db:{user:{findUnique:mocks.userFindUnique}}}));
 vi.mock('@/lib/demo-ai-recommendations',()=>({getDemoAiRecommendations:mocks.getRecommendations}));
 vi.mock('@/lib/rate-limit',()=>({rateLimit:mocks.rateLimit}));
+vi.mock('@/lib/orders',()=>({placeOrder:mocks.placeOrder}));
+vi.mock('@/lib/demo-ai-config',()=>({getDemoAiConfig:mocks.getDemoConfig}));
 
-import {GET} from '@/app/api/demo/ai-recommendations/route';
+import {GET,POST} from '@/app/api/demo/ai-recommendations/route';
 
 describe('DEMO AI recommendation route',()=>{
 	beforeEach(()=>{
@@ -21,6 +25,8 @@ describe('DEMO AI recommendation route',()=>{
 		mocks.requireUser.mockResolvedValue({id:'user-1'});
 		mocks.userFindUnique.mockResolvedValue({accountMode:AccountMode.DEMO,status:'ACTIVE'});
 		mocks.getRecommendations.mockResolvedValue({status:'no_signal',recommendations:[],evaluationIntervalSeconds:300});
+		mocks.getDemoConfig.mockReturnValue({enabled:true,autoEnabled:true});
+		mocks.placeOrder.mockResolvedValue({id:'order-1',status:'FILLED',side:'BUY',quantity:{toString:()=> '0.2'},instrumentId:'inst-1'});
 	});
 
 	it('refuses REAL mode before requesting an AI recommendation',async()=>{
@@ -60,5 +66,60 @@ describe('DEMO AI recommendation route',()=>{
 		expect(response.status).toBe(503);
 		expect(result.error).toContain('No recommendation was generated');
 		expect(result.error.toLowerCase()).toContain('no trade was placed');
+	});
+
+	it('automatically submits only one server-authorized DEMO market order',async()=>{
+		mocks.getRecommendations.mockResolvedValue({
+			status:'ready',
+			recommendations:[{
+				instrumentId:'inst-1',
+				action:'BUY',
+				quantity:0.2,
+				entryPrice:100,
+				observedAt:'2026-11-18T14:27:00.000Z',
+			}],
+			evaluationIntervalSeconds:300,
+		});
+
+		const response=await POST();
+		const result=await response.json();
+
+		expect(response.status).toBe(200);
+		expect(result.executed).toBe(true);
+		expect(mocks.placeOrder).toHaveBeenCalledWith(
+			'user-1',
+			AccountMode.DEMO,
+			expect.objectContaining({instrumentId:'inst-1',side:'BUY',type:'MARKET',quantity:0.2}),
+			expect.stringMatching(/^DEMO-AI-/),
+		);
+	});
+
+	it('refuses automatic trading in REAL mode',async()=>{
+		mocks.userFindUnique.mockResolvedValue({accountMode:AccountMode.REAL,status:'ACTIVE'});
+		const response=await POST();
+
+		expect(response.status).toBe(403);
+		expect(mocks.placeOrder).not.toHaveBeenCalled();
+	});
+
+	it('does not report success when the order service returns no order',async()=>{
+		mocks.getRecommendations.mockResolvedValue({
+			status:'ready',
+			recommendations:[{
+				instrumentId:'inst-1',
+				action:'BUY',
+				quantity:0.2,
+				entryPrice:100,
+				observedAt:'2026-11-18T14:27:00.000Z',
+			}],
+			evaluationIntervalSeconds:300,
+		});
+		mocks.placeOrder.mockResolvedValue(null);
+
+		const response=await POST();
+		const result=await response.json();
+
+		expect(response.status).toBe(503);
+		expect(result.executed).toBe(false);
 	});
 });

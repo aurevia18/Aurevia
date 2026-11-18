@@ -14,6 +14,23 @@ afterEach(()=>{
 });
 
 describe('central AI gateway',()=>{
+	it('uses an explicitly allowlisted OpenAI model',async()=>{
+		vi.stubEnv('AI_PROVIDER','openai');
+		vi.stubEnv('AI_MODEL','gpt-4o-mini');
+		vi.stubEnv('OPENAI_API_KEY','private-openai-test-key');
+		vi.stubEnv('OPENAI_MODEL_ALLOWLIST','openai:gpt-4o-mini');
+		const fetcher=vi.fn()
+			.mockResolvedValueOnce(new Response(JSON.stringify({data:[{id:'gpt-4o-mini'},{id:'gpt-4o'}]}),{status:200}))
+			.mockResolvedValueOnce(new Response(JSON.stringify({model:'gpt-4o-mini',choices:[{message:{content:'DEMO recommendation analysis.'}}],usage:{prompt_tokens:10,completion_tokens:4,total_tokens:14}}),{status:200}));
+		vi.stubGlobal('fetch',fetcher);
+		const {aiChat}=await import('@/lib/ai-gateway');
+		const result=await aiChat([{role:'user',content:'Analyze the supplied DEMO candidates'}],{service:'operational_recommendations'});
+		expect(result).toMatchObject({content:'DEMO recommendation analysis.',provider:'openai',model:'gpt-4o-mini'});
+		expect(fetcher.mock.calls[0][0]).toBe('https://api.openai.com/v1/models');
+		expect(fetcher.mock.calls[1][0]).toBe('https://api.openai.com/v1/chat/completions');
+		expect(fetcher.mock.calls[1][1].headers.authorization).toBe('Bearer private-openai-test-key');
+	});
+
 	it('uses OpenRouter free routing and records token usage without logging prompts',async()=>{
 		vi.stubEnv('OPENROUTER_API_KEY','private-test-key');
 		const fetcher=vi.fn()

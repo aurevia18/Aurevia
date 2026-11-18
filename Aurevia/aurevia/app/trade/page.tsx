@@ -260,6 +260,7 @@ export default function Trade() {
   }, [selected,accountMode]);
   const cur = items.find((i) => i.id === selected);
   const chartAssetId=cur?.assetId||getMarketAssetForTradingSymbol(cur?.symbol||'')?.id;
+  const demoProviderQuote=demoChartQuote?.asset.id===chartAssetId?demoChartQuote:undefined;
   function selectInstrument(instrument:I){
     setSelected(instrument.id);
     if(accountMode==="REAL"&&instrument.assetType==="CRYPTO"&&type==="STOP"){
@@ -512,6 +513,7 @@ export default function Trade() {
                     <span className="account-kicker">{cur?.symbol||translate('selectAnInstrument')}</span>
                     <p className="trade-last-price">{cur?.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:cur.price<10?4:2})||"—"}</p>
                     {accountMode==="REAL"&&cur?.liveQuote&&<span className="muted text-xs">Bid {cur.bid?.toLocaleString(undefined,{maximumFractionDigits:6})??"—"} · Ask {cur.ask?.toLocaleString(undefined,{maximumFractionDigits:6})??"—"}</span>}
+                    {accountMode==="DEMO"&&chartAssetId&&<span className="muted text-xs" aria-live="polite">{demoProviderQuote?`External market reference · ${demoProviderQuote.source}: ${demoProviderQuote.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:demoProviderQuote.price<10?4:2})}`:"External market reference unavailable"} · not used for DEMO orders</span>}
                   </div>
                   <span className="status-pill">{accountMode==="REAL"?(cur?.liveQuote?"Market quote":"Quote unavailable"):translate('simulatedPrice')}</span>
                 </div>

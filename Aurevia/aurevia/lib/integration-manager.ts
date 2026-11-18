@@ -7,11 +7,11 @@ import {getFinnhubQuote} from '@/lib/providers/finnhub-market-data';
 import {getAlpacaPaperAccountHealth} from '@/lib/providers/alpaca-crypto-provider';
 
 export type IntegrationStatus='CONNECTED'|'MISSING_CREDENTIALS'|'CONFIGURATION_REQUIRED'|'CONNECTION_FAILED'|'PROVIDER_UNAVAILABLE'|'PENDING_ADMIN_APPROVAL'|'NOT_CONFIGURED'|'DISABLED';
-export type IntegrationId='openrouter'|'gemini'|'groq'|'alpaca'|'finnhub'|'currency'|'supabase_auth'|'supabase_storage'|'resend'|'termii'|'smtp'|'browser_push'|'gnews'|'payment'|'database'|'akedly'|'aurevia_kyc';
+export type IntegrationId='openai'|'openrouter'|'gemini'|'groq'|'alpaca'|'finnhub'|'currency'|'supabase_auth'|'supabase_storage'|'resend'|'termii'|'smtp'|'browser_push'|'gnews'|'payment'|'database'|'akedly'|'aurevia_kyc';
 export type IntegrationCheck={id:IntegrationId;name:string;status:IntegrationStatus;detail:string;feature:string;documentation:string;checkedAt:string;canTest:boolean};
 
 const docs:Record<IntegrationId,string>={
-	openrouter:'https://openrouter.ai/docs/quickstart',gemini:'https://ai.google.dev/gemini-api/docs',groq:'https://console.groq.com/docs/quickstart',
+	openai:'https://platform.openai.com/docs/overview',openrouter:'https://openrouter.ai/docs/quickstart',gemini:'https://ai.google.dev/gemini-api/docs',groq:'https://console.groq.com/docs/quickstart',
 	alpaca:'https://docs.alpaca.markets/docs/getting-started',finnhub:'https://finnhub.io/docs/api',currency:'https://finnhub.io/docs/api/forex-rates',
 	supabase_auth:'https://supabase.com/docs/guides/auth',supabase_storage:'https://supabase.com/docs/guides/storage',resend:'https://resend.com/docs/api-reference/domains/list-domains',
 	termii:'https://developers.termii.com/',smtp:'https://nodemailer.com/smtp/',browser_push:'https://developer.mozilla.org/en-US/docs/Web/API/Push_API',
@@ -38,7 +38,7 @@ async function checkAiProvider(provider:AiProvider,name:string,engineStatus?:Pro
 	const engine=await (engineStatus||getAiEngineStatus());
 	const entry=engine.providers.find(candidate=>candidate.provider===provider);
 	if(!entry)return item(provider,name,'PROVIDER_UNAVAILABLE','Provider health could not be determined.','AI services');
-	const detail=entry.status==='CONNECTED'?`Provider authenticated; approved free model ${entry.model} is available.`:entry.status==='MISSING_CREDENTIALS'?'No server-side credential is configured.':entry.status==='CONFIGURATION_REQUIRED'?'Provider responded, but no approved free model is selected or available.':'Provider model-list check failed.';
+	const detail=entry.status==='CONNECTED'?`Provider authenticated; approved model ${entry.model} is available.`:entry.status==='MISSING_CREDENTIALS'?'No server-side credential is configured.':entry.status==='CONFIGURATION_REQUIRED'?'Provider responded, but no approved model is selected or available.':'Provider model-list check failed.';
 	return item(provider,name,aiStatus(entry.status),detail,'Central AI services');
 }
 
@@ -150,6 +150,7 @@ function checkAureviaKyc(){
 }
 
 export async function checkIntegration(id:IntegrationId,aiEngineStatus?:Promise<AiEngineStatus>):Promise<IntegrationCheck>{
+	if(id==='openai')return checkAiProvider(id,'OpenAI',aiEngineStatus);
 	if(id==='openrouter')return checkAiProvider(id,'OpenRouter',aiEngineStatus);
 	if(id==='gemini')return checkAiProvider(id,'Google Gemini',aiEngineStatus);
 	if(id==='groq')return checkAiProvider(id,'Groq',aiEngineStatus);
@@ -177,19 +178,19 @@ export async function checkIntegration(id:IntegrationId,aiEngineStatus?:Promise<
 }
 
 export async function getIntegrationInventory(aiStatus?:Promise<AiEngineStatus>):Promise<IntegrationCheck[]>{
-	const ids:IntegrationId[]=['openrouter','gemini','groq','alpaca','finnhub','currency','supabase_auth','supabase_storage','resend','termii','smtp','browser_push','gnews','payment','database','akedly','aurevia_kyc'];
+	const ids:IntegrationId[]=['openai','openrouter','gemini','groq','alpaca','finnhub','currency','supabase_auth','supabase_storage','resend','termii','smtp','browser_push','gnews','payment','database','akedly','aurevia_kyc'];
 	const aiEngineStatus=aiStatus||getAiEngineStatus();
 	return Promise.all(ids.map(id=>checkIntegration(id,aiEngineStatus)));
 }
 
 export function isIntegrationId(value:unknown):value is IntegrationId{
-	return typeof value==='string'&&['openrouter','gemini','groq','alpaca','finnhub','currency','supabase_auth','supabase_storage','resend','termii','smtp','browser_push','gnews','payment','database','akedly','aurevia_kyc'].includes(value);
+	return typeof value==='string'&&['openai','openrouter','gemini','groq','alpaca','finnhub','currency','supabase_auth','supabase_storage','resend','termii','smtp','browser_push','gnews','payment','database','akedly','aurevia_kyc'].includes(value);
 }
 
 export function mapAiStatusForDisplay(value:string){return aiStatus(value)}
 
 export function integrationProviderForAi(value:IntegrationId):AiProvider|null{
-	return value==='openrouter'||value==='gemini'||value==='groq'?value:null;
+	return value==='openai'||value==='openrouter'||value==='gemini'||value==='groq'?value:null;
 }
 
 export function getIntegrationDocumentation(value:IntegrationId){return docs[value];}

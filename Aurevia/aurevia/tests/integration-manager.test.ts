@@ -39,6 +39,12 @@ describe('retired Akedly integration',()=>{
 		expect(result.detail).toContain('historical records');
 	});
 
+	describe('OpenAI integration',()=>{
+		it('recognizes OpenAI as a supported administrator integration',()=>{
+			expect(isIntegrationId('openai')).toBe(true);
+		});
+	});
+
 	it('recognizes Akedly as a supported administrator integration',()=>{
 		expect(isIntegrationId('akedly')).toBe(true);
 	});

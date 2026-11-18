@@ -1,9 +1,12 @@
 import {NextResponse} from 'next/server';
-import {AccountMode} from '@prisma/client';
+import {AccountMode,OrderSide,OrderType} from '@prisma/client';
 import {requireUser} from '@/lib/auth';
 import {db} from '@/lib/db';
 import {getDemoAiRecommendations} from '@/lib/demo-ai-recommendations';
 import {rateLimit} from '@/lib/rate-limit';
+import {placeOrder} from '@/lib/orders';
+import {randomUUID} from 'node:crypto';
+import {getDemoAiConfig} from '@/lib/demo-ai-config';
 
 export const dynamic='force-dynamic';
 
@@ -27,5 +30,42 @@ export async function GET(){
 		if(error instanceof Error&&error.message==='AI_RECOMMENDATION_INVALID')return NextResponse.json({error:'The AI response could not be validated. No trade was placed.'},{status:503});
 		console.error('DEMO AI recommendation evaluation failed.',error instanceof Error?error.name:'UnknownError');
 		return NextResponse.json({error:'AI recommendations are temporarily unavailable. No trade was placed.'},{status:503});
+	}
+}
+
+export async function POST(){
+	try{
+		const user=await requireUser();
+		const activeUser=await db.user.findUnique({where:{id:user.id},select:{accountMode:true,status:true}});
+		if(!activeUser||activeUser.status!=='ACTIVE')return NextResponse.json({error:'This account is unavailable.'},{status:403});
+		if(activeUser.accountMode!==AccountMode.DEMO)return NextResponse.json({error:'Automatic AI trading is available in DEMO mode only.'},{status:403});
+		const config=getDemoAiConfig();
+		if(!config.enabled||!config.autoEnabled)return NextResponse.json({error:'Automatic DEMO AI trading is disabled.',status:'disabled',executed:false},{status:403});
+		rateLimit(`demo-ai-auto-trade:${user.id}`,2,60_000);
+		const result=await getDemoAiRecommendations(user.id);
+		const recommendation=result.status==='ready'?result.recommendations[0]:undefined;
+		if(!recommendation)return NextResponse.json({...result,executed:false,order:null},{headers:{'Cache-Control':'private, no-store'}});
+		const order=await placeOrder(user.id,AccountMode.DEMO,{
+			instrumentId:recommendation.instrumentId,
+			side:recommendation.action===OrderSide.BUY?OrderSide.BUY:OrderSide.SELL,
+			type:OrderType.MARKET,
+			quantity:recommendation.quantity,
+			expectedPrice:recommendation.entryPrice,
+			observedAt:recommendation.observedAt,
+		},`DEMO-AI-${randomUUID()}`);
+		if(!order)throw new Error('DEMO_AI_ORDER_NOT_CREATED');
+		return NextResponse.json({
+			...result,
+			executed:true,
+			order:{id:order.id,status:order.status,side:order.side,quantity:Number(order.quantity),instrumentId:order.instrumentId},
+		},{headers:{'Cache-Control':'private, no-store'}});
+	}catch(error){
+		if(error instanceof Error&&error.message==='UNAUTHORIZED')return NextResponse.json({error:'Unauthorized'},{status:401});
+		if(error instanceof Error&&error.message==='RATE_LIMITED')return NextResponse.json({error:'Automatic AI trading is temporarily limited.'},{status:429});
+		if(error instanceof Error&&error.message==='DEMO_MODE_REQUIRED')return NextResponse.json({error:'Automatic AI trading is available in DEMO mode only.'},{status:403});
+		if(error instanceof Error&&error.message==='INSUFFICIENT_SIMULATED_BALANCE')return NextResponse.json({error:'No sufficient simulated wallet funds are available.',executed:false},{status:409});
+		if(error instanceof Error&&error.message==='INSUFFICIENT_POSITION')return NextResponse.json({error:'No sufficient simulated position is available.',executed:false},{status:409});
+		console.error('Automatic DEMO AI trade failed.',error instanceof Error?error.name:'UnknownError');
+		return NextResponse.json({error:'The automatic DEMO trade could not be submitted. No external funds were used.',executed:false},{status:503});
 	}
 }

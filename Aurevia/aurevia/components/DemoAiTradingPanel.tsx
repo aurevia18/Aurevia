@@ -20,24 +20,27 @@ type Recommendation={
 	marketDataLabel:string;
 	risk:{riskPerTradePercent:number;maxPositionUsd:number;stopLossPercent:number;takeProfitPercent:number;feeRate:number;spreadBps:number;slippageBps:number};
 };
-type ResponseData={status:'ready'|'disabled'|'no_signal';message?:string;evaluationIntervalSeconds:number;recommendations:Recommendation[]};
+type ResponseData={status:'ready'|'disabled'|'no_signal';message?:string;evaluationIntervalSeconds:number;recommendations:Recommendation[];executed?:boolean};
 
 export default function DemoAiTradingPanel(){
 	const [data,setData]=useState<ResponseData|null>(null);
 	const [error,setError]=useState('');
 	const [loading,setLoading]=useState(false);
+	const [autoTrading,setAutoTrading]=useState(false);
+	const [executionMessage,setExecutionMessage]=useState('');
 	const evaluationInterval=useRef(300);
 	const load=useCallback(async()=>{
 		setLoading(true);
 		try{
-			const response=await fetch('/api/demo/ai-recommendations',{cache:'no-store'});
+			const response=await fetch('/api/demo/ai-recommendations',{method:autoTrading?'POST':'GET',cache:'no-store'});
 			const result=await response.json() as ResponseData|{error?:string};
 			if(!response.ok)throw new Error('error'in result?result.error||'AI recommendations are unavailable.':'AI recommendations are unavailable.');
 			const payload=result as ResponseData;
 			setData(payload);evaluationInterval.current=Math.max(60,payload.evaluationIntervalSeconds);setError('');
+			setExecutionMessage(autoTrading&&'executed'in payload&&payload.executed?'Automatic DEMO order submitted.':'');
 		}catch(exception){setData(null);setError(exception instanceof Error?exception.message:'AI recommendations are unavailable.');}
 		finally{setLoading(false);}
-	},[]);
+	},[autoTrading]);
 
 	useEffect(()=>{
 		let cancelled=false;
@@ -51,8 +54,9 @@ export default function DemoAiTradingPanel(){
 	},[load]);
 
 	return <section className="demo-ai-panel" aria-labelledby="demo-ai-heading">
-		<header><div><span className="demo-ai-kicker"><BrainCircuit size={14}/> DEMO-ONLY ASSISTANCE</span><h2 id="demo-ai-heading">AI trade ideas</h2><p>Recommendations only. Review and submit any trade yourself.</p></div><button type="button" className="demo-ai-refresh" onClick={()=>void load()} disabled={loading} aria-label="Refresh AI recommendations"><RefreshCw size={14} className={loading?'is-spinning':''}/></button></header>
+		<header><div><span className="demo-ai-kicker"><BrainCircuit size={14}/> DEMO-ONLY ASSISTANCE</span><h2 id="demo-ai-heading">AI trade ideas</h2><p>{autoTrading?'Automatic DEMO trades use only virtual wallet funds.':'Recommendations only. Review and submit any trade yourself.'}</p></div><div className="flex items-center gap-2"><button type="button" className="demo-ai-refresh" aria-pressed={autoTrading} onClick={()=>setAutoTrading(value=>!value)} disabled={loading}>{autoTrading?'Stop auto trading':'Enable auto trading'}</button><button type="button" className="demo-ai-refresh" onClick={()=>void load()} disabled={loading} aria-label="Refresh AI recommendations"><RefreshCw size={14} className={loading?'is-spinning':''}/></button></div></header>
 		{error&&<p className="demo-ai-message" role="status">{error}</p>}
+		{executionMessage&&<p className="demo-ai-message" role="status">{executionMessage}</p>}
 		{!error&&data&&data.recommendations.length===0&&<p className="demo-ai-message" role="status">{data.message||'No recommendation is currently available.'}</p>}
 		{data?.recommendations.map(item=><article className="demo-ai-recommendation" key={`${item.instrumentId}:${item.action}`}>
 			<div className="demo-ai-recommendation-title"><div><span>{item.strategy.replaceAll('_',' ').toUpperCase()} · {item.marketDataLabel}</span><h3>{item.action} {item.symbol}</h3></div><span className={`demo-ai-side ${item.action.toLowerCase()}`}>{item.action}</span></div>

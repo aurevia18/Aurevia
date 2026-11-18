@@ -27,8 +27,10 @@ function supportedSymbols():string[]|null{
 
 export function getDemoAiConfig(){
 	const enabled=process.env.DEMO_AI_ENABLED==='true';
+	const autoEnabled=process.env.DEMO_AI_AUTO_ENABLED==='true';
 	return {
 		enabled,
+		autoEnabled,
 		strategies:selectedStrategies(),
 		supportedSymbols:supportedSymbols(),
 		riskPerTrade:boundedNumber('DEMO_AI_RISK_PER_TRADE',0.01,0.001,0.05),

@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto';
 import {db} from '@/lib/db';
 import {getApprovedAiCredential} from '@/lib/ai-credential-vault';
 
-export type AiProvider='openrouter'|'gemini'|'groq';
+export type AiProvider='openai'|'openrouter'|'gemini'|'groq';
 export type AiMessage={role:'system'|'user'|'assistant';content:string};
 export type AiUsage={promptTokens:number|null;completionTokens:number|null;totalTokens:number|null};
 export type AiResult={content:string;provider:AiProvider;model:string;usage:AiUsage};
@@ -33,6 +33,7 @@ export class AiGatewayError extends Error{
 }
 
 function providerKey(provider:AiProvider){
+	if(provider==='openai')return process.env.OPENAI_API_KEY?.trim()||'';
 	if(provider==='openrouter')return process.env.OPENROUTER_API_KEY?.trim()||'';
 	if(provider==='gemini')return process.env.GEMINI_API_KEY?.trim()||'';
 	return process.env.GROQ_API_KEY?.trim()||'';
@@ -44,12 +45,13 @@ async function resolvedProviderKey(provider:AiProvider){
 
 function selectedProvider():AiProvider{
 	const value=process.env.AI_PROVIDER?.trim().toLowerCase();
-	return value==='gemini'||value==='groq'?value:'openrouter';
+	return value==='openai'||value==='gemini'||value==='groq'?value:'openrouter';
 }
 
 function modelFor(provider:AiProvider){
 	const configured=process.env.AI_MODEL?.trim();
 	if(configured)return configured;
+	if(provider==='openai')return 'gpt-4o-mini';
 	return provider==='openrouter'?'openrouter/free':provider==='gemini'?'gemini-2.0-flash':'llama-3.1-8b-instant';
 }
 
@@ -89,6 +91,7 @@ function modelList(data:Record<string,unknown>,provider:AiProvider):ProviderMode
 		const model=value as Record<string,unknown>;
 		const id=typeof model.id==='string'?model.id:typeof model.name==='string'?model.name.replace(/^models\//,''):'';
 		if(!id)return [];
+		if(provider==='openai')return [{id,free:false}];
 		if(provider!=='openrouter')return [{id,free:false}];
 		const pricing=model.pricing&&typeof model.pricing==='object'?model.pricing as Record<string,unknown>:{};
 		const zeroPrice=(price:unknown)=>price===0||price==='0'||price==='0.0'||price==='0.000000';
@@ -104,7 +107,13 @@ async function listModels(provider:AiProvider):Promise<ProviderModel[]>{
 	const request=(async()=>{
 		const key=await resolvedProviderKey(provider);
 		if(!key)throw new AiGatewayError(`${provider} credentials are missing.`,'NOT_CONFIGURED',503);
-		const url=provider==='openrouter'?'https://openrouter.ai/api/v1/models':provider==='groq'?'https://api.groq.com/openai/v1/models':`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`;
+		const url=provider==='openrouter'
+			?'https://openrouter.ai/api/v1/models'
+			:provider==='groq'
+				?'https://api.groq.com/openai/v1/models'
+				:provider==='openai'
+					?'https://api.openai.com/v1/models'
+					:`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`;
 		const headers=provider==='gemini'?undefined:{authorization:`Bearer ${key}`};
 		let response:Response;
 		try{response=await fetch(url,{headers,cache:'no-store',signal:AbortSignal.timeout(timeoutMs)});}
@@ -119,6 +128,10 @@ async function listModels(provider:AiProvider):Promise<ProviderModel[]>{
 }
 
 function approvedFreeModel(provider:AiProvider,models:ProviderModel[],configuredModel:string){
+	if(provider==='openai'){
+		const allowlist=new Set((process.env.OPENAI_MODEL_ALLOWLIST||'').split(',').map(value=>value.trim()).filter(Boolean));
+		return Boolean(configuredModel&&allowlist.has(`openai:${configuredModel}`)&&models.some(model=>model.id===configuredModel));
+	}
 	if(provider==='openrouter'){
 		if(configuredModel==='openrouter/free')return models.some(model=>model.free);
 		return models.some(model=>model.id===configuredModel&&model.free);
@@ -158,7 +171,11 @@ async function sendRequest(provider:AiProvider,model:string,messages:AiMessage[]
 				body:JSON.stringify({contents,systemInstruction:system?{parts:[{text:system}]}:undefined,generationConfig:{temperature:options.temperature??0.4,maxOutputTokens:options.maxTokens??700}}),
 			});
 		}else{
-			const endpoint=provider==='openrouter'?'https://openrouter.ai/api/v1/chat/completions':'https://api.groq.com/openai/v1/chat/completions';
+			const endpoint=provider==='openrouter'
+				?'https://openrouter.ai/api/v1/chat/completions'
+				:provider==='openai'
+					?'https://api.openai.com/v1/chat/completions'
+					:'https://api.groq.com/openai/v1/chat/completions';
 			response=await fetch(endpoint,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${key}`},signal,body:JSON.stringify({model,messages:openAiCompatibleMessages(messages),temperature:options.temperature??0.4,max_tokens:options.maxTokens??700})});
 		}
 	}catch(error){
@@ -247,7 +264,7 @@ export async function aiChat(input:unknown,optionsInput:unknown={}):Promise<AiRe
 
 export async function getAiEngineStatus(){
 	const primary=selectedProvider();
-	const providers:Array<AiProvider>=['openrouter','gemini','groq'];
+	const providers:Array<AiProvider>=['openai','openrouter','gemini','groq'];
 	const results=await Promise.all(providers.map(async provider=>{
 		const key=await resolvedProviderKey(provider);
 		if(!key)return {provider,status:'MISSING_CREDENTIALS' as const,model:provider===primary?modelFor(provider):null,availableModels:0};
