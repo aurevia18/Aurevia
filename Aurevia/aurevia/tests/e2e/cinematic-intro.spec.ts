@@ -34,6 +34,7 @@ test('fresh visits start intro playback when media is ready and never time out e
 	await page.goto('/');
 	const intro=page.getByRole('dialog',{name:'Aurevia Exchange introduction'});
 	const video=page.locator('.exchange-intro-video');
+	await expect(page.locator('link[rel="preload"][as="video"]')).toHaveAttribute('href','/Videos/aurevia-intro-desktop.mp4');
 	await expect(intro).toBeVisible();
 	await expect(video).toHaveAttribute('autoplay','');
 	await expect(video).toHaveJSProperty('muted',true);
@@ -93,6 +94,7 @@ test('desktop intro falls back to the available orientation, ends, skips, and st
 		await expect(intro).toHaveCount(0);
 		await page.reload();
 		await expect(intro).toHaveCount(0);
+		await expect(page.locator('link[rel="preload"][as="video"]')).toHaveCount(0);
 		await expect(page.locator('h1:visible').first()).toBeVisible();
 	}finally{
 		await releaseVideoRequests();
@@ -108,6 +110,7 @@ test('portrait devices select the mobile video and autoplay failures offer playb
 		await expect(page.getByRole('dialog',{name:'Aurevia Exchange introduction'})).toBeVisible();
 		const video=page.locator('.exchange-intro-video');
 		await expect(video).toHaveAttribute('src','/Videos/aurevia-intro-mobile.mp4');
+		await expect(page.locator('link[rel="preload"][as="video"]')).toHaveAttribute('href','/Videos/aurevia-intro-mobile.mp4');
 		expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
 		await video.evaluate(element=>{
 			Object.defineProperty(element,'readyState',{configurable:true,value:HTMLMediaElement.HAVE_CURRENT_DATA});
@@ -194,6 +197,7 @@ test('reduced-motion visitors bypass automatic playback',async({page})=>{
 	await page.addInitScript(key=>localStorage.removeItem(key),introKey);
 	await page.goto('/');
 	await expect(page.getByRole('dialog',{name:'Aurevia Exchange introduction'})).toHaveCount(0);
+	await expect(page.locator('link[rel="preload"][as="video"]')).toHaveCount(0);
 	await expect(page.locator('h1:visible').first()).toBeVisible();
 	expect(await page.evaluate(key=>localStorage.getItem(key),introKey)).toBe('1');
 });

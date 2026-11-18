@@ -268,9 +268,6 @@ export default function RegistrationExperience(){
 		setError('');setNotice('');setExistingAccountIssue(null);
 		const requestId=createRegistrationRequestId();
 		submissionInFlight.current=true;setBusy(true);
-		const controller=new AbortController();
-		let timedOut=false;
-		const requestTimeout=window.setTimeout(()=>{timedOut=true;controller.abort()},30_000);
 		try{
 			const payload={
 				firstName:details.firstName.trim(),
@@ -303,27 +300,46 @@ export default function RegistrationExperience(){
 				legalAcceptances:currentLegalDocuments.map(({documentKey,version})=>({documentKey,version})),
 				website:'',
 			};
-			let response:Response;
-			try{
-				response=await fetch('/api/register',{
-					method:'POST',
-					headers:{'content-type':'application/json','accept':'application/json',...(requestId?{'x-aurevia-request-id':requestId}:{})},
-					body:JSON.stringify(payload),
-					signal:controller.signal,
+			const sendRegistrationRequest=async()=>{
+				const controller=new AbortController();
+				let timedOut=false;
+				const requestTimeout=window.setTimeout(()=>{timedOut=true;controller.abort()},30_000);
+				try{
+					return {response:await fetch('/api/register',{
+						method:'POST',
+						headers:{'content-type':'application/json','accept':'application/json',...(requestId?{'x-aurevia-request-id':requestId}:{})},
+						body:JSON.stringify(payload),
+						signal:controller.signal,
+					}),timedOut:false};
+				}catch(exception){
+					return {exception,timedOut};
+				}finally{
+					window.clearTimeout(requestTimeout);
+				}
+			};
+			let requestResult=await sendRegistrationRequest();
+			if('exception' in requestResult){
+				console.warn('[registration] Registration request failed; retrying once.',{
+					...(requestId?{requestId,referenceId:requestId}:{}),
+					endpoint:'/api/register',
+					reason:requestResult.timedOut?'timeout':requestResult.exception instanceof Error?requestResult.exception.name:'UNKNOWN_ERROR',
 				});
-			}catch(exception){
+				requestResult=await sendRegistrationRequest();
+			}
+			if('exception' in requestResult){
 				const referenceId=requestId||createRegistrationRequestId();
 				console.warn('[registration] Browser request did not receive an API response.',{
 					...(referenceId?{requestId:referenceId,referenceId}:{}),
 					endpoint:'/api/register',
-					reason:timedOut?'timeout':exception instanceof Error?exception.name:'UNKNOWN_ERROR',
+					reason:requestResult.timedOut?'timeout':requestResult.exception instanceof Error?requestResult.exception.name:'UNKNOWN_ERROR',
 					failureTimestamp:new Date().toISOString(),
 				});
-				setError(timedOut
+				setError(requestResult.timedOut
 					?`The registration request timed out. Your form details are still here; check your connection and retry.${referenceId?` Reference: ${referenceId}`:''}`
 					:`Unable to connect to the registration service. Your form details are still here; check your connection and retry.${referenceId?` Reference: ${referenceId}`:''}`);
 				return;
 			}
+			const response=requestResult.response;
 			let result:Record<string,unknown>;
 			try{
 				const body:unknown=await response.json();
@@ -397,7 +413,7 @@ export default function RegistrationExperience(){
 			});
 			setError(`Registration could not continue after the service response. Please retry.${referenceId?` Reference: ${referenceId}`:''}`);
 		}finally{
-			window.clearTimeout(requestTimeout);submissionInFlight.current=false;setBusy(false);
+			submissionInFlight.current=false;setBusy(false);
 		}
 	}
 
@@ -406,7 +422,7 @@ export default function RegistrationExperience(){
 	const accountDescription=details.accountMode==='DEMO'
 		?'$5,000 simulated starting balance · no deposits or withdrawals · demo funds have no cash value.'
 		:details.accountMode==='REAL'
-			?'$0 starting balance · funding requires administrator approval · Aurevia Verify identity review may be required. Orders use configured simulated or sandbox execution, not live brokerage execution.'
+			?'Start with $0. Deposits require approval. Identity verification may be required to access certain services.'
 			:'Not selected';
 
 	if(success)return <main className="registration-success">
@@ -529,7 +545,7 @@ export default function RegistrationExperience(){
 							<label className={`registration-account-card ${details.accountMode==='REAL'?'is-selected':''}`}>
 								<input type="radio" name="accountMode" value="REAL" checked={details.accountMode==='REAL'} onChange={()=>update('accountMode','REAL')}/>
 								<span className="registration-account-icon"><Landmark size={21}/></span>
-								<span className="registration-account-copy"><small>IDENTITY REVIEW MAY APPLY</small><b>REAL account</b><span>$0 initial balance. Funding requires administrator review and approval. Aurevia Verify identity review may be required for eligible services. Orders use configured simulated or sandbox execution, not live brokerage execution.</span></span>
+								<span className="registration-account-copy"><small>IDENTITY REVIEW MAY APPLY</small><b>REAL account</b><span>Start with $0. Deposits require approval. Identity verification may be required to access certain services.</span></span>
 								<span className="registration-account-check"><Check size={15}/></span>
 							</label>
 						</div>

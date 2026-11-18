@@ -1403,13 +1403,36 @@ test('sign-in password visibility, recovery link, and account link are accessibl
 	await expectNoHorizontalOverflow(page);
 });
 
-test('signup needs no external verification and automatically signs in without phone OTP',async({page})=>{
+test('signup recovers from a lost registration response and automatically signs in without phone OTP',async({page})=>{
 	const email=`aurevia-e2e-immediate-signup-${randomUUID()}@example.invalid`;
 	let registrationRequests=0;
+	const registrationRequestIds:string[]=[];
 	const registrationPayloads:Record<string,unknown>[]=[];
+	await page.addInitScript(()=>{
+		const originalFetch=window.fetch.bind(window);
+		let failedRegistrationRequest=false;
+		window.fetch=async(input,init)=>{
+			const url=typeof input==='string'?input:input instanceof URL?input.href:input.url;
+			const isRegistrationRequest=new URL(url,location.href).pathname==='/api/register';
+			if(isRegistrationRequest){
+				const headers=new Headers(init?.headers);
+				const requestIds=JSON.parse(window.sessionStorage.getItem('registration-request-ids')||'[]') as string[];
+				requestIds.push(headers.get('x-aurevia-request-id')||'');
+				window.sessionStorage.setItem('registration-request-ids',JSON.stringify(requestIds));
+			}
+			const response=await originalFetch(input,init);
+			if(isRegistrationRequest&&!failedRegistrationRequest){
+				failedRegistrationRequest=true;
+				await response.arrayBuffer();
+				throw new TypeError('Failed to fetch');
+			}
+			return response;
+		};
+	});
 	page.on('request',request=>{
 		if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/register'){
 			registrationRequests++;
+			registrationRequestIds.push(request.headers()['x-aurevia-request-id']);
 			registrationPayloads.push(request.postDataJSON() as Record<string,unknown>);
 		}
 	});
@@ -1426,7 +1449,9 @@ test('signup needs no external verification and automatically signs in without p
 	});
 	await page.waitForURL(url=>url.pathname==='/dashboard');
 	await expect(page.getByRole('heading',{name:'My assets'})).toBeVisible();
-	expect(registrationRequests).toBe(1);
+	expect(registrationRequests).toBe(2);
+	const attemptedRegistrationIds=await page.evaluate(()=>JSON.parse(window.sessionStorage.getItem('registration-request-ids')||'[]'));
+	expect(attemptedRegistrationIds).toEqual([registrationRequestIds[0],registrationRequestIds[0]]);
 
 	const signedIn=await page.request.get('/api/auth/session').then(response=>response.json());
 	expect(signedIn.user.email).toBe(email);
@@ -1442,7 +1467,7 @@ test('signup needs no external verification and automatically signs in without p
 	expect(await db.notification.findUnique({where:{dedupeKey:`registration:${registeredUser.id}:created`},select:{userId:true}})).toEqual({userId:registeredUser.id});
 	expect(await db.user.count({where:{email}})).toBe(1);
 	expect(await db.registrationAttempt.findUnique({where:{email}})).toBeNull();
-	expect(registrationPayloads).toHaveLength(1);
+	expect(registrationPayloads).toHaveLength(2);
 	expect(registrationPayloads[0]).not.toHaveProperty('verificationToken');
 	expect(registrationPayloads[0]).not.toHaveProperty('captchaToken');
 	expect(registrationPayloads[0].website).toBe('');
