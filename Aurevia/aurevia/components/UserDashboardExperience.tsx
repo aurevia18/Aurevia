@@ -33,7 +33,7 @@ type Overview={
 	unreconciledPaperPositionCount:number;
 	positions:Array<{id:string;side:string;quantity:string;entryPrice:string;currentPrice:string|null;marketValue:string|null;openedAt:string;instrument:{symbol:string;name:string}}>;
 	openOrders:Array<{id:string;side:string;type:string;status:string;quantity:string;filledQuantity:string;price:string|null;createdAt:string;instrument:{symbol:string;name:string}}>;
-	opportunities:Array<{id:string;title:string;category:string;description:string;assetSymbol:string|null;minimumAmount:string;maximumAmount:string|null;targetReturnPercent:string|null;durationDays:number;riskLevel:string;requiresApproval:boolean}>;
+	opportunities:Array<{id:string;title:string;category:string;description:string;assetSymbol:string|null;minimumAmount:string;maximumAmount:string|null;targetReturnPercent:string|null;durationDays:number;riskLevel:string}>;
 	activeInvestments:Array<{id:string;title:string;accountMode:'DEMO'|'REAL';amount:string;status:string;activatedAt:string|null;maturesAt:string|null;durationDays:number;displayTargetPayout:string}>;
 	recentActivity:Array<{id:string;category:string;action:string;timestamp:string;asset:string;amount:string;status:string;source:string;link:string}>;
 	internalMarketInstruments:Array<{assetId:string;instrumentId:string}>;

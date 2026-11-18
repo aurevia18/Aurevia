@@ -419,6 +419,7 @@ model User {
   twoFactorEnrollment              TwoFactorEnrollment?
   clientStories                    ClientStory[]
   investments                      InvestmentRequest[]
+  investmentOpportunityRecipients  InvestmentOpportunityRecipient[]
   portfolioSnapshots               PortfolioSnapshot[]
   createdInvestmentOpportunities   InvestmentOpportunity[]           @relation("InvestmentOpportunityCreator")
   createdBroadcasts                Broadcast[]                       @relation("BroadcastCreator")
@@ -1597,32 +1598,47 @@ model AdminDashboardActivityDismissal {
 }
 
 model InvestmentOpportunity {
-  id                  String                      @id @default(cuid())
+  id                  String                           @id @default(cuid())
   title               String
   category            String
   description         String
   assetSymbol         String?
-  minimumAmount       Decimal                     @db.Decimal(30, 10)
-  maximumAmount       Decimal?                    @db.Decimal(30, 10)
-  targetReturnPercent Decimal?                    @db.Decimal(10, 6)
+  minimumAmount       Decimal                          @db.Decimal(30, 10)
+  maximumAmount       Decimal?                         @db.Decimal(30, 10)
+  targetReturnPercent Decimal?                         @db.Decimal(10, 6)
   durationDays        Int
   startsAt            DateTime?
   maturesAt           DateTime?
   riskLevel           InvestmentRisk
-  status              InvestmentOpportunityStatus @default(DRAFT)
-  demoEligible        Boolean                     @default(true)
-  realEligible        Boolean                     @default(false)
-  requiresApproval    Boolean                     @default(true)
-  targetPrice         Decimal?                    @db.Decimal(30, 10)
-  stopPrice           Decimal?                    @db.Decimal(30, 10)
+  status              InvestmentOpportunityStatus      @default(DRAFT)
+  targeted            Boolean                          @default(false)
+  demoEligible        Boolean                          @default(true)
+  realEligible        Boolean                          @default(false)
+  requiresApproval    Boolean                          @default(true)
+  targetPrice         Decimal?                         @db.Decimal(30, 10)
+  stopPrice           Decimal?                         @db.Decimal(30, 10)
   createdById         String?
-  createdBy           User?                       @relation("InvestmentOpportunityCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy           User?                            @relation("InvestmentOpportunityCreator", fields: [createdById], references: [id], onDelete: SetNull)
   requests            InvestmentRequest[]
-  createdAt           DateTime                    @default(now())
-  updatedAt           DateTime                    @updatedAt
+  recipients          InvestmentOpportunityRecipient[]
+  createdAt           DateTime                         @default(now())
+  updatedAt           DateTime                         @updatedAt
 
   @@index([status, createdAt])
+  @@index([status, maturesAt])
   @@index([assetSymbol, status])
+}
+
+model InvestmentOpportunityRecipient {
+  id            String                @id @default(cuid())
+  opportunityId String
+  opportunity   InvestmentOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sentAt        DateTime              @default(now())
+
+  @@unique([opportunityId, userId])
+  @@index([userId, sentAt])
 }
 
 model InvestmentRequest {

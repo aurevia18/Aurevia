@@ -72,8 +72,12 @@ export async function GET(){
 				where:{
 					status:InvestmentOpportunityStatus.AVAILABLE,
 					realEligible:true,
+					AND:[
+						{OR:[{targeted:false},{recipients:{some:{userId:profile.id}}}]},
+						{OR:[{maturesAt:null},{maturesAt:{gt:new Date()}}]},
+					],
 				},
-				select:{id:true,title:true,category:true,description:true,assetSymbol:true,minimumAmount:true,maximumAmount:true,targetReturnPercent:true,durationDays:true,riskLevel:true,requiresApproval:true},
+				select:{id:true,title:true,category:true,description:true,assetSymbol:true,minimumAmount:true,maximumAmount:true,targetReturnPercent:true,durationDays:true,riskLevel:true},
 				orderBy:{createdAt:'desc'},
 				take:4,
 			}):Promise.resolve([]),

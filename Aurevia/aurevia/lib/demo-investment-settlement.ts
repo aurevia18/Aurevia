@@ -5,6 +5,7 @@ import {postSimulatedInvestmentPayout} from '@/lib/investment-ledger';
 import {simulatedInvestmentSettlement} from '@/lib/investment-policy';
 
 const batchSize=100;
+const settlementStatuses:InvestmentStatus[]=[InvestmentStatus.ACTIVE,InvestmentStatus.PAUSED,InvestmentStatus.COMPLETED];
 
 async function activateScheduledSimulatedInvestments(now:Date){
 	const scheduled=await db.investmentRequest.findMany({where:{status:InvestmentStatus.APPROVED,activatedAt:{lte:now},maturesAt:{not:null}},select:{id:true},orderBy:{activatedAt:'asc'},take:batchSize});
@@ -16,7 +17,7 @@ async function activateScheduledSimulatedInvestments(now:Date){
 			const changed=await tx.investmentRequest.updateMany({where:{id:current.id,status:InvestmentStatus.APPROVED,activatedAt:{lte:now}},data:{status:InvestmentStatus.ACTIVE}});
 			if(changed.count!==1)return false;
 			await tx.auditLog.create({data:{actorId:null,action:'SIMULATED_INVESTMENT_AUTO_ACTIVATED',entity:'INVESTMENT',entityId:current.id,metadata:{accountMode:current.accountMode,simulated:true,activatedAt:current.activatedAt.toISOString(),maturesAt:current.maturesAt.toISOString()}}});
-			await createNotification(tx,{userId:current.userId,type:NotificationType.SYSTEM,title:'Practice investment started',message:'Your administrator-scheduled practice investment is now active.',dedupeKey:`investment:${current.id}:auto-activated`,relatedEntity:'INVESTMENT',relatedId:current.id,actionUrl:'/investments'});
+			await createNotification(tx,{userId:current.userId,type:NotificationType.SYSTEM,title:`${current.accountMode} investment started`,message:`Your administrator-scheduled ${current.accountMode} internal investment is now active. Any target payout is an internal estimate, not guaranteed external investment earnings.`,dedupeKey:`investment:${current.id}:auto-activated`,relatedEntity:'INVESTMENT',relatedId:current.id,actionUrl:'/investments'});
 			return true;
 		},{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
 		if(activated)activatedCount++;
@@ -26,7 +27,7 @@ async function activateScheduledSimulatedInvestments(now:Date){
 
 export async function settleMaturedSimulatedInvestments(now=new Date()){
 	await activateScheduledSimulatedInvestments(now);
-	const matured=await db.investmentRequest.findMany({where:{accountMode:{in:[AccountMode.DEMO,AccountMode.REAL]},status:InvestmentStatus.ACTIVE,maturesAt:{lte:now}},select:{id:true},orderBy:{maturesAt:'asc'},take:batchSize});
+	const matured=await db.investmentRequest.findMany({where:{accountMode:{in:[AccountMode.DEMO,AccountMode.REAL]},status:{in:settlementStatuses},maturesAt:{lte:now}},select:{id:true},orderBy:{maturesAt:'asc'},take:batchSize});
 	let settledCount=0;
 	for(const {id} of matured){
 		let settled=false;
@@ -34,17 +35,17 @@ export async function settleMaturedSimulatedInvestments(now=new Date()){
 			try{
 				settled=await db.$transaction(async tx=>{
 			const current=await tx.investmentRequest.findUnique({where:{id},include:{opportunity:{select:{title:true}}}});
-			if(!current||current.status!==InvestmentStatus.ACTIVE||!current.maturesAt||current.maturesAt>now)return false;
+			if(!current||!settlementStatuses.includes(current.status)||!current.maturesAt||current.maturesAt>now)return false;
 			const reservation=await tx.ledgerTransaction.findUnique({where:{reference:`INVESTMENT:${current.id}:RESERVE`},select:{id:true}});
 			if(!reservation)return false;
 			const payout=simulatedInvestmentSettlement(current.amount,current.targetReturnPercent,current.tierBoostPercent);
 			const settlementReference=`SIMULATED-AUTO-SETTLEMENT:${current.accountMode}:${current.id}`;
-			const changed=await tx.investmentRequest.updateMany({where:{id:current.id,accountMode:current.accountMode,status:InvestmentStatus.ACTIVE,maturesAt:{lte:now}},data:{status:InvestmentStatus.SETTLED,completedAt:current.completedAt??now,settledAt:now,settlementReference,simulatedPayout:payout}});
+			const changed=await tx.investmentRequest.updateMany({where:{id:current.id,accountMode:current.accountMode,status:current.status,maturesAt:{lte:now}},data:{status:InvestmentStatus.SETTLED,completedAt:current.completedAt??now,settledAt:now,settlementReference,simulatedPayout:payout}});
 			if(changed.count!==1)return false;
 
 			await postSimulatedInvestmentPayout(tx,{investmentId:current.id,userId:current.userId,accountMode:current.accountMode,principal:current.amount,payout,opportunityTitle:current.opportunity.title});
 			await tx.auditLog.create({data:{actorId:null,action:'SIMULATED_INVESTMENT_AUTO_SETTLED',entity:'INVESTMENT',entityId:current.id,metadata:{accountMode:current.accountMode,simulated:true,principal:current.amount.toString(),targetReturnPercent:current.targetReturnPercent?.toString()??null,tierBoostPercent:current.tierBoostPercent.toString(),simulatedPayout:payout.toString(),settlementReference}}});
-			await createNotification(tx,{userId:current.userId,type:NotificationType.SYSTEM,title:`${current.accountMode} practice investment matured`,message:`Your ${current.accountMode} practice investment matured and a payout of ${payout.toFixed(2)} USD was credited to your internal ledger. The payout used the configured target return and the tier boost captured when you allocated; returns are not guaranteed.`,dedupeKey:`investment:${current.id}:auto-settled`,relatedEntity:'INVESTMENT',relatedId:current.id,actionUrl:'/investments'});
+			await createNotification(tx,{userId:current.userId,type:NotificationType.SYSTEM,title:`${current.accountMode} investment matured`,message:`Your ${current.accountMode} internal investment reached expiry. An internally modeled payout of ${payout.toFixed(2)} USD was credited to your wallet ledger; it is not external investment proceeds or guaranteed earnings.`,dedupeKey:`investment:${current.id}:auto-settled`,relatedEntity:'INVESTMENT',relatedId:current.id,actionUrl:'/investments'});
 			return true;
 				},{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
 				break;

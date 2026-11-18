@@ -64,6 +64,7 @@ const opportunity={
 	maturesAt:null,
 	riskLevel:'MODERATE',
 	status:'AVAILABLE',
+	targeted:false,
 	demoEligible:false,
 	realEligible:true,
 	requiresApproval:true,
@@ -152,7 +153,13 @@ describe('REAL-only investment allocations',()=>{
 		expect(response.status).toBe(200);
 		expect(result).toMatchObject({accountMode:'REAL',availableBalance:'5000',startingBalance:'5000'});
 		expect(result.opportunities).toHaveLength(1);
-		expect(mocks.opportunityFindMany).toHaveBeenCalledWith(expect.objectContaining({where:{status:'AVAILABLE',realEligible:true}}));
+		expect(mocks.opportunityFindMany).toHaveBeenCalledWith(expect.objectContaining({where:{
+			status:'AVAILABLE',realEligible:true,
+			AND:[
+				{OR:[{targeted:false},{recipients:{some:{userId:'real-user'}}}]},
+				{OR:[{maturesAt:null},{maturesAt:{gt:expect.any(Date)}}]},
+			],
+		}}));
 		expect(mocks.accountFindUnique).toHaveBeenCalledWith({where:{code:'USER:real-user:REAL:USD'},select:{id:true,startingBalance:true}});
 	});
 
@@ -199,6 +206,35 @@ describe('REAL-only investment allocations',()=>{
 		expect(mocks.ensureUserLedger).toHaveBeenCalledWith(tx,'real-user','REAL','USD');
 		expect(mocks.ensureSystemAccount).toHaveBeenCalledWith(tx,'SYSTEM:INVESTMENT_ESCROW:REAL:USD','REAL investment escrow','USD','REAL');
 		expect(mocks.postDoubleEntry).toHaveBeenCalledWith(tx,expect.objectContaining({reference:expect.stringMatching(/^INVESTMENT:investment-1:RESERVE$/),amount:expect.any(Prisma.Decimal)}));
+		expect(mocks.requestCreate).toHaveBeenNthCalledWith(1,expect.objectContaining({data:expect.objectContaining({status:'ACTIVE',approvedAt:expect.any(Date),activatedAt:expect.any(Date),maturesAt:expect.any(Date)})}));
+	});
+
+	it('blocks accepting a targeted opportunity that was not sent to the user',async()=>{
+		mocks.opportunityFindUnique.mockResolvedValue({...opportunity,targeted:true,recipients:[{userId:'another-user'}]});
+		const response=await POST(new Request('https://aurevia.test/api/investments',{
+			method:'POST',
+			headers:{'content-type':'application/json','Idempotency-Key':crypto.randomUUID()},
+			body:JSON.stringify({opportunityId:opportunity.id,amount:250}),
+		}));
+
+		expect(response.status).toBe(409);
+		expect((await response.json()).error).toContain('investment not sent to user');
+		expect(mocks.requestCreate).not.toHaveBeenCalled();
+		expect(mocks.postDoubleEntry).not.toHaveBeenCalled();
+	});
+
+	it('keeps a targeted opportunity private when its recipients have been deleted',async()=>{
+		mocks.opportunityFindUnique.mockResolvedValue({...opportunity,targeted:true,recipients:[]});
+		const response=await POST(new Request('https://aurevia.test/api/investments',{
+			method:'POST',
+			headers:{'content-type':'application/json','Idempotency-Key':crypto.randomUUID()},
+			body:JSON.stringify({opportunityId:opportunity.id,amount:250}),
+		}));
+
+		expect(response.status).toBe(409);
+		expect((await response.json()).error).toContain('investment not sent to user');
+		expect(mocks.requestCreate).not.toHaveBeenCalled();
+		expect(mocks.postDoubleEntry).not.toHaveBeenCalled();
 	});
 
 	it('rejects allocations that exceed the available REAL balance',async()=>{

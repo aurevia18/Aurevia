@@ -7,7 +7,7 @@ const transitions:Record<InvestmentStatus,Partial<Record<InvestmentAction,Invest
  APPROVED:{activate:InvestmentStatus.ACTIVE,cancel:InvestmentStatus.CANCELLED},
  ACTIVE:{pause:InvestmentStatus.PAUSED,complete:InvestmentStatus.COMPLETED,cancel:InvestmentStatus.CANCELLED},
  PAUSED:{activate:InvestmentStatus.ACTIVE,complete:InvestmentStatus.COMPLETED,cancel:InvestmentStatus.CANCELLED},
- COMPLETED:{settle:InvestmentStatus.SETTLED},
+ COMPLETED:{},
  REJECTED:{},
  CANCELLED:{},
  SETTLED:{},

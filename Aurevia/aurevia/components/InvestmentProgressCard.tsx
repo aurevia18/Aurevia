@@ -79,7 +79,7 @@ export function InvestmentProgressCard({investment,onMaturity}:{investment:Inves
 			<span>{display.matured?'Maturity reached · settlement processing':remainingText(display.secondsRemaining)}</span>
 			<span>{(display.progress*100).toFixed(1)}% elapsed</span>
 		</div>
-		<p className="investment-live-disclosure">Illustrative, display-only estimate from the recorded investment terms. No earnings are credited until the server settles the investment.</p>
+		<p className="investment-live-disclosure">Internally modeled, display-only estimate from the recorded terms—not external investment performance. The modeled payout is credited to the internal wallet ledger only after server settlement at expiry.</p>
 	</article>;
 }
 
@@ -87,7 +87,7 @@ export function InvestmentCompletionCard({investment}:{investment:InvestmentProg
 	const settled=investment.status==='SETTLED';
 	return <div className={`investment-completion-card ${settled?'is-settled':''}`}>
 		<div><b>{settled?'Investment completed':'Investment period complete'}</b><p>{settled
-			?`The server automatically credited the recorded payout of ${formatUsd(investment.simulatedPayout||investment.amount)} to your ${investment.accountMode} internal USD ledger. The displayed earnings were an estimate; this settled amount is available in your wallet. No claim or separate move is needed.`
+			?`The server automatically credited the internally modeled payout of ${formatUsd(investment.simulatedPayout||investment.amount)} to your ${investment.accountMode} internal USD ledger at expiry. It is not external investment proceeds. The settled amount is available in your wallet; no separate move is needed.`
 			:'The investment period is complete and settlement is pending. No payout is available in your balance until settlement is recorded.'}</p></div>
 		{settled&&<div className="investment-completion-actions">{investment.accountMode==='REAL'&&<Link href="/wallet?action=WITHDRAWAL"><WalletCards size={13}/>Request withdrawal</Link>}<Link href="/wallet"><WalletCards size={13}/>View wallet</Link><Link href="/investments">Browse investments <ArrowRight size={13}/></Link></div>}
 	</div>;

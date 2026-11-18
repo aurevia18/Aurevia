@@ -7,8 +7,8 @@ describe('investment lifecycle policy',()=>{
   expect(nextInvestmentStatus(InvestmentStatus.PENDING_APPROVAL,'approve')).toBe(InvestmentStatus.APPROVED);
   expect(nextInvestmentStatus(InvestmentStatus.APPROVED,'activate')).toBe(InvestmentStatus.ACTIVE);
   expect(nextInvestmentStatus(InvestmentStatus.ACTIVE,'complete')).toBe(InvestmentStatus.COMPLETED);
-  expect(nextInvestmentStatus(InvestmentStatus.COMPLETED,'settle')).toBe(InvestmentStatus.SETTLED);
   expect(()=>nextInvestmentStatus(InvestmentStatus.ACTIVE,'settle')).toThrow('INVESTMENT_TRANSITION_NOT_ALLOWED');
+  expect(()=>nextInvestmentStatus(InvestmentStatus.COMPLETED,'settle')).toThrow('INVESTMENT_TRANSITION_NOT_ALLOWED');
  });
 
  it('requires a non-negative simulated payout for either account mode',()=>{
