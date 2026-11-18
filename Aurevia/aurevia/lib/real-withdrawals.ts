@@ -3,7 +3,7 @@ import {ALPACA_PAPER_PROVIDER,paperOrderCollateral} from '@/lib/bitcoin-funding'
 
 type TransactionClient=PrismaClient|Prisma.TransactionClient;
 
-const reservingStatuses=[FundingStatus.PENDING,FundingStatus.PENDING_REVIEW,FundingStatus.APPROVED,FundingStatus.PROCESSING];
+const reservingStatuses=[FundingStatus.PENDING,FundingStatus.PENDING_REVIEW];
 
 export function calculateRealWithdrawableBalance(input:{ledgerBalance:Prisma.Decimal|string|number;pendingWithdrawals:Prisma.Decimal|string|number}){
 	return Prisma.Decimal.max(0,new Prisma.Decimal(input.ledgerBalance).minus(input.pendingWithdrawals));

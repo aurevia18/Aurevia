@@ -4,9 +4,10 @@ import {z,ZodError} from 'zod';
 import {requireUser} from '@/lib/auth';
 import {db} from '@/lib/db';
 import {createNotification} from '@/lib/notifications';
+import {ensureSystemAccount,ensureUserLedger,postWithdrawalRefund} from '@/lib/ledger';
 
 const schema=z.object({reason:z.string().trim().max(300).optional()});
-const cancellable:FundingStatus[]=[FundingStatus.PENDING,FundingStatus.PENDING_REVIEW,FundingStatus.APPROVED];
+const cancellable:FundingStatus[]=[FundingStatus.PENDING,FundingStatus.PENDING_REVIEW,FundingStatus.APPROVED,FundingStatus.PROCESSING];
 
 export async function POST(request:Request,{params}:{params:Promise<{id:string}>}){
 	try{
@@ -24,14 +25,28 @@ export async function POST(request:Request,{params}:{params:Promise<{id:string}>
 			if(currentUser.accountMode!==AccountMode.REAL)throw new Error('REAL_MODE_REQUIRED');
 			const replay=await tx.auditLog.findFirst({where:{entity:'FUNDING',entityId:id,action:'WITHDRAWAL_CANCELLED_BY_USER',metadata:{path:['idempotencyKey'],equals:idempotencyKey}},select:{id:true}});
 			if(replay)return {request:await tx.fundingRequest.findFirstOrThrow({where:{id,userId:user.id,type:FundingType.WITHDRAWAL}}),replayed:true};
-			const current=await tx.fundingRequest.findFirst({where:{id,userId:user.id,type:FundingType.WITHDRAWAL},select:{id:true,userId:true,accountMode:true,status:true}});
+			const current=await tx.fundingRequest.findFirst({where:{id,userId:user.id,type:FundingType.WITHDRAWAL},select:{id:true,userId:true,accountMode:true,status:true,amount:true,currency:true,feeAmount:true,creditedAmount:true}});
 			if(!current)throw new Error('WITHDRAWAL_NOT_FOUND');
 			if(!cancellable.includes(current.status))throw new Error('WITHDRAWAL_NOT_CANCELLABLE');
-			const changed=await tx.fundingRequest.updateMany({where:{id:current.id,userId:user.id,type:FundingType.WITHDRAWAL,status:current.status},data:{status:FundingStatus.CANCELLED,adminNote:body.reason||null}});
+			let refundReference:string|null=null;
+			if([FundingStatus.APPROVED,FundingStatus.PROCESSING].includes(current.status)){
+				const debitReference=`FUNDING:${current.id}:APPROVED_WITHDRAWAL_DEBIT`;
+				const debit=await tx.ledgerTransaction.findUnique({where:{reference:debitReference},select:{id:true}});
+				if(debit){
+					const account=await ensureUserLedger(tx,user.id,AccountMode.REAL,current.currency);
+					const fee=current.feeAmount??new Prisma.Decimal(0);
+					const netPayout=current.creditedAmount??current.amount.minus(fee);
+					const payoutAccount=await ensureSystemAccount(tx,`SYSTEM:MANUAL_WITHDRAWAL:REAL:${current.currency}`,`Administrator-approved withdrawal clearing`,current.currency,AccountMode.REAL);
+					const feeAccount=fee.gt(0)?await ensureSystemAccount(tx,`SYSTEM:MANUAL_WITHDRAWAL_FEE:REAL:${current.currency}`,`REAL withdrawal commission revenue`,current.currency,AccountMode.REAL):payoutAccount;
+					refundReference=`FUNDING:${current.id}:WITHDRAWAL_REFUND`;
+					await postWithdrawalRefund(tx,{reference:refundReference,description:'Controlled refund of cancelled REAL withdrawal',userAccountId:account.id,payoutAccountId:payoutAccount.id,feeAccountId:feeAccount.id,grossAmount:current.amount,netPayout,feeAmount:fee});
+				}
+			}
+			const changed=await tx.fundingRequest.updateMany({where:{id:current.id,userId:user.id,type:FundingType.WITHDRAWAL,status:current.status},data:{status:FundingStatus.CANCELLED,adminNote:body.reason||null,settlementReference:refundReference||undefined}});
 			if(changed.count!==1)throw new Error('WITHDRAWAL_NOT_CANCELLABLE');
 			const updated=await tx.fundingRequest.findUniqueOrThrow({where:{id:current.id}});
-			await tx.auditLog.create({data:{actorId:user.id,action:'WITHDRAWAL_CANCELLED_BY_USER',entity:'FUNDING',entityId:current.id,metadata:{accountMode:current.accountMode,oldStatus:current.status,newStatus:FundingStatus.CANCELLED,idempotencyKey,reason:body.reason||null}}});
-			await createNotification(tx,{userId:user.id,type:NotificationType.WITHDRAWAL,title:'Withdrawal request cancelled',message:'Your withdrawal request was cancelled. Any reservation was released; no external payout or ledger debit occurred.',dedupeKey:`withdrawal:${current.id}:cancelled:${idempotencyKey}`,relatedEntity:'FUNDING',relatedId:current.id,actionUrl:`/wallet/transactions/${current.id}`});
+			await tx.auditLog.create({data:{actorId:user.id,action:'WITHDRAWAL_CANCELLED_BY_USER',entity:'FUNDING',entityId:current.id,metadata:{accountMode:current.accountMode,oldStatus:current.status,newStatus:FundingStatus.CANCELLED,idempotencyKey,reason:body.reason||null,refundReference}}});
+			await createNotification(tx,{userId:user.id,type:NotificationType.WITHDRAWAL,title:'Withdrawal request cancelled',message:refundReference?'Your withdrawal was cancelled and the full gross debit was refunded idempotently to your REAL wallet.':'Your withdrawal request was cancelled before approval. Any reservation was released and no ledger debit occurred.',dedupeKey:`withdrawal:${current.id}:cancelled:${idempotencyKey}`,relatedEntity:'FUNDING',relatedId:current.id,actionUrl:`/wallet/transactions/${current.id}`});
 			return {request:updated,replayed:false};
 		},{isolationLevel:Prisma.TransactionIsolationLevel.Serializable,maxWait:5_000,timeout:15_000});
 		const {receiptKey,...safeRequest}=result.request;

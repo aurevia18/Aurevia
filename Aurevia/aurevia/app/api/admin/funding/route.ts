@@ -33,10 +33,18 @@ export async function GET(req:Request){
 			where.status={in:[...pendingStatuses,FundingStatus.APPROVED,FundingStatus.PROCESSING]};
 		}
 		if(!settlementQueue&&!simulatedLifecycle&&(requestedType==='DEPOSIT'||requestedType==='WITHDRAWAL'))where.type=requestedType;
-		const requests=await db.fundingRequest.findMany({where,include:{user:{select:{email:true,name:true}},approvalInitiatedBy:{select:{id:true,name:true,email:true}},completionInitiatedBy:{select:{id:true,name:true,email:true}},paymentMethod:{select:{name:true}},withdrawalDestination:{select:{id:true,type:true,nickname:true,countryCode:true,network:true,asset:true,maskedLabel:true}},withdrawalDestinationSnapshot:{select:{type:true,nickname:true,countryCode:true,network:true,asset:true,maskedLabel:true}}},orderBy:{createdAt:includeHistory?'desc':'asc'},take:includeHistory?200:undefined});
+		const requests=await db.fundingRequest.findMany({where,include:{user:{select:{id:true,email:true,name:true,firstName:true,lastName:true,phone:true,country:true,kycStatus:true,approvedTier:true,status:true,withdrawalEnabled:true,accountRestricted:true,bankAccount:{select:{id:true,accountIdentifier:true,status:true,statusReason:true}}}},approvalInitiatedBy:{select:{id:true,name:true,email:true}},completionInitiatedBy:{select:{id:true,name:true,email:true}},paymentMethod:{select:{name:true}},withdrawalDestination:{select:{id:true,type:true,nickname:true,countryCode:true,network:true,asset:true,maskedLabel:true}},withdrawalDestinationSnapshot:{select:{type:true,nickname:true,countryCode:true,network:true,asset:true,maskedLabel:true}}},orderBy:{createdAt:includeHistory?'desc':'asc'},take:includeHistory?200:undefined});
 		const approvals=includeHistory?await db.auditLog.findMany({where:{entity:'FUNDING',entityId:{in:requests.map(request=>request.id)},action:{in:['FUNDING_APPROVED','BTC_DEPOSIT_APPROVED']}},select:{entityId:true,createdAt:true,actor:{select:{name:true,email:true}}},orderBy:{createdAt:'desc'}}):[];
 		const approvalByRequest=new Map(approvals.map(approval=>[approval.entityId,{reviewedAt:approval.createdAt,reviewedBy:approval.actor}]));
-		const safeRequests=requests.map(({receiptKey,withdrawalDestinationSnapshot,...request})=>({...request,withdrawalDestination:withdrawalDestinationSnapshot||request.withdrawalDestination,hasReceipt:!!receiptKey,...(approvalByRequest.has(request.id)?approvalByRequest.get(request.id):{})}));
+		const userIds=[...new Set(requests.map(request=>request.userId))];
+		const histories=userIds.length?await db.fundingRequest.findMany({where:{userId:{in:userIds}},orderBy:[{createdAt:'desc'}],take:1000,select:{id:true,userId:true,type:true,amount:true,currency:true,status:true,accountMode:true,createdAt:true,reviewedAt:true,settlementReference:true,processingReference:true,feeAmount:true,creditedAmount:true}}):[];
+		const historyByUser=new Map<string,typeof histories>();
+		for(const history of histories){
+			const existing=historyByUser.get(history.userId)||[];
+			existing.push(history);
+			historyByUser.set(history.userId,existing);
+		}
+		const safeRequests=requests.map(({receiptKey,withdrawalDestinationSnapshot,...request})=>({...request,withdrawalDestination:withdrawalDestinationSnapshot||request.withdrawalDestination,hasReceipt:!!receiptKey,transactionHistory:historyByUser.get(request.userId)||[],...(approvalByRequest.has(request.id)?approvalByRequest.get(request.id):{})}));
 		return NextResponse.json(jsonSafe(safeRequests),{headers:{'Cache-Control':'private, no-store'}});
 	}catch(error){
 		const status=error instanceof Error&&error.message==='UNAUTHORIZED'?401:403;
@@ -57,7 +65,7 @@ export async function PATCH(req:Request){
 			if(current.type===FundingType.WITHDRAWAL)throw new Error('WITHDRAWAL_LIFECYCLE_REQUIRED');
 			if(current.currency!=='USD'&&input.decision==='APPROVED')throw new Error('INTERNAL_USD_FUNDING_REQUIRED');
 			if(input.decision==='REQUEST_INFO'){
-				const changed=await tx.fundingRequest.updateMany({where:{id:current.id,status:{in:pendingStatuses}},data:{status:FundingStatus.PENDING,adminNote:input.note,reviewedAt:new Date(),approvalInitiatedById:null}});
+				const changed=await tx.fundingRequest.updateMany({where:{id:current.id,status:{in:pendingStatuses}},data:{status:FundingStatus.PENDING,adminNote:input.note,reviewedAt:new Date()}});
 				if(changed.count!==1)throw new Error('FUNDING_ALREADY_REVIEWED');
 				const updated=await tx.fundingRequest.findUniqueOrThrow({where:{id:current.id}});
 				await tx.auditLog.create({data:{actorId:admin.id,action:'FUNDING_INFO_REQUESTED',entity:'FUNDING',entityId:updated.id,metadata:{type:updated.type,accountMode:updated.accountMode,reason:input.note,externalEvidenceUserSubmitted:!!updated.receiptKey||!!updated.transactionReference}}});
@@ -68,19 +76,9 @@ export async function PATCH(req:Request){
 			const approvedFee=input.decision==='APPROVED'?roundUsdAmount(current.amount.times(COMMUNITY_FINANCE_POLICY.depositFeePercent).div(100)):null;
 			const approvedCredit=input.decision==='APPROVED'?roundUsdAmount(current.amount.minus(approvedFee!)):null;
 			if(input.decision==='APPROVED')validateDepositApproval(current.amount.toString(),approvedCredit!.toString(),approvedFee!.toString());
-			if(input.decision==='APPROVED'){
-				const approvalInitiatorId=current.approvalInitiatedById;
-				if(!approvalInitiatorId){
-					const claimed=await tx.fundingRequest.updateMany({where:{id:current.id,status:{in:pendingStatuses},approvalInitiatedById:null},data:{approvalInitiatedById:admin.id}});
-					if(claimed.count!==1)throw new Error('FUNDING_ALREADY_REVIEWED');
-					await tx.auditLog.create({data:{actorId:admin.id,action:'FUNDING_APPROVAL_INITIATED',entity:'FUNDING',entityId:current.id,metadata:{userId:current.userId,amount:current.amount.toString(),currency:current.currency,accountMode:current.accountMode,secondAdministratorRequired:true}}});
-					return {request:await tx.fundingRequest.findUniqueOrThrow({where:{id:current.id}}),approvalRequired:true};
-				}
-				if(approvalInitiatorId===admin.id)throw new Error('DISTINCT_ADMIN_REQUIRED');
-			}
 			const reviewedAt=new Date();
 			const finalStatus=input.decision==='REJECTED'?FundingStatus.REJECTED:FundingStatus.APPROVED;
-			const changed=await tx.fundingRequest.updateMany({where:{id:current.id,status:{in:pendingStatuses},...(input.decision==='APPROVED'?{approvalInitiatedById:current.approvalInitiatedById}:{})},data:{status:finalStatus,adminNote:input.note||null,reviewedAt,creditedAmount:approvedCredit,feeAmount:approvedFee,feePercent:input.decision==='APPROVED'?COMMUNITY_FINANCE_POLICY.depositFeePercent:null,creditedCurrency:approvedCredit?creditCurrency:null}});
+			const changed=await tx.fundingRequest.updateMany({where:{id:current.id,status:{in:pendingStatuses}},data:{status:finalStatus,adminNote:input.note||null,reviewedAt,creditedAmount:approvedCredit,feeAmount:approvedFee,feePercent:input.decision==='APPROVED'?COMMUNITY_FINANCE_POLICY.depositFeePercent:null,creditedCurrency:approvedCredit?creditCurrency:null}});
 			if(changed.count!==1)throw new Error('FUNDING_ALREADY_REVIEWED');
 			let previousBalance:Prisma.Decimal|null=null;
 			let resultingBalance:Prisma.Decimal|null=null;
