@@ -26,7 +26,6 @@ const schema=z.object({
 });
 
 const pendingStatuses:FundingStatus[]=[FundingStatus.PENDING,FundingStatus.PENDING_REVIEW];
-const reservingStatuses:FundingStatus[]=[FundingStatus.PENDING,FundingStatus.PENDING_REVIEW];
 
 export async function POST(request:Request){
 	try{
