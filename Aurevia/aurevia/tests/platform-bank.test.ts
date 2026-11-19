@@ -18,7 +18,7 @@ describe('internal platform bank ledger controls',()=>{
 		await expect(getTreasuryAvailable(tx,'USD')).resolves.toEqual(new Prisma.Decimal('85.00'));
 	});
 
-	it('allows one administrator to approve and post their initiated operation',async()=>{
+	it('requires a different administrator to approve and post an initiated operation',async()=>{
 		const operation={
 			id:'operation-1',
 			status:BankOperationStatus.PENDING,
@@ -41,7 +41,8 @@ describe('internal platform bank ledger controls',()=>{
 			auditLog:{create:vi.fn().mockResolvedValue({})},
 		} as unknown as Prisma.TransactionClient;
 
-		await expect(reviewBankOperation(tx,'operation-1','admin-1','APPROVE')).resolves.toMatchObject({operation:{status:BankOperationStatus.POSTED},replayed:false});
+		await expect(reviewBankOperation(tx,'operation-1','admin-1','APPROVE')).rejects.toThrow('DISTINCT_ADMIN_REQUIRED');
+		await expect(reviewBankOperation(tx,'operation-1','admin-2','APPROVE')).resolves.toMatchObject({operation:{status:BankOperationStatus.POSTED},replayed:false});
 		expect(tx.ledgerTransaction.create).toHaveBeenCalledOnce();
 	});
 

@@ -47,12 +47,16 @@ export async function POST(request:Request){
 			if(current.accountMode!==AccountMode.REAL)throw new Error('DEMO_WITHDRAWAL_DISABLED');
 			if(!current.withdrawalDestinationId&&!['REJECT','REQUEST_INFO'].includes(input.action))throw new Error('WITHDRAWAL_DESTINATION_REQUIRED');
 			if(admin.id===current.userId)throw new Error('WITHDRAWAL_SELF_REVIEW_FORBIDDEN');
+			if(input.action==='APPROVE'&&current.approvalInitiatedById===admin.id)throw new Error('DISTINCT_ADMIN_REQUIRED');
+			if(input.action==='COMPLETE'&&current.completionInitiatedById===admin.id)throw new Error('DISTINCT_ADMIN_REQUIRED');
+			if(input.action==='COMPLETE'&&current.completionInitiatedById&&current.completionProcessingReference!==input.processingReference)throw new Error('WITHDRAWAL_EVIDENCE_CHANGED');
 			const destination=current.withdrawalDestinationSnapshot|| (current.withdrawalDestinationId?await tx.withdrawalDestination.findFirst({
 				where:{id:current.withdrawalDestinationId,userId:current.userId,accountMode:current.accountMode},
 				select:{type:true,network:true,ciphertext:true,iv:true,authTag:true},
 			}):null);
 			if(!destination&&!['REJECT','REQUEST_INFO'].includes(input.action))throw new Error('WITHDRAWAL_DESTINATION_REQUIRED');
 			const details=destination?decryptWithdrawalDestination(destination):null;
+			if(input.action==='COMPLETE'&&details?.type==='CRYPTOCURRENCY'&&details.network==='BITCOIN_MAINNET'&&!/^[0-9a-f]{64}$/i.test(input.processingReference||''))throw new Error('CRYPTO_REFERENCE_REQUIRED');
 			const user=await tx.user.findUnique({where:{id:current.userId},select:{withdrawalEnabled:true,accountRestricted:true,status:true,bankAccount:{select:{status:true}}}});
 			if(!user||user.status!=='ACTIVE'||!user.withdrawalEnabled||user.accountRestricted)throw new Error('WITHDRAWAL_RESTRICTED');
 			if(['APPROVE','PROCESS','COMPLETE'].includes(input.action)&&user.bankAccount&&(user.bankAccount.status===BankAccountStatus.FROZEN||user.bankAccount.status===BankAccountStatus.CLOSED))throw new Error('WITHDRAWAL_RESTRICTED');
@@ -60,21 +64,22 @@ export async function POST(request:Request){
 			const stamp=new Date();
 			let update:Prisma.FundingRequestUncheckedUpdateManyInput;
 			let nextStatus:FundingStatus;
+			let approvalRequired=false;
 			switch(input.action){
 				case 'APPROVE':
 					if(!pendingStatuses.includes(current.status))throw new Error('WITHDRAWAL_INVALID_TRANSITION');
+					if(!current.approvalInitiatedById){
+						update={approvalInitiatedById:admin.id};
+						nextStatus=current.status;
+						approvalRequired=true;
+						break;
+					}
 					if(details?.type!== 'BANK_TRANSFER')throw new Error('WITHDRAWAL_BANK_ACCOUNT_REQUIRED');
 					const account=await ensureUserLedger(tx,current.userId,AccountMode.REAL,current.currency);
 					const ledgerBalance=await balance(tx,account.id);
 					const available=await getRealWithdrawableBalance(tx,current.userId,ledgerBalance,current.id);
 					if(available.lt(current.amount.plus(REQUIRED_REAL_WITHDRAWAL_RESERVE_USD)))throw new Error('INSUFFICIENT_WITHDRAWABLE_FUNDS');
-					const fee=current.feeAmount??new Prisma.Decimal(0);
-					const netPayout=current.creditedAmount??current.amount.minus(fee);
-					if(fee.lt(0)||netPayout.lt(0)||!netPayout.plus(fee).equals(current.amount))throw new Error('INVALID_WITHDRAWAL_ALLOCATION');
-					const payoutAccount=await ensureSystemAccount(tx,`SYSTEM:MANUAL_WITHDRAWAL:REAL:${current.currency}`,`Administrator-approved withdrawal clearing`,current.currency,AccountMode.REAL);
-					const feeAccount=fee.gt(0)?await ensureSystemAccount(tx,`SYSTEM:MANUAL_WITHDRAWAL_FEE:REAL:${current.currency}`,`REAL withdrawal commission revenue`,current.currency,AccountMode.REAL):payoutAccount;
-					await postWithdrawalDebitWithFee(tx,{reference:`FUNDING:${current.id}:APPROVED_WITHDRAWAL_DEBIT`,description:'Administrator-approved REAL withdrawal reserve and gross debit',userAccountId:account.id,payoutAccountId:payoutAccount.id,feeAccountId:feeAccount.id,grossAmount:current.amount,netPayout,feeAmount:fee});
-					update={status:FundingStatus.APPROVED,reviewedAt:stamp,adminNote:input.note||null,settlementReference:`FUNDING:${current.id}:APPROVED_WITHDRAWAL_DEBIT`};
+					update={status:FundingStatus.APPROVED,reviewedAt:stamp,adminNote:input.note||null};
 					nextStatus=FundingStatus.APPROVED;
 					break;
 				case 'REJECT':
@@ -84,7 +89,7 @@ export async function POST(request:Request){
 					break;
 				case 'REQUEST_INFO':
 					if(!pendingStatuses.includes(current.status))throw new Error('WITHDRAWAL_INVALID_TRANSITION');
-					update={status:FundingStatus.PENDING,reviewedAt:stamp,adminNote:input.note};
+					update={status:FundingStatus.PENDING,reviewedAt:stamp,adminNote:input.note,approvalInitiatedById:null};
 					nextStatus=FundingStatus.PENDING;
 					break;
 				case 'PROCESS':
@@ -112,29 +117,42 @@ export async function POST(request:Request){
 					if(current.amount.lt(MIN_REAL_WITHDRAWAL_USD))throw new Error('WITHDRAWAL_BELOW_MINIMUM');
 					if(current.amount.gt(MAX_REAL_WITHDRAWAL_USD))throw new Error('WITHDRAWAL_ABOVE_MAXIMUM');
 					if(details?.type!== 'BANK_TRANSFER')throw new Error('WITHDRAWAL_BANK_ACCOUNT_REQUIRED');
+					if(!current.completionInitiatedById){
+						update={completionInitiatedById:admin.id,completionProcessingReference:input.processingReference};
+						nextStatus=current.status;
+						approvalRequired=true;
+						break;
+					}
 					const account=await ensureUserLedger(tx,current.userId,AccountMode.REAL,current.currency);
 					const ledgerBalance=await balance(tx,account.id);
 					const available=await getRealWithdrawableBalance(tx,current.userId,ledgerBalance,current.id);
-					if(available.lt(REQUIRED_REAL_WITHDRAWAL_RESERVE_USD))throw new Error('INSUFFICIENT_WITHDRAWABLE_FUNDS');
-					update={status:FundingStatus.COMPLETED,processingReference:input.processingReference,processingConfirmedAt:stamp,settlementReference:`FUNDING:${current.id}:PAYOUT:${input.processingReference}`,settledAt:stamp,adminNote:input.note||current.adminNote};
+					if(available.lt(current.amount.plus(REQUIRED_REAL_WITHDRAWAL_RESERVE_USD)))throw new Error('INSUFFICIENT_WITHDRAWABLE_FUNDS');
+					const fee=current.feeAmount??new Prisma.Decimal(0);
+					const netPayout=current.creditedAmount??current.amount.minus(fee);
+					if(fee.lt(0)||netPayout.lt(0)||!netPayout.plus(fee).equals(current.amount))throw new Error('INVALID_WITHDRAWAL_ALLOCATION');
+					const payoutAccount=await ensureSystemAccount(tx,`SYSTEM:MANUAL_WITHDRAWAL:REAL:${current.currency}`,`Administrator-confirmed withdrawal clearing`,current.currency,AccountMode.REAL);
+					const feeAccount=fee.gt(0)?await ensureSystemAccount(tx,`SYSTEM:MANUAL_WITHDRAWAL_FEE:REAL:${current.currency}`,`REAL withdrawal commission revenue`,current.currency,AccountMode.REAL):payoutAccount;
+					await postWithdrawalDebitWithFee(tx,{reference:`FUNDING:${current.id}:EXTERNAL_WITHDRAWAL`,description:'Externally confirmed REAL withdrawal payout and commission',userAccountId:account.id,payoutAccountId:payoutAccount.id,feeAccountId:feeAccount.id,grossAmount:current.amount,netPayout,feeAmount:fee});
+					update={status:FundingStatus.COMPLETED,processingReference:input.processingReference,processingConfirmedAt:stamp,settlementReference:`FUNDING:${current.id}:EXTERNAL_WITHDRAWAL`,settledAt:stamp,adminNote:input.note||current.adminNote};
 					nextStatus=FundingStatus.COMPLETED;
 					break;
 				}
 			}
 
-			const changed=await tx.fundingRequest.updateMany({where:{id:current.id,status:current.status},data:update});
+			const changed=await tx.fundingRequest.updateMany({where:{id:current.id,status:current.status,approvalInitiatedById:current.approvalInitiatedById,completionInitiatedById:current.completionInitiatedById,completionProcessingReference:current.completionProcessingReference},data:update});
 			if(changed.count!==1)throw new Error('WITHDRAWAL_INVALID_TRANSITION');
 			const updated=await tx.fundingRequest.findUniqueOrThrow({where:{id:current.id}});
-			await tx.auditLog.create({data:{actorId:admin.id,action:`WITHDRAWAL_${input.action}`,entity:'FUNDING',entityId:current.id,metadata:{
+			await tx.auditLog.create({data:{actorId:admin.id,action:`WITHDRAWAL_${input.action}${approvalRequired?'_INITIATED':''}`,entity:'FUNDING',entityId:current.id,metadata:{
 				idempotencyKey,accountMode:current.accountMode,oldStatus:current.status,newStatus:nextStatus,
 				note:input.note||null,processingReference:input.action==='COMPLETE'?input.processingReference:null,
-				externalProcessingAdminConfirmed:input.action==='COMPLETE',withdrawalMethod:destination?.type||null,network:destination?.network||null,
-				ledgerDebitReference:input.action==='APPROVE'?`FUNDING:${current.id}:APPROVED_WITHDRAWAL_DEBIT`:null,
+				externalProcessingAdminConfirmed:input.action==='COMPLETE'&&!approvalRequired,withdrawalMethod:destination?.type||null,network:destination?.network||null,
+				ledgerDebitReference:input.action==='APPROVE'&&!approvalRequired?`FUNDING:${current.id}:APPROVED_WITHDRAWAL_DEBIT`:null,
 				grossAmount:input.action==='COMPLETE'?current.amount.toString():null,
 				feeAmount:input.action==='COMPLETE'?(current.feeAmount?.toString()??'0'):null,
 				feePercent:input.action==='COMPLETE'?(current.feePercent?.toString()??null):null,
 				netPayout:input.action==='COMPLETE'?(current.creditedAmount?.toString()??current.amount.toString()):null,
 			}}});
+			if(approvalRequired)return {request:updated,replayed:false,approvalRequired:true};
 			const notificationMessage:Record<typeof input.action,string>={
 				APPROVE:`Your withdrawal was approved. The gross amount and disclosed commission were deducted atomically from your REAL wallet. The net payout is ${current.creditedAmount?.toFixed(2)??current.amount.toFixed(2)} ${current.currency}. External payout is not yet confirmed.`,
 				REJECT:'Your withdrawal request was rejected. The reservation has been released and no ledger debit was posted. Review the request record for details.',
@@ -156,10 +174,10 @@ export async function POST(request:Request){
 		if(error instanceof ZodError)return NextResponse.json({error:'Enter a valid withdrawal action. Completion requires the actual transfer reference and explicit confirmation.'},{status:400});
 		if(error instanceof Error&&error.message==='UNAUTHORIZED')return NextResponse.json({error:'Unauthorized'},{status:401});
 		if(error instanceof Error&&error.message==='FORBIDDEN')return NextResponse.json({error:'Forbidden'},{status:403});
-		const known=['ADMIN_ACCOUNT_REQUIRED','WITHDRAWAL_NOT_FOUND','DEMO_WITHDRAWAL_DISABLED','WITHDRAWAL_DESTINATION_REQUIRED','WITHDRAWAL_BANK_ACCOUNT_REQUIRED','WITHDRAWAL_SELF_REVIEW_FORBIDDEN','WITHDRAWAL_RESTRICTED','WITHDRAWAL_INVALID_TRANSITION','WITHDRAWAL_EVIDENCE_CHANGED','IDEMPOTENCY_KEY_REUSED','INSUFFICIENT_WITHDRAWABLE_FUNDS','CRYPTO_REFERENCE_REQUIRED','WITHDRAWAL_DESTINATION_ENCRYPTION_KEY_REQUIRED','WITHDRAWAL_DESTINATION_DECRYPTION_FAILED','WITHDRAWAL_BELOW_MINIMUM','WITHDRAWAL_ABOVE_MAXIMUM'];
+		const known=['ADMIN_ACCOUNT_REQUIRED','DISTINCT_ADMIN_REQUIRED','WITHDRAWAL_NOT_FOUND','DEMO_WITHDRAWAL_DISABLED','WITHDRAWAL_DESTINATION_REQUIRED','WITHDRAWAL_BANK_ACCOUNT_REQUIRED','WITHDRAWAL_SELF_REVIEW_FORBIDDEN','WITHDRAWAL_RESTRICTED','WITHDRAWAL_INVALID_TRANSITION','WITHDRAWAL_EVIDENCE_CHANGED','IDEMPOTENCY_KEY_REUSED','INSUFFICIENT_WITHDRAWABLE_FUNDS','CRYPTO_REFERENCE_REQUIRED','WITHDRAWAL_DESTINATION_ENCRYPTION_KEY_REQUIRED','WITHDRAWAL_DESTINATION_DECRYPTION_FAILED','WITHDRAWAL_BELOW_MINIMUM','WITHDRAWAL_ABOVE_MAXIMUM'];
 		if(error instanceof Error&&known.includes(error.message)){
-			const status=error.message==='ADMIN_ACCOUNT_REQUIRED'||error.message==='WITHDRAWAL_SELF_REVIEW_FORBIDDEN'?403:error.message==='WITHDRAWAL_NOT_FOUND'?404:error.message==='WITHDRAWAL_DESTINATION_ENCRYPTION_KEY_REQUIRED'||error.message==='WITHDRAWAL_DESTINATION_DECRYPTION_FAILED'?503:409;
-			const message=error.message==='ADMIN_ACCOUNT_REQUIRED'?'An active administrator account is required.':error.message==='WITHDRAWAL_DESTINATION_ENCRYPTION_KEY_REQUIRED'?'Secure destination storage is not configured.':error.message==='WITHDRAWAL_BANK_ACCOUNT_REQUIRED'?'REAL withdrawals must use a verified bank-transfer destination.':error.message==='INSUFFICIENT_WITHDRAWABLE_FUNDS'?`Approval cannot proceed while keeping at least $${REQUIRED_REAL_WITHDRAWAL_RESERVE_USD.toLocaleString('en-US')} available after reservations.`:error.message==='WITHDRAWAL_BELOW_MINIMUM'?`Completion is not available because the request is below the $${MIN_REAL_WITHDRAWAL_USD.toLocaleString('en-US')} minimum.`:error.message==='WITHDRAWAL_ABOVE_MAXIMUM'?`Completion is not available because the request exceeds the $${MAX_REAL_WITHDRAWAL_USD.toLocaleString('en-US')} maximum.`:error.message==='WITHDRAWAL_EVIDENCE_CHANGED'?'The external payout reference differs from the submitted evidence. Use the same reference for approval.':error.message.replaceAll('_',' ').toLowerCase();
+			const status=error.message==='ADMIN_ACCOUNT_REQUIRED'||error.message==='DISTINCT_ADMIN_REQUIRED'||error.message==='WITHDRAWAL_SELF_REVIEW_FORBIDDEN'?403:error.message==='WITHDRAWAL_NOT_FOUND'?404:error.message==='WITHDRAWAL_DESTINATION_ENCRYPTION_KEY_REQUIRED'||error.message==='WITHDRAWAL_DESTINATION_DECRYPTION_FAILED'?503:409;
+			const message=error.message==='ADMIN_ACCOUNT_REQUIRED'?'An active administrator account is required.':error.message==='DISTINCT_ADMIN_REQUIRED'?'A different active administrator must approve this REAL withdrawal.':error.message==='WITHDRAWAL_DESTINATION_ENCRYPTION_KEY_REQUIRED'?'Secure destination storage is not configured.':error.message==='WITHDRAWAL_BANK_ACCOUNT_REQUIRED'?'REAL withdrawals must use a verified bank-transfer destination.':error.message==='INSUFFICIENT_WITHDRAWABLE_FUNDS'?`Approval cannot proceed while keeping at least $${REQUIRED_REAL_WITHDRAWAL_RESERVE_USD.toLocaleString('en-US')} available after reservations.`:error.message==='WITHDRAWAL_BELOW_MINIMUM'?`Completion is not available because the request is below the $${MIN_REAL_WITHDRAWAL_USD.toLocaleString('en-US')} minimum.`:error.message==='WITHDRAWAL_ABOVE_MAXIMUM'?`Completion is not available because the request exceeds the $${MAX_REAL_WITHDRAWAL_USD.toLocaleString('en-US')} maximum.`:error.message==='WITHDRAWAL_EVIDENCE_CHANGED'?'The external payout reference differs from the submitted evidence. Use the same reference for approval.':error.message.replaceAll('_',' ').toLowerCase();
 			return NextResponse.json({error:message},{status});
 		}
 		if(error&&typeof error==='object'&&'code'in error&&String(error.code)==='P2034')return NextResponse.json({error:'The request changed during processing. Retry with the same idempotency key.'},{status:409});

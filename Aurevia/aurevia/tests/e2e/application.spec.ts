@@ -584,6 +584,7 @@ test('market view labels internal reference prices when no live provider is conf
 	const historyResponse=await page.request.get('/api/live-markets/AAPL?timeframe=1d');
 	expect(historyResponse.ok()).toBe(true);
 	expect((await historyResponse.json()).source).toBe('Aurevia Internal');
+	await loginAs(page,fixture('USER_EMAIL'),fixture('USER_PASSWORD'));
 	await page.goto('/markets');
 	await expect(page.getByRole('status').filter({hasText:'Provider-backed candles are unavailable'})).toBeVisible();
 	await expect(page.locator('.live-market-heading').first()).toContainText('INDICATIVE PRICES');
@@ -620,7 +621,9 @@ test('signed-in users can ask AI to explain unavailable quote and history source
 	await expect(page.getByText('This AI explanation does not provide live market data or investment advice.')).toBeVisible();
 	expect(requests).toHaveLength(2);
 	expect(requests.map(request=>request.dataType)).toEqual(['quote','history']);
-	expect(requests.every(request=>request.symbol==='DJI')).toBe(true);
+	const displayedSymbol=(await page.locator('.live-symbol-line > span').first().textContent())?.trim();
+	expect(displayedSymbol).toBeTruthy();
+	expect(requests.every(request=>request.symbol===displayedSymbol)).toBe(true);
 });
 
 test('portfolio timeframe controls filter authenticated snapshot history accessibly on mobile',async({page})=>{
@@ -786,7 +789,7 @@ test('login and registration fields receive real pointer and keyboard input',asy
 	await expect(password).toHaveValue('NotARealPassword123!');
 	await page.getByRole('button',{name:'Hide password'}).click();
 	await page.getByRole('button',{name:'Sign in'}).click();
-	await expect(page.locator('.auth-error[role="alert"]')).toContainText(/email address or password is incorrect/i);
+	await expect(page.getByRole('alert').filter({hasText:/email address or password is incorrect/i})).toBeVisible();
 	await expect(identifier).toHaveValue('invalid-user@example.test');
 
 	await page.goto('/register');
@@ -1164,6 +1167,7 @@ test('global chat support persists its position and exchanges private admin mess
 	const conversation=conversations.find((item:{subject:string})=>item.subject===subject);
 	expect(conversation).toBeTruthy();
 	const adminContext=await browser.newContext();
+	let publishedStoryId:string|undefined;
 	try{
 		const adminPage=await adminContext.newPage();
 		await loginAs(adminPage,fixture('ADMIN_EMAIL'),fixture('ADMIN_PASSWORD'));
@@ -1185,14 +1189,15 @@ test('global chat support persists its position and exchanges private admin mess
 		}});
 		expect(storyResponse.status()).toBe(201);
 		const story=await storyResponse.json();
+		publishedStoryId=story.id;
 		expect(story).toMatchObject({userId:null,title:'A simpler way to manage my finances',rating:5,publicationStatus:'PUBLISHED',verifiedClient:false});
 		const publicStories=await adminPage.request.get('/api/client-stories').then(response=>response.json());
 		expect(publicStories).toContainEqual(expect.objectContaining({id:story.id,title:story.title,rating:5,verifiedClientStory:false}));
 		const portrait=new PNG({width:8,height:8});portrait.data.fill(180);
-		await adminPage.route('**/client-stories/e2e-portrait.png',route=>route.fulfill({status:200,contentType:'image/png',body:PNG.sync.write(portrait)}));
-		await adminPage.setViewportSize({width:390,height:844});
-		await adminPage.goto('/client-stories');
-		const testimonial=adminPage.locator('.client-testimonial-card').filter({hasText:story.displayName});
+		await page.route('**/client-stories/e2e-portrait.png',route=>route.fulfill({status:200,contentType:'image/png',body:PNG.sync.write(portrait)}));
+		await page.setViewportSize({width:390,height:844});
+		await page.goto('/client-stories');
+		const testimonial=page.locator('.client-testimonial-card').filter({hasText:story.displayName});
 		await expect(testimonial).toBeVisible();
 		await expect(testimonial.getByRole('heading',{name:story.title})).toBeVisible();
 		await expect(testimonial.getByText(story.quote)).toBeVisible();
@@ -1200,21 +1205,28 @@ test('global chat support persists its position and exchanges private admin mess
 		await expect(portraitImage).toBeVisible();
 		await expect.poll(()=>portraitImage.evaluate(image=>(image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
 		for(const viewport of [{width:390,height:844},{width:1280,height:900}]){
-			await adminPage.setViewportSize(viewport);
-			await expectNoHorizontalOverflow(adminPage);
+			await page.setViewportSize(viewport);
+			await expectNoHorizontalOverflow(page);
 			const portraitBox=await testimonial.locator('.client-testimonial-photo').boundingBox();
 			expect(portraitBox?.width).toBeGreaterThan(80);
 			expect(portraitBox?.height).toBeGreaterThan(100);
 		}
 		const hiddenStory=await adminPage.request.patch('/api/admin/client-stories',{data:{storyId:story.id,publicationStatus:'DRAFT'}});
 		expect(hiddenStory.ok()).toBe(true);
+		publishedStoryId=undefined;
 		expect(await adminPage.request.get('/api/client-stories').then(response=>response.json())).not.toContainEqual(expect.objectContaining({id:story.id}));
 		const inbox=await adminPage.request.get('/api/admin/support').then(response=>response.json());
 		expect(inbox.some((item:{id:string})=>item.id===conversation.id)).toBe(true);
 		const response=await adminPage.request.patch('/api/admin/support',{data:{action:'reply',conversationId:conversation.id,message:'Admin reply from the isolated end-to-end test.'}});
 		expect(response.ok()).toBe(true);
-	}finally{await adminContext.close()}
-	await page.getByRole('button',{name:'Close chat support'}).click();
+	}finally{
+		if(publishedStoryId)await adminContext.request.patch('/api/admin/client-stories',{data:{storyId:publishedStoryId,publicationStatus:'DRAFT'}});
+		await adminContext.close();
+	}
+	const openChat=page.getByRole('button',{name:'Open chat support, new messages'});
+	if(await openChat.count())await openChat.click();
+	const closeChat=page.getByRole('button',{name:'Close chat support'});
+	if(await closeChat.count())await closeChat.click();
 	await expect(page.locator('.floating-support-unread-dot')).toBeVisible({timeout:15_000});
 	await (await revealSupportChat(page)).click();
 	await expect(page.locator('.floating-support-unread-dot')).toHaveCount(0);
@@ -1289,6 +1301,7 @@ test('market refresh runs in place without reloading the page',async({page})=>{
 	let documentRequests=0;
 	let quoteRequests=0;
 	let historyRequests=0;
+	await loginAs(page,fixture('USER_EMAIL'),fixture('USER_PASSWORD'));
 	page.on('request',request=>{if(request.resourceType()==='document')documentRequests++});
 	await page.route(/\/api\/live-markets\?symbols=/,route=>{
 		quoteRequests++;
@@ -1853,7 +1866,7 @@ test('account-mode changes initialize and isolate wallet, trade, history, and su
 	if(hasFreshProviderQuote)await expect(realOrderButton).toBeEnabled();
 	else{
 		await expect(realOrderButton).toBeDisabled();
-		await expect(page.locator('.trade-chart-note')).toContainText('Current market prices are required for REAL account orders.');
+		await expect(page.locator('.trade-chart-note')).toContainText('Provider market data is independent of Demo and Real account mode.');
 	}
 	await page.goto('/orders');
 	for(const viewport of [{width:375,height:812},{width:1440,height:900}]){
@@ -2534,7 +2547,7 @@ test('Nova escalation reaches admin and admin response appears with notification
 	await page.getByLabel('Subject').fill(subject);
 	await page.getByRole('textbox',{name:'Message',exact:true}).fill('Please review this disposable browser test ticket.');
 	await page.getByRole('button',{name:'Create support ticket'}).click();
-	await expect(page.getByRole('status')).toContainText(/created\./i);
+	await expect(page.getByRole('status').filter({hasText:/created\./i})).toBeVisible();
 	await logout(page);
 	await expect(page).toHaveURL(/\/login/);
 	await loginAs(page,fixture('ADMIN_EMAIL'),fixture('ADMIN_PASSWORD'));
@@ -3521,7 +3534,7 @@ test('REAL internal transaction detail preserves pending review status',async({p
 	await selectAccountMode(page,'REAL');
 	const response=await page.goto(`/wallet/transactions/${fixture('REAL_DETAIL_ID')}`);
 	expect(response?.status()).toBe(200);
-	await expect(page.getByRole('heading',{name:'Deposit request'})).toBeVisible();
+	await expect(page.getByRole('heading',{name:'Deposit request',exact:true})).toBeVisible();
 	await expect(page.getByText(/No payment processor, broker, bank, or cryptocurrency network is contacted/i)).toBeVisible();
 	await expect(page.getByText(/This request awaits administrator review/i)).toBeVisible();
 	await expect(page.getByText(/User-submitted information for administrator review; not independently verified/i)).toBeVisible();

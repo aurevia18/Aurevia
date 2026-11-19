@@ -60,6 +60,7 @@ export default function FloatingSupportChat(){
 			if(!response.ok)throw new Error(result.error||'Support messages are temporarily unavailable.');
 			const nextConversations=result as Conversation[];
 			setConversations(nextConversations);
+			setSelectedId(current=>nextConversations.some(conversation=>conversation.id===current)?current:(nextConversations[0]?.id||''));
 			const newestAdminMessage=nextConversations.flatMap(item=>item.messages).filter(item=>item.authorType==='ADMIN').reduce<string|null>((latest,item)=>!latest||item.createdAt>latest?item.createdAt:latest,null);
 			let newestUnreadNotification:string|null=null;
 			if(notificationResponse.ok){

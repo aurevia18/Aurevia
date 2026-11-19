@@ -153,6 +153,7 @@ export async function reviewBankOperation(tx:TransactionClient,operationId:strin
 	if(!operation)throw new Error('BANK_OPERATION_NOT_FOUND');
 	if(operation.status===BankOperationStatus.POSTED||operation.status===BankOperationStatus.REJECTED)return {operation,replayed:true};
 	if(operation.status!==BankOperationStatus.PENDING)throw new Error('BANK_OPERATION_NOT_PENDING');
+	if(operation.initiatedById===reviewerId)throw new Error('DISTINCT_ADMIN_REQUIRED');
 
 	const now=new Date();
 	if(decision==='REJECT'){

@@ -317,6 +317,7 @@ export default function WalletExperience(){
 			const result=await response.json();
 			if(!response.ok)throw new Error(result.error||'Unable to submit this request.');
 			setSubmittedReceipt(result as FundingRecord);
+			setMessage(translate('requestSubmitted',{id:result.id}));
 			setAmount('');setTransactionReference('');setNote('');setProofFile(null);setIdempotencyKey('');setKeyFingerprint('');setConfirming(false);setReauthPassword('');
 			await load();
 		}catch(exception){setError(exception instanceof Error?exception.message:'Unable to submit this request.');}

@@ -269,6 +269,7 @@ export default function Nav(){
    <Link href="/" className="brand" onClick={close}><Image className="brand-logo-image" src="/aurevia-logo.png" alt="" width={38} height={38}/><span className="brand-copy"><strong>Aurevia</strong><small>EXCHANGE</small></span></Link>
    {status==='unauthenticated'&&<nav className="public-primary-nav" aria-label="Website navigation">
     <Link href="/#platform">Platform</Link>
+    <Link href="/markets">Markets</Link>
     <Link href="/#how-it-works">How it works</Link>
     <Link href="/#education">Education</Link>
     <Link href="/support">{translate('support')}</Link>

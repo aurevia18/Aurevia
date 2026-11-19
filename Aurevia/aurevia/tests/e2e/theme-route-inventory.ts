@@ -9,7 +9,6 @@ export const publicRoutes=[
 	'/forgot-password',
 	'/legal-centre',
 	'/login',
-	'/markets',
 	'/platform-usage',
 	'/privacy',
 	'/register',

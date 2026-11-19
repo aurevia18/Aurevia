@@ -65,12 +65,22 @@ export async function PATCH(req:Request){
 			if(current.type===FundingType.WITHDRAWAL)throw new Error('WITHDRAWAL_LIFECYCLE_REQUIRED');
 			if(current.currency!=='USD'&&input.decision==='APPROVED')throw new Error('INTERNAL_USD_FUNDING_REQUIRED');
 			if(input.decision==='REQUEST_INFO'){
-				const changed=await tx.fundingRequest.updateMany({where:{id:current.id,status:{in:pendingStatuses}},data:{status:FundingStatus.PENDING,adminNote:input.note,reviewedAt:new Date()}});
+				const changed=await tx.fundingRequest.updateMany({where:{id:current.id,status:{in:pendingStatuses},approvalInitiatedById:current.approvalInitiatedById},data:{status:FundingStatus.PENDING,adminNote:input.note,reviewedAt:new Date(),approvalInitiatedById:null}});
 				if(changed.count!==1)throw new Error('FUNDING_ALREADY_REVIEWED');
 				const updated=await tx.fundingRequest.findUniqueOrThrow({where:{id:current.id}});
 				await tx.auditLog.create({data:{actorId:admin.id,action:'FUNDING_INFO_REQUESTED',entity:'FUNDING',entityId:updated.id,metadata:{type:updated.type,accountMode:updated.accountMode,reason:input.note,externalEvidenceUserSubmitted:!!updated.receiptKey||!!updated.transactionReference}}});
 				await createNotification(tx,{userId:updated.userId,type:updated.type===FundingType.DEPOSIT?NotificationType.DEPOSIT:NotificationType.WITHDRAWAL,title:'More information requested',message:`An administrator needs more information about your internal REAL ${updated.type.toLowerCase()} request. ${input.note} No external payment is processed through Aurevia.`,dedupeKey:`funding:${updated.id}:info:${updated.updatedAt.toISOString()}`,relatedEntity:'FUNDING',relatedId:updated.id,actionUrl:`/wallet/transactions/${updated.id}`});
 				return {request:updated,approvalRequired:false};
+			}
+			if(input.decision==='APPROVED'&&current.type===FundingType.DEPOSIT&&current.accountMode===AccountMode.REAL){
+				if(!current.approvalInitiatedById){
+					const changed=await tx.fundingRequest.updateMany({where:{id:current.id,status:{in:pendingStatuses},approvalInitiatedById:null},data:{approvalInitiatedById:admin.id}});
+					if(changed.count!==1)throw new Error('FUNDING_ALREADY_REVIEWED');
+					const updated=await tx.fundingRequest.findUniqueOrThrow({where:{id:current.id}});
+					await tx.auditLog.create({data:{actorId:admin.id,action:'FUNDING_APPROVAL_INITIATED',entity:'FUNDING',entityId:updated.id,metadata:{type:updated.type,accountMode:updated.accountMode,amount:updated.amount.toString(),approvalInitiatedById:admin.id,externalEvidenceUserSubmitted:!!updated.receiptKey||!!updated.transactionReference,ledgerCreditPosted:false}}});
+					return {request:updated,approvalRequired:true};
+				}
+				if(current.approvalInitiatedById===admin.id)throw new Error('DISTINCT_ADMIN_REQUIRED');
 			}
 			const creditCurrency='USD';
 			const approvedFee=input.decision==='APPROVED'?roundUsdAmount(current.amount.times(COMMUNITY_FINANCE_POLICY.depositFeePercent).div(100)):null;
@@ -78,7 +88,7 @@ export async function PATCH(req:Request){
 			if(input.decision==='APPROVED')validateDepositApproval(current.amount.toString(),approvedCredit!.toString(),approvedFee!.toString());
 			const reviewedAt=new Date();
 			const finalStatus=input.decision==='REJECTED'?FundingStatus.REJECTED:FundingStatus.APPROVED;
-			const changed=await tx.fundingRequest.updateMany({where:{id:current.id,status:{in:pendingStatuses}},data:{status:finalStatus,adminNote:input.note||null,reviewedAt,creditedAmount:approvedCredit,feeAmount:approvedFee,feePercent:input.decision==='APPROVED'?COMMUNITY_FINANCE_POLICY.depositFeePercent:null,creditedCurrency:approvedCredit?creditCurrency:null}});
+			const changed=await tx.fundingRequest.updateMany({where:{id:current.id,status:{in:pendingStatuses},approvalInitiatedById:current.approvalInitiatedById},data:{status:finalStatus,adminNote:input.note||null,reviewedAt,creditedAmount:approvedCredit,feeAmount:approvedFee,feePercent:input.decision==='APPROVED'?COMMUNITY_FINANCE_POLICY.depositFeePercent:null,creditedCurrency:approvedCredit?creditCurrency:null}});
 			if(changed.count!==1)throw new Error('FUNDING_ALREADY_REVIEWED');
 			let previousBalance:Prisma.Decimal|null=null;
 			let resultingBalance:Prisma.Decimal|null=null;
@@ -104,7 +114,10 @@ export async function PATCH(req:Request){
 			return {request:updated,approvalRequired:false};
 		},{isolationLevel:Prisma.TransactionIsolationLevel.Serializable,maxWait:5_000,timeout:15_000});
 		const request=result.request;
-		if(result.approvalRequired)return NextResponse.json({...jsonSafe(request),approvalRequired:true,message:'Approval recorded. A different active administrator must approve this REAL deposit before any ledger credit is posted.'},{status:202,headers:{'Cache-Control':'private, no-store'}});
+		if(result.approvalRequired){
+			const {receiptKey,...safeRequest}=request;
+			return NextResponse.json({...jsonSafe(safeRequest),hasReceipt:!!receiptKey,approvalRequired:true,message:'Approval recorded. A different active administrator must approve this REAL deposit before any ledger credit is posted.'},{status:202,headers:{'Cache-Control':'private, no-store'}});
+		}
 		const user=await db.user.findUnique({where:{id:request.userId},select:{email:true}});
 		const delivery=user?await sendSupportEmail(`Internal funding request ${input.decision.toLowerCase()}`,[`Request: ${request.id}`,`User: ${request.userId}`,`Type: ${request.type}`,`Mode: ${request.accountMode}`,`Gross amount: ${request.amount.toString()} ${request.currency}`,`Deposit fee: ${request.feeAmount?.toString()??'0'} ${request.feeAmount?request.currency:''}`,`Net credited: ${request.creditedAmount?.toString()??'0'} ${request.creditedCurrency??request.currency}`,`Status: ${request.status}`,`Reference: ${request.settlementReference|| (request.status===FundingStatus.REJECTED?request.id:`FUNDING:${request.id}:APPROVED`)}`,`Internal ledger only; no external payment or transfer.`].join('\n')):{sent:false as const,reason:'failed' as const};
 		const {receiptKey,...safeRequest}=request;

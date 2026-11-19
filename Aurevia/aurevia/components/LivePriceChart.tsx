@@ -43,7 +43,7 @@ export default function LivePriceChart({candles,quote,timeframe,interval,loading
 
 	const externalHistory=!!source&&isExternalMarketDataSource(source);
 	const simulatedHistory=allowSimulatedHistory&&(source==='Aurevia Internal'||source==='Aurevia DEMO');
-	const internalHistory=source==='Aurevia Internal';
+	const internalHistory=allowSimulatedHistory&&source==='Aurevia Internal';
 	const chartHistoryAvailable=externalHistory||simulatedHistory||internalHistory;
 	const displayCandles=useMemo(()=>chartHistoryAvailable?normalizeChartCandles(candles):[],[candles,chartHistoryAvailable]);
 	const activeInterval=interval||TIMEFRAMES.find(item=>item.id===timeframe)?.interval||'1m';

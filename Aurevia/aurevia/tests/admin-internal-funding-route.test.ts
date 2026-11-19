@@ -84,10 +84,23 @@ beforeEach(()=>{
 });
 
 describe('administrator-controlled REAL funding route',()=>{
-	it('allows one administrator to approve and credit the requested amount net of the fee',async()=>{
+	it('requires a different administrator to approve and credit a REAL deposit net of the fee',async()=>{
 		const submittedBalance=new Prisma.Decimal(0);
 		expect(submittedBalance.toFixed(2)).toBe('0.00');
 
+		const initiated=await PATCH(reviewRequest('APPROVED'));
+		expect(initiated.status).toBe(202);
+		const initiatedBody=await initiated.json();
+		expect(initiatedBody).toMatchObject({approvalRequired:true,status:FundingStatus.PENDING_REVIEW,hasReceipt:false});
+		expect(initiatedBody).not.toHaveProperty('receiptKey');
+		expect(currentFunding.approvalInitiatedById).toBe('admin-1');
+		expect(mocks.postGrossCreditWithFee).not.toHaveBeenCalled();
+
+		const selfApproval=await PATCH(reviewRequest('APPROVED'));
+		expect(selfApproval.status).toBe(403);
+		expect(mocks.postGrossCreditWithFee).not.toHaveBeenCalled();
+
+		mocks.requireAdmin.mockResolvedValue({id:'admin-2'});
 		const response=await PATCH(reviewRequest('APPROVED'));
 		const body=await response.json();
 		expect(response.status).toBe(200);
@@ -101,18 +114,11 @@ describe('administrator-controlled REAL funding route',()=>{
 			feeAmount:new Prisma.Decimal('4.25'),
 		}));
 		expect(tx.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({
-			actorId:'admin-1',
+			actorId:'admin-2',
 			action:'FUNDING_APPROVED',
 			metadata:expect.objectContaining({userId:'user-1',accountMode:AccountMode.REAL,status:FundingStatus.APPROVED,ledgerTransactionReference:`FUNDING:${transactionId}:APPROVED`}),
 		})}));
 		expect(body).toMatchObject({creditedCurrency:'USD',accountMode:AccountMode.REAL});
-	});
-
-	it('allows the same administrator to perform the complete approval',async()=>{
-		const response=await PATCH(reviewRequest('APPROVED'));
-		expect(response.status).toBe(200);
-		expect(currentFunding.status).toBe(FundingStatus.APPROVED);
-		expect(mocks.postGrossCreditWithFee).toHaveBeenCalledOnce();
 	});
 
 	it('does not post a credit if another concurrent approval claims the request first',async()=>{
@@ -124,6 +130,9 @@ describe('administrator-controlled REAL funding route',()=>{
 	});
 
 	it('does not permit a client-supplied amount to alter the approved request credit',async()=>{
+		const initiated=await PATCH(reviewRequest('APPROVED',{creditedAmount:1}));
+		expect(initiated.status).toBe(202);
+		mocks.requireAdmin.mockResolvedValue({id:'admin-2'});
 		const response=await PATCH(reviewRequest('APPROVED',{creditedAmount:1}));
 		expect(response.status).toBe(200);
 		expect(mocks.postGrossCreditWithFee).toHaveBeenCalledWith(tx,expect.objectContaining({grossAmount:new Prisma.Decimal('42.50'),creditedAmount:new Prisma.Decimal('38.25')}));

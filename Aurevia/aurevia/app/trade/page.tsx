@@ -348,6 +348,7 @@ export default function Trade() {
       try{
         let history:{candles:typeof liveCandles;source:string};
         if(!chartAssetId){
+          if(!selected)return;
           const response=await fetch(`/api/candles?instrumentId=${encodeURIComponent(selected)}&range=${DEMO_CANDLE_RANGES[chartTimeframe]}&limit=500`,{cache:"no-store"});
           if(!response.ok)throw new Error("Simulated market candles are unavailable.");
           const rows=await response.json() as Array<{ts:string;open:number|string;high:number|string;low:number|string;close:number|string;volume:number|string|null}>;

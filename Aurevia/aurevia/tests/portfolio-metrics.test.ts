@@ -3,7 +3,7 @@ import {filterPerformanceSnapshots} from '../lib/portfolio-timeframes';
 import {calculateAllocationPercentages,instrumentAssetCategory} from '../lib/portfolio-metrics';
 import {calculateRealWithdrawableBalance,getRealWithdrawableBalance} from '../lib/real-withdrawals';
 import {recordedInvestmentPnl} from '../lib/investment-policy';
-import {Prisma} from '@prisma/client';
+import {FundingStatus,Prisma} from '@prisma/client';
 
 describe('portfolio metrics',()=>{
 	const now=new Date('2026-10-20T12:00:00.000Z');
@@ -60,8 +60,9 @@ describe('portfolio metrics',()=>{
 	});
 
 	it('withholds only outstanding buy reservations from REAL withdrawals',async()=>{
+		let fundingQuery:Record<string,unknown>|null=null;
 		const tx={
-			fundingRequest:{aggregate:async()=>({_sum:{amount:new Prisma.Decimal('100')}})},
+			fundingRequest:{aggregate:async({where}:{where:Record<string,unknown>})=>{fundingQuery=where;return {_sum:{amount:new Prisma.Decimal('100')}}}},
 			order:{findMany:async()=>[
 				{
 					instrumentId:'BTC/USD',side:'BUY',quantity:new Prisma.Decimal('3'),filledQuantity:new Prisma.Decimal('2'),
@@ -77,5 +78,6 @@ describe('portfolio metrics',()=>{
 		} as unknown as Parameters<typeof getRealWithdrawableBalance>[0];
 
 		expect((await getRealWithdrawableBalance(tx,'user-1',new Prisma.Decimal('1000'))).toFixed(2)).toBe('800.00');
+		expect(fundingQuery).toMatchObject({status:{in:[FundingStatus.PENDING,FundingStatus.PENDING_REVIEW,FundingStatus.APPROVED,FundingStatus.PROCESSING]}});
 	});
 });
