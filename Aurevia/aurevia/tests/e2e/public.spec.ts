@@ -129,6 +129,22 @@ test('homepage keeps Stories in navigation and off the landing content',async({p
 	await expect(page.getByRole('dialog',{name:'More'}).getByRole('link',{name:'Stories',exact:true})).toHaveAttribute('href','/stories');
 });
 
+test('homepage testimonial profile stays visible when its portrait is unavailable',async({page})=>{
+	await page.route('**/api/client-stories',route=>route.fulfill({
+		status:200,
+		contentType:'application/json',
+		body:JSON.stringify([{id:'home-testimonial',displayName:'Sam Example',country:'Canada',cityOrRegion:'Toronto',title:'A clear account view',quote:'I can review my account in one place.',imageUrl:'/client-stories/e2e-portrait.png',rating:5}]),
+	}));
+	await page.goto('/');
+	await waitForStartup(page);
+	const profile=page.locator('.client-story-stage').filter({hasText:'Sam Example'});
+	await expect(profile).toBeVisible();
+	await expect(profile.getByText('I can review my account in one place.')).toBeVisible();
+	await profile.scrollIntoViewIfNeeded();
+	await profile.locator('.client-story-portrait').evaluate(image=>image.dispatchEvent(new Event('error')));
+	await expect(profile.locator('.client-story-monogram')).toHaveText('S');
+});
+
 test('public navigation is balanced in the desktop header and remains accessible on mobile',async({page})=>{
 	await page.setViewportSize({width:1440,height:900});
 	await page.goto('/');

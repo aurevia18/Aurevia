@@ -32,6 +32,7 @@ const TRANSITION_MS=800;
 export default function ClientStoryShowcase(){
 	const [stories,setStories]=useState<ClientStory[]>([]);
 	const [index,setIndex]=useState(0);
+	const [unavailablePortraits,setUnavailablePortraits]=useState<string[]>([]);
 	const [loading,setLoading]=useState(true);
 	const [error,setError]=useState('');
 	const [reducedMotion,setReducedMotion]=useState(()=>typeof window!=='undefined'&&window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -101,8 +102,8 @@ export default function ClientStoryShowcase(){
 									<div className="client-story-stage-grid">
 										<div className="client-story-stage-portrait">
 											<span className="client-story-avatar client-story-avatar-lg">
-												{story.imageUrl?(
-													<Image src={story.imageUrl} alt={`Portrait for ${story.displayName}`} width={160} height={160} unoptimized className="client-story-portrait"/>
+												{story.imageUrl&&!unavailablePortraits.includes(story.id)?(
+													<Image src={story.imageUrl} alt={`Portrait for ${story.displayName}`} width={160} height={160} unoptimized className="client-story-portrait" onError={()=>setUnavailablePortraits(ids=>ids.includes(story.id)?ids:[...ids,story.id])}/>
 												):(
 													<span className="client-story-monogram client-story-monogram-lg" aria-hidden="true">{story.displayName.trim().charAt(0).toUpperCase()}</span>
 												)}
