@@ -163,8 +163,19 @@ export default function ReceiptGenerator({receipt}:{receipt:ReceiptData}){
 		try{
 			await Promise.all(Array.from(receiptRef.current.querySelectorAll('img')).map(image=>image.decode().catch(()=>undefined)));
 			const canvas=await html2canvas(receiptRef.current,{scale:2,backgroundColor:'#07140f',logging:false,useCORS:true});
-			const pdf=new jsPDF({orientation:'portrait',unit:'px',format:[canvas.width,canvas.height]});
-			pdf.addImage(canvas.toDataURL('image/png'),'PNG',0,0,canvas.width,canvas.height);
+			const exportCanvas=document.createElement('canvas');
+			exportCanvas.width=739;
+			exportCanvas.height=1104;
+			const context=exportCanvas.getContext('2d');
+			if(!context)throw new Error('Unable to prepare the receipt canvas.');
+			context.fillStyle='#07140f';
+			context.fillRect(0,0,exportCanvas.width,exportCanvas.height);
+			const scale=Math.min(exportCanvas.width/canvas.width,exportCanvas.height/canvas.height);
+			const width=canvas.width*scale;
+			const height=canvas.height*scale;
+			context.drawImage(canvas,(exportCanvas.width-width)/2,(exportCanvas.height-height)/2,width,height);
+			const pdf=new jsPDF({orientation:'portrait',unit:'px',format:[exportCanvas.width,exportCanvas.height]});
+			pdf.addImage(exportCanvas.toDataURL('image/png'),'PNG',0,0,exportCanvas.width,exportCanvas.height);
 			pdf.save(`${fileName}.pdf`);
 		}catch(exception){
 			console.error('Unable to export receipt:',exception instanceof Error?exception.message:'Unknown error');

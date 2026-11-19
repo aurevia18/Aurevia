@@ -93,7 +93,7 @@ export default function AureviaBankPage(){
 		<Nav/>
 		<main className="account-page">
 			<header className="account-heading">
-				<div><span className="account-kicker">AUREVIA · INTERNAL PLATFORM BANK</span><h1>Aurevia Bank</h1><p>Your REAL account, authoritative ledger balance, and internal card transfers.</p></div>
+				<div><span className="account-kicker">AUREVIA · INTERNAL PLATFORM BANK</span><h1>Aurevia Bank</h1><p>Your REAL balance, account activity, and card transfers.</p></div>
 				<div className="flex flex-wrap gap-2">
 					<a className="btn bg-white/5" href="/api/bank/statement"><Download size={15}/>Download statement</a>
 					<button className="btn bg-white/5" type="button" onClick={()=>void load()} disabled={loading}><RefreshCw size={14}/>Refresh</button>
@@ -111,7 +111,7 @@ export default function AureviaBankPage(){
 			</section>
 
 			<section className="card mt-4 flex flex-wrap items-center justify-between gap-4 p-5" aria-label="Account details">
-				<div><span className="account-kicker">ACCOUNT IDENTIFIER</span><p className="mt-2 font-mono text-lg">{loading?'—':summary?.account.accountIdentifier||'—'}</p><small className="muted">Aurevia internal identifier; not an external bank account number.</small></div>
+				<div><span className="account-kicker">ACCOUNT IDENTIFIER</span><p className="mt-2 font-mono text-lg">{loading?'—':summary?.account.accountIdentifier||'—'}</p><small className="muted">Aurevia account reference for identification and transactions.</small></div>
 				<div className="text-sm"><span className="muted">Account status</span><p className={`mt-1 font-semibold ${summary?.account.status==='ACTIVE'?'text-profit':'text-loss'}`}>{loading?'—':readable(summary?.account.status||'')}</p>{summary?.account.statusReason&&<small className="muted">{summary.account.statusReason}</small>}</div>
 			</section>
 
@@ -119,7 +119,7 @@ export default function AureviaBankPage(){
 
 			<section className="mt-5 grid gap-4 xl:grid-cols-[1.05fr_.95fr]">
 				<div className="card p-5">
-					<div className="flex items-start gap-3"><span className="rounded-xl bg-gold/10 p-2 text-gold"><Wallet size={19}/></span><div><h2 className="text-lg font-semibold">Add funds to an Aurevia card</h2><p className="mt-1 text-sm muted">Transfer funds from your REAL wallet to your internal card balance.</p></div></div>
+					<div className="flex items-start gap-3"><span className="rounded-xl bg-gold/10 p-2 text-gold"><Wallet size={19}/></span><div><h2 className="text-lg font-semibold">Add funds to an Aurevia card</h2><p className="mt-1 text-sm muted">Move funds from your REAL wallet to your card balance.</p></div></div>
 					{activeCards.length===0?<div className="mt-5 rounded-xl border border-white/10 p-4 text-sm"><p>No active cards are available for funding.</p><Link className="mt-3 inline-flex text-gold" href="/cards">View card management</Link></div>:<form className="mt-5 grid gap-4" onSubmit={event=>void submitFunding(event)}>
 						<label className="account-label">Active card<select className="input mt-1" value={cardId} onChange={event=>{setCardId(event.target.value);setRequestKey('')}} required>{activeCards.map(card=><option key={card.id} value={card.id}>{card.displayName} · {card.referenceNumber}</option>)}</select></label>
 						<label className="account-label">Transfer amount (USD)<input className="input mt-1" type="number" min="1.00" max={summary?.available} step="0.01" value={amount} onChange={event=>{setAmount(event.target.value);setRequestKey('')}} required/></label>
@@ -129,16 +129,16 @@ export default function AureviaBankPage(){
 						</div>}
 						<button className="btn min-h-11 bg-gold text-black" type="submit" disabled={!canFund||submitting}>{submitting?'Transferring…':'Confirm internal transfer'}</button>
 					</form>}
-					<p className="mt-4 flex items-start gap-2 text-xs muted"><ShieldCheck size={15} className="mt-0.5 shrink-0"/> Card balances are Aurevia-managed internal ledger balances. They are not externally spendable at merchants or ATMs.</p>
+					<p className="mt-4 flex items-start gap-2 text-xs muted"><ShieldCheck size={15} className="mt-0.5 shrink-0"/> Card balances are available for external payments and ATM withdrawals, subject to applicable limits and approval.</p>
 				</div>
 
 				<div className="card p-5">
-					<div className="flex items-start gap-3"><span className="rounded-xl bg-white/5 p-2"><ShieldCheck size={19}/></span><div><h2 className="text-lg font-semibold">Internal banking disclosures</h2><p className="mt-1 text-sm muted">Financial decisions use your REAL ledger, never a cached or client-supplied balance.</p></div></div>
+					<div className="flex items-start gap-3"><span className="rounded-xl bg-white/5 p-2"><ShieldCheck size={19}/></span><div><h2 className="text-lg font-semibold">Financial Disclosures</h2></div></div>
 					<ul className="mt-5 space-y-3 text-sm muted">
-						<li>Trading connected to REAL mode uses the existing paper/simulated execution workflow, not a live broker execution.</li>
-						<li>Investment records use the existing internal reservation and lifecycle workflow; returns are not guaranteed and no external investment is made.</li>
-						<li>Withdrawal approval does not mean an external payout has occurred. The existing verified settlement process remains authoritative.</li>
-						<li>Treasury and administrative funding entries are internal accounting records, not evidence that external cash was received.</li>
+						<li>REAL account transactions are based on verified wallet balances.</li>
+						<li>Investment returns are not guaranteed.</li>
+						<li>Withdrawal approval is subject to the applicable settlement process.</li>
+						<li>Deposits and funding entries require appropriate verification and approval.</li>
 					</ul>
 					<div className="mt-5 flex flex-wrap gap-3"><Link href="/wallet" className="btn bg-white/5"><ArrowDownLeft size={15}/>Wallet & funding</Link><Link href="/cards" className="btn bg-white/5"><ArrowUpRight size={15}/>Card management</Link></div>
 				</div>

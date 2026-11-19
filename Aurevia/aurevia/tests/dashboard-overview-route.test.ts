@@ -180,4 +180,19 @@ describe('user dashboard overview access and mode separation',()=>{
 		expect(result.openOrders).toEqual([]);
 		expect(result.activeInvestments).toEqual([]);
 	});
+
+	it('keeps the overview available when supplementary activity data fails',async()=>{
+		const errorLog=vi.spyOn(console,'error').mockImplementation(()=>undefined);
+		mocks.getActivity.mockRejectedValue(new Error('activity storage unavailable'));
+
+		const response=await GET();
+		const result=await response.json();
+
+		expect(response.status).toBe(200);
+		expect(result.partialData).toBe(true);
+		expect(result.recentActivity).toEqual([]);
+		expect(result.portfolioSummary.totalValue).toBe('40.5');
+		expect(errorLog).toHaveBeenCalledWith('[dashboard] recent activity query failed',{code:undefined,errorType:'Error'});
+		errorLog.mockRestore();
+	});
 });

@@ -13,20 +13,9 @@ import {getMarketQuoteWithFallback,getAlpacaMarketDataOptions} from '@/lib/marke
 import {getServerConfiguration} from '@/lib/config/env';
 import {ALPACA_PAPER_PROVIDER} from '@/lib/bitcoin-funding';
 import {getWalletBackedPaperInstrumentIds} from '@/lib/paper-ledger-reconciliation';
+import {optionalDashboardData} from '@/lib/dashboard-data';
 
 export const dynamic='force-dynamic';
-
-function errorDetails(error:unknown){
-  const value=error&&typeof error==='object'?error as {code?:unknown;name?:unknown}:{};
-  const code=typeof value.code==='string'&&/^[A-Z][A-Z0-9_]{1,31}$/.test(value.code)?value.code:undefined;
-  const errorType=typeof value.name==='string'&&/^[A-Za-z][A-Za-z0-9]{0,63}$/.test(value.name)?value.name:'UnknownError';
-  return {code,errorType};
-}
-
-async function optionalData<T>(operation:string,load:()=>Promise<T>,fallback:T):Promise<T>{
-  try{return await load()}
-  catch(error){console.error(`[dashboard] ${operation} query failed`,errorDetails(error));return fallback}
-}
 
 export async function GET(){
   try{
@@ -34,16 +23,17 @@ export async function GET(){
     const currentUser=await db.user.findUnique({where:{id:user.id},select:{accountMode:true,status:true}});
     if(!currentUser||currentUser.status!=='ACTIVE')return NextResponse.json({error:'Unauthorized'},{status:401});
     const mode:AccountMode=currentUser.accountMode;
+    const partialData={partial:false};
     const [account,positions,orders,investments,notifications,profile,kyc,verificationDocuments,marketInstruments]=await Promise.all([
-      optionalData('ledger account',()=>db.ledgerAccount.findUnique({where:{code:`USER:${user.id}:${mode}:USD`},select:{id:true}}),null),
-      optionalData('positions',()=>db.position.findMany({where:{userId:user.id,accountMode:mode,status:'OPEN'},include:{instrument:true},orderBy:{openedAt:'desc'},take:8}),[]),
-      optionalData('orders',()=>db.order.findMany({where:{userId:user.id,accountMode:mode},include:{instrument:{select:{symbol:true,name:true}}},orderBy:{createdAt:'desc'},take:8}),[]),
-      mode===AccountMode.REAL?optionalData('investments',()=>db.investmentRequest.findMany({where:{userId:user.id,accountMode:mode},include:{opportunity:{select:{title:true,category:true,riskLevel:true,assetSymbol:true,targetReturnPercent:true,durationDays:true}}},orderBy:{requestedAt:'desc'},take:6}),[]):Promise.resolve([]),
-      optionalData('notifications',()=>db.notification.findMany({where:{userId:user.id,archivedAt:null,OR:[{accountMode:mode},{accountMode:null}]},orderBy:{createdAt:'desc'},take:6}),[]),
-      optionalData('profile',()=>db.$transaction(async tx=>{await synchronizeCompletedProfileTier(tx,user.id);return tx.user.findUnique({where:{id:user.id},select:{id:true,aureviaExchangeId:true,email:true,name:true,avatarKey:true,role:true,status:true,accountMode:true,approvedTier:true,kycStatus:true,verifiedAt:true,phoneVerified:true,phone:true,country:true,createdAt:true}})}),null),
-      mode===AccountMode.REAL?optionalData('KYC profile',()=>db.kycProfile.findUnique({where:{userId:user.id},select:{submittedAt:true}}),null):Promise.resolve(null),
-      mode===AccountMode.REAL?optionalData('verification documents',()=>db.kycDocument.count({where:{userId:user.id,kind:'IDENTITY_DOCUMENT',status:'APPROVED'}}),0):Promise.resolve(0),
-      optionalData('market instruments',()=>db.instrument.findMany({where:{enabled:true},orderBy:{symbol:'asc'},take:12}),[]),
+      optionalDashboardData('ledger account',()=>db.ledgerAccount.findUnique({where:{code:`USER:${user.id}:${mode}:USD`},select:{id:true}}),null,partialData),
+      optionalDashboardData('positions',()=>db.position.findMany({where:{userId:user.id,accountMode:mode,status:'OPEN'},include:{instrument:true},orderBy:{openedAt:'desc'},take:8}),[],partialData),
+      optionalDashboardData('orders',()=>db.order.findMany({where:{userId:user.id,accountMode:mode},include:{instrument:{select:{symbol:true,name:true}}},orderBy:{createdAt:'desc'},take:8}),[],partialData),
+      mode===AccountMode.REAL?optionalDashboardData('investments',()=>db.investmentRequest.findMany({where:{userId:user.id,accountMode:mode},include:{opportunity:{select:{title:true,category:true,riskLevel:true,assetSymbol:true,targetReturnPercent:true,durationDays:true}}},orderBy:{requestedAt:'desc'},take:6}),[],partialData):Promise.resolve([]),
+      optionalDashboardData('notifications',()=>db.notification.findMany({where:{userId:user.id,archivedAt:null,OR:[{accountMode:mode},{accountMode:null}]},orderBy:{createdAt:'desc'},take:6}),[],partialData),
+      optionalDashboardData('profile',()=>db.$transaction(async tx=>{await synchronizeCompletedProfileTier(tx,user.id);return tx.user.findUnique({where:{id:user.id},select:{id:true,aureviaExchangeId:true,email:true,name:true,avatarKey:true,role:true,status:true,accountMode:true,approvedTier:true,kycStatus:true,verifiedAt:true,phoneVerified:true,phone:true,country:true,createdAt:true}})}),null,partialData),
+      mode===AccountMode.REAL?optionalDashboardData('KYC profile',()=>db.kycProfile.findUnique({where:{userId:user.id},select:{submittedAt:true}}),null,partialData):Promise.resolve(null),
+      mode===AccountMode.REAL?optionalDashboardData('verification documents',()=>db.kycDocument.count({where:{userId:user.id,kind:'IDENTITY_DOCUMENT',status:'APPROVED'}}),0,partialData):Promise.resolve(0),
+      optionalDashboardData('market instruments',()=>db.instrument.findMany({where:{enabled:true},orderBy:{symbol:'asc'},take:12}),[],partialData),
     ]);
     const validPositions=positions.filter(position=>!!position.instrument);
     const validOrders=orders.filter(order=>!!order.instrument);
@@ -56,7 +46,7 @@ export async function GET(){
     const unreconciledPaperPositionCount=validPositions.filter(position=>position.providerName===ALPACA_PAPER_PROVIDER&&!walletBackedPaperInstrumentIds.has(position.instrumentId)).length;
     const validInvestments=investments.filter(investment=>!!investment.opportunity);
     const supportedMarketInstruments=filterSupportedMarketAssets(marketInstruments);
-    const cash=account?await optionalData('ledger balance',()=>balance(db,account.id),null):null;
+    const cash=account?await optionalDashboardData('ledger balance',()=>balance(db,account.id),null,partialData):null;
     const positionMarks=new Map<string,Prisma.Decimal>();
     let positionMarksCurrent=true;
     if(mode===AccountMode.REAL&&valuationPositions.length){
@@ -85,7 +75,7 @@ export async function GET(){
         const price=positionMarks.get(p.instrumentId)??new Prisma.Decimal(0);
         return sum.plus((p.side==='BUY'?price.minus(p.entryPrice):p.entryPrice.minus(price)).mul(p.quantity));
       },new Prisma.Decimal(0)):null;
-    const activity=await optionalData('recent activity',()=>getUserActivity(user.id,mode,'all',8),{items:[],total:0,hasMore:false,cursor:null});
+    const activity=await optionalDashboardData('recent activity',()=>getUserActivity(user.id,mode,'all',8),{items:[],total:0,hasMore:false,cursor:null},partialData);
     const recentActivity=activity.items.map(item=>({id:item.id,category:item.category,action:item.action,timestamp:item.timestamp,asset:item.asset,amount:item.amount,status:item.status,source:item.sourceLabel,pnl:item.pnl,adminInitiated:item.adminInitiated,link:item.link}));
     const displayNotifications=notifications.map(notification=>({...notification,title:removeSimulatedLabels(notification.title),message:removeSimulatedLabels(notification.message)}));
     const profileRequirements=profile?getTierProfileRequirements(profile):null;
@@ -101,10 +91,10 @@ export async function GET(){
       return customerOrder;
     });
     const customerPositions=validPositions.map(position=>({...position,providerName:undefined}));
-    return NextResponse.json(jsonSafe({accountMode:mode,cash,financialDataAvailable:cash!==null,positionValue,invested,unrealized,portfolioValue:cash&&positionValue!==null?cash.plus(positionValue).plus(invested):null,openOrders:validOrders.filter(o=>o.status==='OPEN').length,activePositions:validPositions.length,unreconciledPaperPositionCount,activity:recentActivity,orders:customerOrders,positions:customerPositions,investments:validInvestments,notifications:displayNotifications,profile:safeProfile,marketInstruments:supportedMarketInstruments.map(i=>({id:i.id,symbol:i.symbol,name:i.name,price:Number(i.price),changePercent:0,updatedAt:i.updatedAt.toISOString()}))}),{headers:{'Cache-Control':'private, no-store'}});
+    return NextResponse.json(jsonSafe({accountMode:mode,cash,financialDataAvailable:cash!==null,positionValue,invested,unrealized,portfolioValue:cash&&positionValue!==null?cash.plus(positionValue).plus(invested):null,openOrders:validOrders.filter(o=>o.status==='OPEN').length,activePositions:validPositions.length,unreconciledPaperPositionCount,partialData:partialData.partial,activity:recentActivity,orders:customerOrders,positions:customerPositions,investments:validInvestments,notifications:displayNotifications,profile:safeProfile,marketInstruments:supportedMarketInstruments.map(i=>({id:i.id,symbol:i.symbol,name:i.name,price:Number(i.price),changePercent:0,updatedAt:i.updatedAt.toISOString()}))}),{headers:{'Cache-Control':'private, no-store'}});
   }catch(error){
     const unauthorized=error instanceof Error&&error.message==='UNAUTHORIZED';
-    if(!unauthorized)console.error('[dashboard] Request failed',errorDetails(error));
+    if(!unauthorized)console.error('[dashboard] Request failed',{errorType:error instanceof Error?error.name:'UnknownError'});
     return NextResponse.json({error:unauthorized?'Unauthorized':'Dashboard data is temporarily unavailable. Please try again shortly.'},{status:unauthorized?401:503,headers:{'Cache-Control':'private, no-store'}});
   }
 }

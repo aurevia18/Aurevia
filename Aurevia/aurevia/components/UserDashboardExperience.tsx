@@ -37,6 +37,7 @@ type Overview={
 	activeInvestments:Array<{id:string;title:string;accountMode:'DEMO'|'REAL';amount:string;status:string;activatedAt:string|null;maturesAt:string|null;durationDays:number;displayTargetPayout:string}>;
 	recentActivity:Array<{id:string;category:string;action:string;timestamp:string;asset:string;amount:string;status:string;source:string;link:string}>;
 	internalMarketInstruments:Array<{assetId:string;instrumentId:string}>;
+	partialData?:boolean;
 	limitations:{balances:string;portfolio:string;realExecution:string};
 };
 
@@ -253,7 +254,8 @@ export default function UserDashboardExperience(){
 	if(loading&&!overview)return <><Nav/><DashboardSidebar name={session?.user?.name||session?.user?.email||''} tier={accountTier}/><main className="user-dashboard-page"><AureviaLoading variant="inline" label="Loading your account dashboard" className="user-dashboard-loading"/></main></>;
 
 	return <><Nav/><DashboardSidebar name={overview?.profile.name||session?.user?.email||''} tier={accountTier||overview?.profile.tier||''}/><main className="user-dashboard-page">
-		{error&&<div className="user-dashboard-error" role="alert"><span>{error}</span><button type="button" onClick={()=>void load(true)}>Retry</button></div>}
+		{error&&overview&&<div className="user-dashboard-error" role="alert"><span>{error}</span><button type="button" onClick={()=>void load(true)}>Retry</button></div>}
+		{overview?.partialData&&<div className="user-dashboard-error" role="status"><span>Some account details could not be refreshed. Other dashboard information is still available.</span><button type="button" onClick={()=>void load(true)}>Retry</button></div>}
 		{overview&&<>
 			<header className="user-dashboard-welcome">
 				<div className="user-dashboard-welcome-copy"><ProfileAvatar className="user-dashboard-welcome-avatar" size={48} alt="Your profile picture"/><div><span className="user-dashboard-eyebrow">AUREVIA EXCHANGE · ACCOUNT OVERVIEW</span><h1>Welcome back, {firstName(overview.profile.name)}</h1><div className="user-dashboard-profile-line"><span>{overview.profile.name||'Your profile'}</span><AccountTierBadge tier={accountTier||overview.profile.tier}/></div><p>Your accounts and activity, organized in one place.</p></div></div>
@@ -357,7 +359,7 @@ export default function UserDashboardExperience(){
 			</div>
 			<footer className="user-dashboard-footnote user-dashboard-disclaimer"><ShieldCheck size={14}/><span>Financial balances, portfolio values, positions, and orders are separated by active account mode. REAL wallet funds are not auto-credited. Values are internal records, not a statement of external custody.</span></footer>
 		</>}
-		{error&&!overview&&<div className="user-dashboard-empty user-dashboard-fatal"><p>Your account overview could not be loaded.</p><button type="button" onClick={()=>void load(true)}>Try again <RefreshCw size={14}/></button></div>}
+		{error&&!overview&&<div className="user-dashboard-empty user-dashboard-fatal" role="alert"><p>{error||'Your account overview could not be loaded.'}</p><button type="button" onClick={()=>void load(true)}>Try again <RefreshCw size={14}/></button></div>}
 	</main></>;
 }
 

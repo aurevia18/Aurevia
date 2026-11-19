@@ -27,7 +27,7 @@ function MessageBody({text}:{text:string}){
 export default function SupportExperience(){
 	const {data,status}=useSession();
 	const mode=data?.user?.accountMode??null;
-	const [messages,setMessages]=useState<ChatMessage[]>([{speaker:'nova',text:'Aurevia’s Professional AI Financial Markets & Trading Intelligence Assistant.\n\nAsk about markets, trading concepts, risk, or your own Aurevia account. Provider-sourced market facts include their source and timestamp. Account answers are private to your authenticated session. Markets are uncertain; returns are never guaranteed.',contextSafe:true}]);
+	const [messages,setMessages]=useState<ChatMessage[]>([{speaker:'nova',text:'Welcome to Aurevia AI — your intelligent companion for smarter financial decisions.\n\nExplore global markets, discover trading opportunities, understand market trends, and get expert guidance to navigate your financial journey with confidence.\n\nYour financial journey starts here. Let’s make every decision count.',contextSafe:true}]);
 	const conversationId=useRef<string|undefined>(undefined);
 	const [question,setQuestion]=useState('');
 	const [conversations,setConversations]=useState<Conversation[]>([]);

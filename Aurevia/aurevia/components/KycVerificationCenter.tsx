@@ -382,8 +382,7 @@ export default function KycVerificationCenter({currentTier,onUpdated}:{currentTi
 			<div className="rounded-lg border border-white/10 bg-black/20 p-3"><span className="text-xs muted">Verification status</span><p className="mt-1 font-semibold">{latest?statusCopy[latest.status]||latest.status.replaceAll('_',' '):'Not started'}</p></div>
 			<div className="rounded-lg border border-white/10 bg-black/20 p-3"><span className="text-xs muted">Automated assessment</span><p className="mt-1 font-semibold">Manual review required</p></div>
 		</div>
-		<p className="mt-3 text-sm leading-6 muted">Submitted identity documents undergo an initial file and quality review to ensure they meet submission requirements.</p>
-		<p className="mt-3 text-sm leading-6 muted">All identity documents are subject to review and approval by an authorized Aurevia administrator before verification is completed.</p>
+		<p className="mt-3 text-sm leading-6 muted">Identity documents are reviewed for quality and require administrator approval before verification is complete.</p>
 		{error&&<p className="mt-3 text-sm text-loss" role="alert">{error}</p>}
 		{message&&!statusNotice&&<p className="mt-3 text-sm text-profit" role="status">{message}</p>}
 		{loading?<p className="mt-4 muted"><LoaderCircle className="mr-2 inline animate-spin" size={16}/>Loading verification history…</p>:<>

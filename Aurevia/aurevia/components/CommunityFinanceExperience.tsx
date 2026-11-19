@@ -127,7 +127,7 @@ export default function CommunityFinanceExperience(){
 					{!data.donations.length&&!data.approvedDeposits.length&&<p className="community-empty">No community contributions or approved deposits are recorded yet.</p>}
 				</div>
 			</section>
-			<p className="community-disclosure">External loan disbursements and repayments are performed outside Aurevia and only enter the ledger after an administrator verifies the transfer reference and exact amount. This page does not initiate a bank transfer.</p>
+			<p className="community-disclosure">Loan disbursements and repayments are verified by an administrator before being added to your Aurevia balance.</p>
 		</>}
 	</main>;
 }

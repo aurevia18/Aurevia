@@ -29,12 +29,12 @@ beforeEach(()=>{
 });
 
 describe('publisher-sourced news sentiment',()=>{
-	it('analyzes only recent active feed items and validates article references',async()=>{
+	it('analyzes active feed items and validates article references',async()=>{
 		const response=await POST(request());
 		expect(response.status).toBe(200);
 		expect(await response.json()).toMatchObject({analysis:{overallSentiment:'neutral'},articleCount:1,sourceDataStale:false});
 		expect(mocks.itemFindMany).toHaveBeenCalledWith(expect.objectContaining({
-			where:expect.objectContaining({status:NewsFeedItemStatus.ACTIVE,publishedAt:expect.objectContaining({gte:expect.any(Date)}),source:{enabled:true}}),
+			where:expect.objectContaining({status:NewsFeedItemStatus.ACTIVE,source:{enabled:true}}),
 			take:12,
 		}));
 		expect(mocks.runAiService).toHaveBeenCalledWith('market_information_summary',expect.any(Array),expect.objectContaining({temperature:0.1,maxTokens:900}));

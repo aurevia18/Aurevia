@@ -2196,7 +2196,7 @@ test('closing a DEMO position records a sell execution, reconciles portfolio, an
 	expect(notificationResponse.notifications.some((item:{title:string;relatedId:string|null})=>item.relatedId===closeOrder.id&&item.title==='DEMO position closed')).toBe(true);
 });
 
-test('DEMO currency conversion is disabled and leaves DEMO and REAL ledgers unchanged',async({page})=>{
+test('Bitcoin conversion is blocked in DEMO and sandbox-disabled REAL mode without changing either ledger',async({page})=>{
 	await loginAs(page,fixture('USER_EMAIL'),fixture('USER_PASSWORD'));
 	await selectAccountMode(page,'REAL');
 	const realCashBefore=Number((await page.request.get('/api/wallet').then(response=>response.json())).balance);
@@ -2214,7 +2214,7 @@ test('DEMO currency conversion is disabled and leaves DEMO and REAL ledgers unch
 	expect(conversions).toHaveLength(0);
 	await selectAccountMode(page,'REAL');
 	const realAttempt=await page.request.post('/api/wallet/convert-bitcoin',{headers:{'Idempotency-Key':randomUUID()},data:{direction:'BUY',amount:'100.00'}});
-	expect(realAttempt.status()).toBe(409);
+	expect(realAttempt.status()).toBe(403);
 	expect(Number((await page.request.get('/api/wallet').then(response=>response.json())).balance)).toBe(realCashBefore);
 });
 

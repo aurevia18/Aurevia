@@ -70,7 +70,6 @@ export async function getMarketHistoryWithFallback(asset:LiveMarketAsset,timefra
 			...(error instanceof MarketDataError&&error.diagnostics?{providerDiagnostics:error.diagnostics}:{}),
 			failureTimestamp:new Date().toISOString(),
 		});
-		if(asset.type==='STOCK'&&(Boolean(apiKey)||Boolean(alpacaData?.apiKey&&alpacaData.apiSecret)))throw error;
 		try{
 			return await getInternalMarketHistory(asset,timeframe);
 		}catch(fallbackError){

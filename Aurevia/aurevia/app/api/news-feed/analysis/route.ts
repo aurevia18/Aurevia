@@ -33,14 +33,13 @@ export async function POST(request:Request){
 		const session=await getServerSession(authOptions);
 		const actorId=session?.user?.id;
 		rateLimit(actorId?`news-ai:${actorId}`:`news-ai-ip:${clientIp(request)}`,5,60_000);
-		const cutoff=new Date(Date.now()-7*24*60*60_000);
 		const articles=await db.newsFeedItem.findMany({
-			where:{status:NewsFeedItemStatus.ACTIVE,publishedAt:{gte:cutoff},source:{enabled:true}},
+			where:{status:NewsFeedItemStatus.ACTIVE,source:{enabled:true}},
 			select:{id:true,title:true,summary:true,publisher:true,canonicalUrl:true,category:true,publishedAt:true,source:{select:{displayName:true,lastSuccessAt:true}}},
 			orderBy:[{publishedAt:'desc'},{importedAt:'desc'}],
 			take:12,
 		});
-		if(!articles.length)return NextResponse.json({error:'No recent publisher-sourced articles are available to analyze.'},{status:404,headers:{'Cache-Control':'private, no-store'}});
+		if(!articles.length)return NextResponse.json({error:'No publisher-sourced articles are available to analyze.'},{status:404,headers:{'Cache-Control':'private, no-store'}});
 
 		const sourceSuccesses=articles.map(article=>article.source.lastSuccessAt).filter((value):value is Date=>value!==null);
 		const newestSourceSuccess=sourceSuccesses.reduce<Date|null>((latest,value)=>!latest||value>latest?value:latest,null);
@@ -56,7 +55,7 @@ export async function POST(request:Request){
 		}));
 		const result=await runAiService('market_information_summary',[
 			{role:'system',content:'Analyze sentiment only from the supplied recent publisher-sourced news headlines and summaries. Return only JSON with exactly {"overallSentiment":"positive"|"neutral"|"negative"|"mixed","summary":"string","articles":[{"id":"supplied article id","sentiment":"positive"|"neutral"|"negative"|"mixed","observation":"string"}],"caveat":"string"}. Cite only supplied article IDs, return at most 12 articles, and do not invent facts, causes, market moves, sources, or events. Sentiment describes article framing, not verified market impact or future performance. Do not give trading or investment recommendations. Clearly disclose uncertainty and data freshness.'},
-			{role:'user',content:JSON.stringify({window:'published in the last 7 days',sourceDataStale:stale,articles:input})},
+			{role:'user',content:JSON.stringify({window:'currently stored active publisher-sourced articles',sourceDataStale:stale,articles:input})},
 		],{actorId,temperature:0.1,maxTokens:900});
 		let parsed:unknown;
 		try{parsed=JSON.parse(result.content)}
@@ -72,7 +71,7 @@ export async function POST(request:Request){
 				const source=articles.find(item=>item.id===article.id);
 				return source?{id:source.id,title:source.title,canonicalUrl:source.canonicalUrl,publisher:source.publisher||source.source.displayName,publishedAt:source.publishedAt}:null;
 			}).filter((source):source is NonNullable<typeof source>=>source!==null),
-			sourceWindow:'7 days',
+			sourceWindow:'active feed',
 			articleCount:articles.length,
 			sourceDataStale:stale,
 			newestSourceSuccess,

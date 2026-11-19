@@ -16,6 +16,7 @@ import {getWalletBackedPaperInstrumentIds} from '@/lib/paper-ledger-reconciliati
 import {getMarketAssetForTradingSymbol,isExternalMarketDataSource} from '@/lib/live-market';
 import {getMarketQuoteWithFallback,getAlpacaMarketDataOptions} from '@/lib/market-data-service';
 import {getServerConfiguration} from '@/lib/config/env';
+import {dashboardErrorDetails,optionalDashboardData} from '@/lib/dashboard-data';
 
 export const dynamic='force-dynamic';
 
@@ -46,12 +47,13 @@ export async function GET(){
 		}
 
 		const mode=profile.accountMode;
+		const partialData={partial:false};
 		const [accounts,documents,positions,investments,orders,opportunities,activity,instruments]=await Promise.all([
 			db.ledgerAccount.findMany({
 				where:{userId:profile.id,accountMode:mode,currency:'USD',code:{startsWith:`USER:${profile.id}:${mode}:`}},
 				select:{id:true},
 			}),
-			mode===AccountMode.REAL?db.kycDocument.count({where:{userId:profile.id,kind:'IDENTITY_DOCUMENT',status:'APPROVED'}}):Promise.resolve(0),
+			mode===AccountMode.REAL?optionalDashboardData('verification documents',()=>db.kycDocument.count({where:{userId:profile.id,kind:'IDENTITY_DOCUMENT',status:'APPROVED'}}),0,partialData):Promise.resolve(0),
 			db.position.findMany({
 				where:{userId:profile.id,accountMode:mode,status:'OPEN'},
 				include:{instrument:{select:{symbol:true,name:true,baseAsset:true,quoteAsset:true,price:true}}},
@@ -68,7 +70,7 @@ export async function GET(){
 				orderBy:{createdAt:'desc'},
 				take:8,
 			}),
-			mode===AccountMode.REAL?db.investmentOpportunity.findMany({
+			mode===AccountMode.REAL?optionalDashboardData('investment opportunities',()=>db.investmentOpportunity.findMany({
 				where:{
 					status:InvestmentOpportunityStatus.AVAILABLE,
 					realEligible:true,
@@ -80,9 +82,9 @@ export async function GET(){
 				select:{id:true,title:true,category:true,description:true,assetSymbol:true,minimumAmount:true,maximumAmount:true,targetReturnPercent:true,durationDays:true,riskLevel:true},
 				orderBy:{createdAt:'desc'},
 				take:4,
-			}):Promise.resolve([]),
-			getUserActivity(profile.id,mode,'all',8),
-			db.instrument.findMany({where:{enabled:true},select:{id:true,symbol:true}}),
+			}),[],partialData):Promise.resolve([]),
+			optionalDashboardData('recent activity',()=>getUserActivity(profile.id,mode,'all',8),{items:[],total:0,hasMore:false,cursor:null},partialData),
+			optionalDashboardData('market instruments',()=>db.instrument.findMany({where:{enabled:true},select:{id:true,symbol:true}}),[],partialData),
 		]);
 		const internalMarketInstruments=instruments.flatMap(instrument=>{
 			const asset=MARKET_ASSETS.find(item=>getInternalInstrumentSymbols(item.id).includes(instrument.symbol));
@@ -169,6 +171,7 @@ export async function GET(){
 				allocations,
 			},
 			unreconciledPaperPositionCount,
+			partialData:partialData.partial,
 			positions:positions.slice(0,8).map(position=>({
 				id:position.id,
 				side:position.side,
@@ -203,7 +206,7 @@ export async function GET(){
 	}catch(error){
 		const unauthorized=error instanceof Error&&error.message==='UNAUTHORIZED';
 		const forbidden=error instanceof Error&&error.message==='FORBIDDEN';
-		if(!unauthorized&&!forbidden)console.error('Dashboard overview query failed.',error instanceof Error?error.name:'UnknownError');
+		if(!unauthorized&&!forbidden)console.error('Dashboard overview query failed.',dashboardErrorDetails(error));
 		return NextResponse.json(
 			{error:unauthorized?'Unauthorized':forbidden?'Forbidden':'Dashboard data is temporarily unavailable.'},
 			{status:unauthorized?401:forbidden?403:503,headers:{'Cache-Control':'private, no-store'}},

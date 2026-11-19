@@ -86,7 +86,7 @@ export default function Kyc(){
 					<tr className="border-b border-white/10"><th className="py-3 pr-4">Tier 2</th><td className="py-3 pr-4">Completed profile</td><td className="py-3">Medium configured withdrawal limits</td></tr>
 					<tr><th className="py-3 pr-4">Tier 3</th><td className="py-3 pr-4">Administrator-approved identity verification, residential address and approved proof of address</td><td className="py-3">Highest configured limits and full account access, subject to review</td></tr>
 				</tbody></table></div>
-				<p className="mt-3 text-xs leading-5 muted">REAL trading and deposits are available before KYC. Withdrawals remain subject to approved KYC and existing account controls.</p>
+				<p className="mt-3 text-xs leading-5 muted">Trading and deposits are available before verification. Withdrawals require approved identity verification.</p>
 			</section>
 			{page.phone&&<p className="mt-3 text-xs muted">Registered phone number: {page.phone} · {page.phoneVerified?'Verified':'Not verified'}. Phone verification is optional and is not required to complete registration, submit KYC, or advance to the next account tier.</p>}
 			{page.currentTier>=2&&page.kycStatus==='APPROVED'&&<section className="account-panel card mt-4 p-5">

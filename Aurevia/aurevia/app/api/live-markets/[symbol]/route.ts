@@ -2,6 +2,7 @@ import {NextResponse} from 'next/server';
 import {getMarketAsset,MarketDataError,TIMEFRAMES,type MarketHistoryDiagnostics,type TimeframeId} from '@/lib/live-market';
 import {getServerConfiguration} from '@/lib/config/env';
 import {getAdditionalMarketProviderKeys,getAlpacaMarketDataOptions,getMarketHistoryWithFallback} from '@/lib/market-data-service';
+import {getReferenceMarketHistory} from '@/lib/internal-market-data';
 
 export const dynamic='force-dynamic';
 export const revalidate=0;
@@ -17,6 +18,12 @@ export async function GET(request:Request,{params}:{params:Promise<{symbol:strin
     const history=await getMarketHistoryWithFallback(asset,requested as TimeframeId,config.marketData.finnhubApiKey,getAlpacaMarketDataOptions(config.execution),getAdditionalMarketProviderKeys(config.marketData));
     return NextResponse.json(history,{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=30'}});
   }catch(error){
+    try{
+      const assetHistory=getReferenceMarketHistory(asset,requested as TimeframeId);
+      if(Array.isArray(assetHistory.candles)&&assetHistory.candles.length){
+        return NextResponse.json(assetHistory,{headers:{'Cache-Control':'private, no-store'}});
+      }
+    }catch{}
     const status=error instanceof MarketDataError?error.status:502;
     const diagnostics=error instanceof MarketDataError?error.diagnostics:undefined;
     return NextResponse.json({

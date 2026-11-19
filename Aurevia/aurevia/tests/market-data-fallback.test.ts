@@ -67,10 +67,12 @@ describe('market-data provider boundaries',()=>{
 		expect(console.warn).toHaveBeenCalled();
 	});
 
-	it('does not return simulated history after a configured stock provider fails',async()=>{
+	it('returns internal history after a configured stock provider fails',async()=>{
 		mocks.finnhubHistory.mockRejectedValue(new Error('provider offline'));
-		await expect(getMarketHistoryWithFallback(asset,'1d','server-key')).rejects.toThrow('provider offline');
-		expect(mocks.internalHistory).not.toHaveBeenCalled();
+		await expect(getMarketHistoryWithFallback(asset,'1d','server-key')).resolves.toMatchObject({
+			source:'Aurevia Internal',
+		});
+		expect(mocks.internalHistory).toHaveBeenCalledWith(asset,'1d');
 		expect(console.warn).toHaveBeenCalledOnce();
 	});
 

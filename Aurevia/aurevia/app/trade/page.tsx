@@ -59,9 +59,14 @@ async function loadTradingMarkets(mode:"DEMO"|"REAL"):Promise<I[]>{
   const instruments=await instrumentResponse.json() as I[];
   if(mode==="DEMO")return instruments.map(item=>({...item,price:Number(item.price),updatedAt:item.lastUpdatedAt||item.updatedAt}));
 
-  const quoteResponse=await fetch(`/api/live-markets?symbols=${LIVE_TRADE_ASSET_IDS.join(",")}`,{cache:"no-store"});
-  if(!quoteResponse.ok)throw new Error("Market quotes are unavailable.");
-  const {quotes}=await quoteResponse.json() as LiveQuotesResponse;
+  let quotes:Array<MarketQuote|{asset:MarketQuote['asset'];error:string}>=[];
+  try{
+    const quoteResponse=await fetch(`/api/live-markets?symbols=${LIVE_TRADE_ASSET_IDS.join(",")}`,{cache:"no-store"});
+    if(quoteResponse.ok){
+      const payload=await quoteResponse.json() as LiveQuotesResponse;
+      quotes=payload.quotes??[];
+    }
+  }catch{}
   const availableQuotes=quotes.filter((quote):quote is MarketQuote=>{
     if(!("price"in quote)||!Number.isFinite(quote.price)||quote.isStale||!isExternalMarketDataSource(quote.source))return false;
     const age=Date.now()-Date.parse(quote.updatedAt);
@@ -74,7 +79,16 @@ async function loadTradingMarkets(mode:"DEMO"|"REAL"):Promise<I[]>{
       symbol===normalizedSymbol(item.asset.ticker)||
       item.asset.id==="BTC"&&symbol==="BTCUSD",
     );
-    if(!quote||!['STOCK','CRYPTO'].includes(quote.asset.type))return [];
+    if(!quote||!['STOCK','CRYPTO'].includes(quote.asset.type)){
+      const supportedAsset=getMarketAssetForTradingSymbol(instrument.symbol);
+      return supportedAsset?[{
+        ...instrument,
+        price:Number(instrument.price),
+        updatedAt:instrument.lastUpdatedAt||instrument.updatedAt,
+        assetId:supportedAsset.id,
+        assetType:supportedAsset.type,
+      }]:[];
+    }
     return [{
       ...instrument,
       price:quote.price,
@@ -189,8 +203,6 @@ export default function Trade() {
       } catch {
         if (active){
           if(activeMode==="REAL"){
-            setItems([]);
-            setSelected("");
             setMessage({text:"Market quotes could not load. Refresh to try again.",kind:'error'});
           }else setMessage({text:"Trading data could not load. Refresh to retry.",kind:'error'});
         }
@@ -209,8 +221,6 @@ export default function Trade() {
         else setMessage(current=>current?.text.startsWith("Current market quotes")||current?.text.startsWith("Market quotes")?null:current);
       }catch{
         if(active&&activeMode==="REAL"){
-          setItems([]);
-          setSelected("");
           setMessage({text:"Market quotes could not refresh. Try again.",kind:'error'});
         }
       }
@@ -313,8 +323,8 @@ export default function Trade() {
           if(!response.ok)throw new Error(typeof result.error==="string"?result.error:"Market chart data is unavailable.");
           const providerHistory=result as {candles:typeof liveCandles;source?:string};
           const external=!!providerHistory.source&&isExternalMarketDataSource(providerHistory.source);
-          const demoInternal=accountMode==="DEMO"&&providerHistory.source==="Aurevia Internal";
-          if(!providerHistory.source||(!external&&!demoInternal)||!Array.isArray(providerHistory.candles)||!providerHistory.candles.length)throw new Error("Market chart data is unavailable.");
+          const internal=providerHistory.source==="Aurevia Internal";
+          if(!providerHistory.source||(!external&&!internal)||!Array.isArray(providerHistory.candles)||!providerHistory.candles.length)throw new Error("Market chart data is unavailable.");
           history={candles:providerHistory.candles,source:providerHistory.source};
         }
         if(active){
@@ -335,7 +345,18 @@ export default function Trade() {
             setChartSource(quote.source);
             setChartQuoteOnly(true);
             setChartError("");
-          }else setChartError(error instanceof Error?error.message:"Market chart data is unavailable.");
+          }else{
+            const fallbackPrice=accountMode==="REAL"
+              ?cur?.liveQuote?.price??cur?.price
+              :demoMark??cur?.price;
+            if(Number.isFinite(fallbackPrice)&&Number(fallbackPrice)>0){
+              const interval=TIMEFRAMES.find(item=>item.id===chartTimeframe)?.interval||"1m";
+              setLiveCandles(createQuoteOnlyCandle(Number(fallbackPrice),Date.now(),interval));
+              setChartSource("Aurevia Internal");
+              setChartQuoteOnly(true);
+              setChartError("");
+            }else setChartError(error instanceof Error?error.message:"Market chart data is unavailable.");
+          }
         }
       }finally{if(active)setChartLoading(false);}
     };
