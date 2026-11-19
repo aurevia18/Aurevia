@@ -2343,7 +2343,7 @@ test('DEMO accounts cannot access investments while REAL investment lifecycle re
 			await expect(page.getByLabel('BTC address')).toHaveCount(0);
 			await expect(page.getByLabel('Optional supporting attachment')).toBeVisible();
 		await page.goto('/investments');
-		await expect(page.getByText(/REAL allocations reserve internal ledger funds/i)).toBeVisible();
+		await expect(page.getByText(/REAL allocations reserve funds in your wallet/i)).toBeVisible();
 		const realRequestResponse=await page.request.post('/api/investments',{headers:{'Idempotency-Key':randomUUID()},data:{opportunityId:opportunity.id,amount:500}});
 		expect(realRequestResponse.status()).toBe(201);
 		const realRequest=await realRequestResponse.json();

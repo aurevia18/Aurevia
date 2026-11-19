@@ -65,9 +65,9 @@ export default function InvestmentExperience(){
 
  useEffect(()=>{
   if(sessionStatus==='loading')return;
-  if(sessionStatus!=='authenticated'||session?.user?.accountMode!=='REAL'){
+  if(sessionStatus!=='authenticated'){
    setLoading(false);
-   setError(sessionStatus==='unauthenticated'?'Please sign in again to access investment opportunities.':'Investment access requires an eligible REAL account.');
+   setError('Please sign in again to access investment opportunities.');
    return;
   }
   setData(null);setAmounts({});setConfirmOpportunityId('');setError('');setNotice('');
