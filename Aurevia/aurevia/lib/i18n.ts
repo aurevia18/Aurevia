@@ -365,7 +365,7 @@ const base = {
   investmentNotSet: "Not set",
   setOnActivation: "Set on activation",
   availableOpportunities: "Available opportunities",
-  targetFigures: "Target figures are projections, not guaranteed outcomes.",
+  targetFigures: "Project returns, profit targets.",
   availableCashLabel: "Available cash",
   loadingOpportunities: "Loading opportunities…",
   minimum: "Minimum",
