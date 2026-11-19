@@ -41,11 +41,11 @@ export async function getMarketQuoteWithFallback(asset:LiveMarketAsset,apiKey:st
 	}
 }
 
-export async function getMarketHistoryWithFallback(asset:LiveMarketAsset,timeframe:TimeframeId,apiKey:string,alpacaData?:AlpacaStockDataOptions,additionalProviders?:MarketProviderKeys){
+export async function getMarketHistoryWithFallback(asset:LiveMarketAsset,timeframe:TimeframeId,apiKey:string,alpacaData?:AlpacaStockDataOptions,additionalProviders?:MarketProviderKeys,preferFinnhub=false){
 	let existingHistory:Awaited<ReturnType<typeof getMarketHistory>>|undefined;
 	let existingError:unknown;
 	try{
-		existingHistory=await getMarketHistory(asset,timeframe,apiKey,alpacaData);
+		existingHistory=await getMarketHistory(asset,timeframe,apiKey,alpacaData,preferFinnhub);
 	}catch(error){
 		existingError=error;
 	}

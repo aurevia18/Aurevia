@@ -227,16 +227,31 @@ export async function getMarketQuote(asset:LiveMarketAsset,apiKey='',alpacaData?
   }
 }
 
-export async function getMarketHistory(asset:LiveMarketAsset,timeframe:TimeframeId,apiKey='',alpacaData?:AlpacaStockDataOptions){
-	const cacheKey=`${asset.id}:${timeframe}:alpaca=${Boolean(alpacaData?.apiKey&&alpacaData.apiSecret)}:finnhub=${Boolean(apiKey)}`;
-	return getCached(historyCache,cacheKey,15_000,()=>getMarketHistoryUncached(asset,timeframe,apiKey,alpacaData));
+export async function getMarketHistory(asset:LiveMarketAsset,timeframe:TimeframeId,apiKey='',alpacaData?:AlpacaStockDataOptions,preferFinnhub=false){
+	const cacheKey=`${asset.id}:${timeframe}:alpaca=${Boolean(alpacaData?.apiKey&&alpacaData.apiSecret)}:finnhub=${Boolean(apiKey)}:preferFinnhub=${preferFinnhub}`;
+	return getCached(historyCache,cacheKey,15_000,()=>getMarketHistoryUncached(asset,timeframe,apiKey,alpacaData,preferFinnhub));
 }
 
-async function getMarketHistoryUncached(asset:LiveMarketAsset,timeframe:TimeframeId,apiKey='',alpacaData?:AlpacaStockDataOptions){
+async function getMarketHistoryUncached(asset:LiveMarketAsset,timeframe:TimeframeId,apiKey='',alpacaData?:AlpacaStockDataOptions,preferFinnhub=false){
   const selection=TIMEFRAMES.find(item=>item.id===timeframe)||TIMEFRAMES[0];
   const provider=alpacaProvider(alpacaData);
   const cryptoProvider=alpacaCryptoProvider(alpacaData);
   const getInternalFallback=async()=>await getInternalMarketHistory(asset,timeframe);
+  let finnhubAttempted=false;
+  if(preferFinnhub&&apiKey){
+    finnhubAttempted=true;
+    try{
+      const history=await getFinnhubHistory(asset,selection.range,selection.interval,apiKey,alpacaData?.fetcher??fetch);
+      return {...history,timeframe,interval:selection.interval};
+    }catch(error){
+      console.warn('[market-history] Preferred Finnhub candles are unavailable.',{
+        symbol:asset.id,
+        stage:'preferred-provider-lookup',
+        provider:'Finnhub',
+        errorName:error instanceof Error?error.name:'UnknownError',
+      });
+    }
+  }
   if(asset.type==='STOCK'&&(provider||apiKey)){
     const now=new Date();
     const end=now;
@@ -248,7 +263,7 @@ async function getMarketHistoryUncached(asset:LiveMarketAsset,timeframe:Timefram
     const diagnostics:MarketHistoryDiagnostics={
       selectedProvider:'none',
       alpaca:provider?{status:'skipped'}:{status:'not_configured',reason:'credentials_missing'},
-      finnhub:apiKey?{status:'skipped'}:{status:'not_configured',reason:'credentials_missing'},
+      finnhub:apiKey?finnhubAttempted?{status:'failed',reason:'preferred_provider_unavailable'}:{status:'skipped'}:{status:'not_configured',reason:'credentials_missing'},
     };
     const providerFailure=(error:unknown,provider:'Alpaca'|'Finnhub',endpoint:string):MarketProviderDiagnostic=>{
       const message=error instanceof Error?error.message:'UNKNOWN_PROVIDER_ERROR';
@@ -290,7 +305,7 @@ async function getMarketHistoryUncached(asset:LiveMarketAsset,timeframe:Timefram
         const bars=await provider.getBars(asset.ticker,start.toISOString(),end.toISOString(),alpacaIntervals[selection.interval==='4h'?'1h':selection.interval]||'1Day');
         if(!bars.length)throw new MarketDataError(`No historical data is available for ${asset.id}.`,404);
         diagnostics.alpaca={status:'succeeded'};
-        diagnostics.finnhub=apiKey?{status:'skipped',reason:'primary_provider_succeeded'}:diagnostics.finnhub;
+        if(apiKey&&!finnhubAttempted)diagnostics.finnhub={status:'skipped',reason:'primary_provider_succeeded'};
         diagnostics.selectedProvider='Alpaca';
         const candles=normalizeChartCandles(bars.map(bar=>({...bar,time:Math.floor(Date.parse(bar.time)/1000)})));
         return {quote:null,candles:selection.interval==='4h'?aggregateChartCandles(candles,'4h'):candles,timeframe,interval:selection.interval,source:'Alpaca',diagnostics};
@@ -298,7 +313,7 @@ async function getMarketHistoryUncached(asset:LiveMarketAsset,timeframe:Timefram
         diagnostics.alpaca=providerFailure(error,'Alpaca','/v2/stocks/{symbol}/bars');
       }
     }
-    if(apiKey){
+    if(apiKey&&!finnhubAttempted){
       try{
         const history=await getFinnhubHistory(asset,selection.range,selection.interval,apiKey,alpacaData?.fetcher??fetch);
         if(!history.candles.length)throw new MarketDataError(`No historical data is available for ${asset.id}.`,404);
@@ -338,7 +353,7 @@ async function getMarketHistoryUncached(asset:LiveMarketAsset,timeframe:Timefram
       }
     }
   }
-  if(apiKey){
+  if(apiKey&&!finnhubAttempted){
     try{
       const history=await getFinnhubHistory(asset,selection.range,selection.interval,apiKey,alpacaData?.fetcher??fetch);
       return {...history,timeframe,interval:selection.interval};

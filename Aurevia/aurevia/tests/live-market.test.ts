@@ -208,6 +208,20 @@ describe('Finnhub market service',()=>{
 		expect(fetcher.mock.calls.every(([url])=>String(url).includes('timeframe=1Day'))).toBe(true);
 	});
 
+	it('prefers Finnhub candles when requested even when Alpaca is configured',async()=>{
+		const now=Math.floor(Date.now()/1000);
+		const fetcher=vi.fn().mockResolvedValue(new Response(JSON.stringify({
+			s:'ok',t:[now],o:[188],h:[192],l:[187],c:[190],v:[10],
+		}),{status:200}));
+		const options={apiKey:'alpaca-key',apiSecret:'alpaca-secret',fetcher};
+
+		const history=await getMarketHistory(getMarketAsset('AAPL')!,'1d','finnhub-key',options,true);
+
+		expect(history).toMatchObject({source:'Finnhub',candles:[{open:188,high:192,low:187,close:190,volume:10}]});
+		expect(fetcher).toHaveBeenCalledTimes(1);
+		expect(String(fetcher.mock.calls[0][0])).toContain('finnhub.io/api/v1/stock/candle');
+	});
+
 	it('maps all twelve chart intervals to provider-backed Alpaca bars',async()=>{
 		const fetcher=vi.fn().mockImplementation(()=>Promise.resolve(new Response(JSON.stringify({
 			bars:[{t:'2026-10-15T14:00:00Z',o:188,h:192,l:187,c:190,v:10}],

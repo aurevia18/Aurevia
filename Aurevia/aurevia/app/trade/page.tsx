@@ -353,7 +353,7 @@ export default function Trade() {
           const rows=await response.json() as Array<{ts:string;open:number|string;high:number|string;low:number|string;close:number|string;volume:number|string|null}>;
           history={candles:normalizeDemoTradeCandles(rows,demoMark??NaN,Date.now(),interval),source:"Aurevia DEMO"};
         }else{
-          const response=await fetch(`/api/live-markets/${encodeURIComponent(chartAssetId)}?timeframe=${chartTimeframe}`,{cache:"no-store"});
+          const response=await fetch(`/api/live-markets/${encodeURIComponent(chartAssetId)}?timeframe=${chartTimeframe}&provider=finnhub`,{cache:"no-store"});
           const result=await response.json();
           if(!response.ok)throw new Error(typeof result.error==="string"?result.error:"Market chart data is unavailable.");
           const providerHistory=result as {candles:typeof liveCandles;source?:string};

@@ -15,7 +15,10 @@ export async function GET(request:Request,{params}:{params:Promise<{symbol:strin
   if(!TIMEFRAMES.some(timeframe=>timeframe.id===requested))return NextResponse.json({error:'Unsupported timeframe.'},{status:400});
   try{
     const config=getServerConfiguration();
-    const history=await getMarketHistoryWithFallback(asset,requested as TimeframeId,config.marketData.finnhubApiKey,getAlpacaMarketDataOptions(config.execution),getAdditionalMarketProviderKeys(config.marketData));
+    const preferFinnhub=new URL(request.url).searchParams.get('provider')==='finnhub';
+    const history=preferFinnhub
+      ?await getMarketHistoryWithFallback(asset,requested as TimeframeId,config.marketData.finnhubApiKey,getAlpacaMarketDataOptions(config.execution),getAdditionalMarketProviderKeys(config.marketData),true)
+      :await getMarketHistoryWithFallback(asset,requested as TimeframeId,config.marketData.finnhubApiKey,getAlpacaMarketDataOptions(config.execution),getAdditionalMarketProviderKeys(config.marketData));
     return NextResponse.json(history,{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=30'}});
   }catch(error){
     try{

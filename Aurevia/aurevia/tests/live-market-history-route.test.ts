@@ -83,4 +83,26 @@ describe('market history route fallback',()=>{
 		expect(response.status).toBe(200);
 		expect(await response.json()).toMatchObject({source:'Aurevia Internal'});
 	});
+
+	it('passes the Finnhub preference through for the trade chart request',async()=>{
+		mocks.getHistory.mockResolvedValue({
+			source:'Finnhub',
+			candles:[{time:1_800_000_000,open:190,high:192,low:188,close:191,volume:10}],
+		});
+
+		const response=await GET(new Request('https://aurevia.test/api/live-markets/AAPL?timeframe=1d&provider=finnhub'),{
+			params:Promise.resolve({symbol:'AAPL'}),
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({source:'Finnhub'});
+		expect(mocks.getHistory).toHaveBeenCalledWith(
+			expect.objectContaining({id:'AAPL'}),
+			'1d',
+			'server-key',
+			undefined,
+			{twelveDataApiKey:'',alphaVantageApiKey:'',fmpApiKey:'',productionLicenseConfirmed:false},
+			true,
+		);
+	});
 });
