@@ -131,7 +131,7 @@ export default function Trade() {
   const [availableBalance, setAvailableBalance] = useState<number | null>(null);
   const [paperReservedBalance,setPaperReservedBalance]=useState(0);
   const [paperAvailableBalance,setPaperAvailableBalance]=useState(0);
-  const [accountMode, setAccountMode] = useState<'DEMO'|'REAL'|'LOADING'>('LOADING');
+  const [accountMode, setAccountMode] = useState<'DEMO'|'REAL'|'LOADING'>(session?.user?.accountMode||'LOADING');
   const [placing, setPlacing] = useState(false);
   const [chartTimeframe,setChartTimeframe]=useState<TimeframeId>("1m");
   const [liveCandles,setLiveCandles]=useState<Array<{time:number;open:number;high:number;low:number;close:number;volume:number|null}>>([]);
@@ -164,29 +164,47 @@ export default function Trade() {
   useEffect(() => {
     if(sessionStatus!=='authenticated')return;
     let active = true;
-    let activeMode:"DEMO"|"REAL"|undefined;
-    setAccountMode('LOADING');
+    let activeMode=session?.user?.accountMode;
+    if(activeMode)setAccountMode(activeMode);
     setAvailableBalance(null);
     setOrders([]);
     setPositions([]);
+    setItems([]);
+    setSelected("");
     setMessage(null);
+    const marketPromise=fetch("/api/market",{cache:"no-store"})
+      .then(response=>loadTradingMarkets(activeMode||"DEMO",response))
+      .then(market=>{
+        if(!active)return;
+        setItems(market);
+        setSelected(current=>market.some(item=>item.id===current)?current:market[0]?.id||"");
+        if(activeMode==="REAL"&&!market.length)setMessage({text:"Current market quotes are unavailable. Refresh to try again.",kind:'info'});
+      })
+      .catch(()=>{
+        if(active)setMessage({text:activeMode==="REAL"?"Market quotes could not load. Refresh to try again.":"Trading data could not load. Refresh to retry.",kind:'error'});
+      });
     const load = async () => {
       try {
-        const [orderResponse,positionResponse,walletResponse,marketResponse] = await Promise.all([
+        const [orderResponse,positionResponse,walletResponse] = await Promise.all([
           fetch("/api/orders"),
           fetch("/api/positions"),
           fetch("/api/portfolio"),
-          fetch("/api/market",{cache:"no-store"}),
         ]);
         if ([orderResponse,positionResponse,walletResponse].some((response) => !response.ok))
           throw new Error("Unable to load trading data.");
         const walletData=await walletResponse.json() as WalletResponse;
         activeMode=walletData.accountMode;
-        const marketPromise=loadTradingMarkets(walletData.accountMode,marketResponse);
-        const [orderData,positionData,market]=await Promise.all([
+        if(activeMode!==(session?.user?.accountMode)){
+          setAccountMode(activeMode);
+          void marketPromise.then(()=>loadTradingMarkets(activeMode!)).then(market=>{
+            if(!active)return;
+            setItems(market);
+            setSelected(current=>market.some(item=>item.id===current)?current:market[0]?.id||"");
+          }).catch(()=>{if(active)setMessage({text:"Market quotes could not load. Refresh to try again.",kind:'error'})});
+        }else setAccountMode(walletData.accountMode);
+        const [orderData,positionData]=await Promise.all([
           orderResponse.json() as Promise<Order[]>,
           positionResponse.json() as Promise<PositionResponse[]>,
-          marketPromise,
         ]);
         if (!active) return;
         setOrders(orderData);
@@ -206,9 +224,6 @@ export default function Trade() {
             },
           })),
         );
-        setItems(market);
-        setSelected(market[0]?.id||"");
-        if(walletData.accountMode==="REAL"&&!market.length)setMessage({text:"Current market quotes are unavailable. Refresh to try again.",kind:'info'});
       } catch {
         if (active){
           if(activeMode==="REAL"){
