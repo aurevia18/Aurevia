@@ -86,6 +86,7 @@
 .trade-chart-timeframes{gap:6px;margin-block:15px 7px}
 .trade-chart-timeframes button{min-height:34px;padding-inline:11px;border-radius:5px;font-size:10px}
 .trade-chart-note{font-size:10px;line-height:1.65}
+.trade-chart-loading{display:grid;min-height:320px;place-items:center;color:#91a7af;font-size:11px}
 .trade-orderbook h3{margin:0;color:#e5ebe2;font-size:13px}
 .trade-orderbook .text-xs{line-height:1.7}
 .trade-orderbook .text-xs>p{margin:0 0 12px;line-height:1.55}
@@ -188,6 +189,7 @@
 	.trade-workspace .trade-history-card .account-panel-title{flex-wrap:wrap}
 	.trade-clear-failed{margin-left:auto}
 	.trade-workspace .trade-chart-panel{padding:14px}
+	.trade-chart-loading{min-height:230px}
 }
 
 @media(prefers-reduced-motion:reduce){

@@ -1,9 +1,9 @@
 "use client";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
+import dynamic from "next/dynamic";
 import Nav from "@/components/Nav";
 import { useLocale } from "@/lib/i18n-context";
-import LivePriceChart from "@/components/LivePriceChart";
 import {TIMEFRAMES,getMarketAssetForTradingSymbol,isExternalMarketDataSource,type MarketQuote,type TimeframeId} from "@/lib/live-market";
 import {normalizeDemoTradeCandles} from "@/lib/demo-trade-chart";
 import {createQuoteOnlyCandle} from "@/lib/chart-candles";
@@ -12,6 +12,9 @@ import { io, type Socket } from "socket.io-client";
 import { AlertCircle, CheckCircle2, X } from "lucide-react";
 import { formatUsd } from "@/lib/currency-format";
 import "./trade-polish.css";
+const LivePriceChart=dynamic(()=>import("@/components/LivePriceChart"),{
+  loading:()=><div className="trade-chart-loading" role="status">Preparing market chart…</div>,
+});
 type I = { id: string; symbol: string; price: number; change?: number; takerFee?: number; leverage?: number; updatedAt?:string; lastUpdatedAt?:string; assetId?:string; assetType?:string; source?:string; bid?:number|null; ask?:number|null; liveQuote?:MarketQuote };
 type NumericValue=number|string;
 type Order = {
@@ -53,20 +56,24 @@ const DEMO_CANDLE_RANGES:Record<TimeframeId,string>={ "1m":"1d","5m":"5d","15m":
 function normalizedSymbol(value:string){return value.toUpperCase().replace(/[^A-Z0-9]/g,"")}
 function isFailedOrder(order:Order){return order.status==='REJECTED'||order.status==='FAILED'}
 
-async function loadTradingMarkets(mode:"DEMO"|"REAL"):Promise<I[]>{
-  const instrumentResponse=await fetch("/api/market",{cache:"no-store"});
+async function loadTradingMarkets(mode:"DEMO"|"REAL",initialInstrumentResponse?:Response):Promise<I[]>{
+  const [instrumentResponse,quoteResponse]=await Promise.all([
+    initialInstrumentResponse?Promise.resolve(initialInstrumentResponse):fetch("/api/market",{cache:"no-store"}),
+    mode==="REAL"
+      ?fetch(`/api/live-markets?symbols=${LIVE_TRADE_ASSET_IDS.join(",")}`,{cache:"no-store"}).catch(()=>null)
+      :Promise.resolve(null),
+  ]);
   if(!instrumentResponse.ok)throw new Error("Unable to load trading instruments.");
   const instruments=await instrumentResponse.json() as I[];
   if(mode==="DEMO")return instruments.map(item=>({...item,price:Number(item.price),updatedAt:item.lastUpdatedAt||item.updatedAt}));
 
   let quotes:Array<MarketQuote|{asset:MarketQuote['asset'];error:string}>=[];
-  try{
-    const quoteResponse=await fetch(`/api/live-markets?symbols=${LIVE_TRADE_ASSET_IDS.join(",")}`,{cache:"no-store"});
-    if(quoteResponse.ok){
+  if(quoteResponse?.ok){
+    try{
       const payload=await quoteResponse.json() as LiveQuotesResponse;
       quotes=payload.quotes??[];
-    }
-  }catch{}
+    }catch{}
+  }
   const availableQuotes=quotes.filter((quote):quote is MarketQuote=>{
     if(!("price"in quote)||!Number.isFinite(quote.price)||quote.isStale||!isExternalMarketDataSource(quote.source))return false;
     const age=Date.now()-Date.parse(quote.updatedAt);
@@ -135,6 +142,7 @@ export default function Trade() {
   const [chartQuoteOnly,setChartQuoteOnly]=useState(false);
   const providerHistoryLoaded=useRef(false);
   const currentLiveQuote=useRef<MarketQuote|undefined>(undefined);
+  const currentChartPrice=useRef<number|undefined>(undefined);
   useEffect(()=>{
     if(!session?.user?.id||(accountMode!=="DEMO"&&accountMode!=="REAL")){
       setDismissedFailedOrderIds([]);
@@ -164,19 +172,22 @@ export default function Trade() {
     setMessage(null);
     const load = async () => {
       try {
-        const responses = await Promise.all([
+        const [orderResponse,positionResponse,walletResponse,marketResponse] = await Promise.all([
           fetch("/api/orders"),
           fetch("/api/positions"),
           fetch("/api/portfolio"),
+          fetch("/api/market",{cache:"no-store"}),
         ]);
-        if (responses.some((response) => !response.ok))
+        if ([orderResponse,positionResponse,walletResponse].some((response) => !response.ok))
           throw new Error("Unable to load trading data.");
-        const [orderData,positionData,walletData]=await Promise.all([
-          responses[0].json() as Promise<Order[]>,
-          responses[1].json() as Promise<PositionResponse[]>,
-          responses[2].json() as Promise<WalletResponse>,
-        ]);
+        const walletData=await walletResponse.json() as WalletResponse;
         activeMode=walletData.accountMode;
+        const marketPromise=loadTradingMarkets(walletData.accountMode,marketResponse);
+        const [orderData,positionData,market]=await Promise.all([
+          orderResponse.json() as Promise<Order[]>,
+          positionResponse.json() as Promise<PositionResponse[]>,
+          marketPromise,
+        ]);
         if (!active) return;
         setOrders(orderData);
         setAccountMode(walletData.accountMode);
@@ -195,8 +206,6 @@ export default function Trade() {
             },
           })),
         );
-        const market=await loadTradingMarkets(walletData.accountMode);
-        if (!active) return;
         setItems(market);
         setSelected(market[0]?.id||"");
         if(walletData.accountMode==="REAL"&&!market.length)setMessage({text:"Current market quotes are unavailable. Refresh to try again.",kind:'info'});
@@ -292,7 +301,10 @@ export default function Trade() {
     if(price===null)return null;
     return p.side==="BUY"?(price-p.entryPrice)*p.quantity:(p.entryPrice-price)*p.quantity;
   };
-  useEffect(()=>{currentLiveQuote.current=cur?.liveQuote},[cur?.liveQuote]);
+  useEffect(()=>{
+    currentLiveQuote.current=cur?.liveQuote;
+    currentChartPrice.current=cur?.price;
+  },[cur?.liveQuote,cur?.price]);
   useEffect(()=>{
     if(!['DEMO','REAL'].includes(accountMode)||(!chartAssetId&&accountMode!=="DEMO")){
       setLiveCandles([]);
@@ -309,13 +321,21 @@ export default function Trade() {
     const loadHistory=async()=>{
       setChartLoading(true);
       setChartError("");
+      const interval=TIMEFRAMES.find(item=>item.id===chartTimeframe)?.interval||"1m";
+      const fallbackPrice=accountMode==="REAL"
+        ?currentLiveQuote.current?.price??currentChartPrice.current
+        :demoMark??currentChartPrice.current;
+      if(!providerHistoryLoaded.current&&Number.isFinite(fallbackPrice)&&Number(fallbackPrice)>0){
+        setLiveCandles(createQuoteOnlyCandle(Number(fallbackPrice),Date.now(),interval));
+        setChartSource("Aurevia Internal");
+        setChartQuoteOnly(false);
+      }
       try{
         let history:{candles:typeof liveCandles;source:string};
         if(!chartAssetId){
           const response=await fetch(`/api/candles?instrumentId=${encodeURIComponent(selected)}&range=${DEMO_CANDLE_RANGES[chartTimeframe]}&limit=500`,{cache:"no-store"});
           if(!response.ok)throw new Error("Simulated market candles are unavailable.");
           const rows=await response.json() as Array<{ts:string;open:number|string;high:number|string;low:number|string;close:number|string;volume:number|string|null}>;
-          const interval=TIMEFRAMES.find(item=>item.id===chartTimeframe)?.interval||"1m";
           history={candles:normalizeDemoTradeCandles(rows,demoMark??NaN,Date.now(),interval),source:"Aurevia DEMO"};
         }else{
           const response=await fetch(`/api/live-markets/${encodeURIComponent(chartAssetId)}?timeframe=${chartTimeframe}`,{cache:"no-store"});
@@ -340,17 +360,15 @@ export default function Trade() {
           const quoteIsFresh=accountMode==="REAL"&&!!quote&&isExternalMarketDataSource(quote.source)&&
             !quote.isStale&&Number.isFinite(quote.price)&&quote.price>0&&quoteAge>=-5_000&&quoteAge<=30_000;
           if(!providerHistoryLoaded.current&&quoteIsFresh&&quote){
-            const interval=TIMEFRAMES.find(item=>item.id===chartTimeframe)?.interval||"1m";
             setLiveCandles(createQuoteOnlyCandle(quote.price,Date.parse(quote.updatedAt),interval));
             setChartSource(quote.source);
             setChartQuoteOnly(true);
             setChartError("");
           }else{
             const fallbackPrice=accountMode==="REAL"
-              ?cur?.liveQuote?.price??cur?.price
-              :demoMark??cur?.price;
+              ?currentLiveQuote.current?.price??currentChartPrice.current
+              :demoMark??currentChartPrice.current;
             if(Number.isFinite(fallbackPrice)&&Number(fallbackPrice)>0){
-              const interval=TIMEFRAMES.find(item=>item.id===chartTimeframe)?.interval||"1m";
               setLiveCandles(createQuoteOnlyCandle(Number(fallbackPrice),Date.now(),interval));
               setChartSource("Aurevia Internal");
               setChartQuoteOnly(true);
