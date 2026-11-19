@@ -121,7 +121,7 @@ export default function InvestmentExperience(){
 
  return <><Nav/><main className="account-page">
   <header className="account-heading"><div><span className="account-kicker">{translate('investmentsKicker')}</span><h1>{translate('investmentsTitle')}</h1><p>{translate('investmentSubtitle')}</p></div><span className={`status-pill ${data?.accountMode==='REAL'?'mode-real':'mode-demo'}`}>{data?translate('portfolioAccount',{mode:data.accountMode}):translate('investmentLoadingAccount')}</span></header>
-  {data&&<div className="account-callout mb-4" role="status"><span>{data.accountMode} allocations reserve internal ledger funds. At expiry, the internally modeled payout is credited to your wallet ledger automatically. Any projected return is an estimate—not an external investment, guaranteed earnings, or independently verified proceeds.</span></div>}
+  {data&&<div className="account-callout mb-4" role="status"><span>{data.accountMode} allocations reserve funds in your wallet, with payouts credited automatically at expiry.</span></div>}
   {notice&&<p className="mb-3 text-sm text-profit" role="status">{notice}</p>}{error&&<div className="account-callout mb-3" role="alert"><span>{error}</span><button type="button" className="text-link" onClick={()=>void load(true)}><RefreshCw size={14}/> Retry</button></div>}
   {data&&<section className="investment-overview-grid" aria-label="Investment account overview">
    <article><span>Available {data.accountMode} cash</span><b>{formatUsd(data.availableBalance)}</b><small>Spendable account ledger balance</small></article>
