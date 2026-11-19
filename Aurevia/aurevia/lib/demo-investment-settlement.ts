@@ -39,7 +39,7 @@ export async function settleMaturedSimulatedInvestments(now=new Date()){
 			const reservation=await tx.ledgerTransaction.findUnique({where:{reference:`INVESTMENT:${current.id}:RESERVE`},select:{id:true}});
 			if(!reservation)return false;
 			const payout=simulatedInvestmentSettlement(current.amount,current.targetReturnPercent,current.tierBoostPercent);
-			const settlementReference=`SIMULATED-AUTO-SETTLEMENT:${current.accountMode}:${current.id}`;
+			const settlementReference=`${current.accountMode}-AUTO-PAYOUT:${current.id}`;
 			const changed=await tx.investmentRequest.updateMany({where:{id:current.id,accountMode:current.accountMode,status:current.status,maturesAt:{lte:now}},data:{status:InvestmentStatus.SETTLED,completedAt:current.completedAt??now,settledAt:now,settlementReference,simulatedPayout:payout}});
 			if(changed.count!==1)return false;
 

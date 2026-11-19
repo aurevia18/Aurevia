@@ -21,7 +21,7 @@ function statusText(value:string){return value.replaceAll('_',' ');}
 function dateText(value:string|null,notSet:string){return value?new Date(value).toLocaleDateString():notSet;}
 
 export default function InvestmentExperience(){
- const {data:session}=useSession();
+ const {data:session,status:sessionStatus}=useSession();
  const {translate}=useLocale();
  const [data,setData]=useState<Payload|null>(null);
  const [amounts,setAmounts]=useState<Record<string,string>>({});
@@ -64,7 +64,12 @@ export default function InvestmentExperience(){
  const activeMarketSymbol=marketSymbols.includes(marketSymbol)?marketSymbol:marketSymbols[0]||'';
 
  useEffect(()=>{
-  if(session?.user?.accountMode!=='REAL')return;
+  if(sessionStatus==='loading')return;
+  if(sessionStatus!=='authenticated'||session?.user?.accountMode!=='REAL'){
+   setLoading(false);
+   setError(sessionStatus==='unauthenticated'?'Please sign in again to access investment opportunities.':'Investment access requires an eligible REAL account.');
+   return;
+  }
   setData(null);setAmounts({});setConfirmOpportunityId('');setError('');setNotice('');
   void load(true);
   const refreshWhenActive=()=>{if(document.visibilityState==='visible')void load();};
@@ -72,7 +77,7 @@ export default function InvestmentExperience(){
   window.addEventListener('focus',refreshWhenActive);
   document.addEventListener('visibilitychange',refreshWhenActive);
   return ()=>{window.clearInterval(timer);window.removeEventListener('focus',refreshWhenActive);document.removeEventListener('visibilitychange',refreshWhenActive);};
- },[load,session?.user?.accountMode]);
+ },[load,session?.user?.accountMode,sessionStatus]);
 
  function reviewAllocation(event:FormEvent<HTMLFormElement>,opportunity:Opportunity){
   event.preventDefault();if(busy)return;

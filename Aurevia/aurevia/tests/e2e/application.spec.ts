@@ -2359,7 +2359,7 @@ test('DEMO accounts cannot access investments while REAL investment lifecycle re
 		await settleMaturedSimulatedInvestments();
 		const userInvestments=await page.request.get('/api/investments').then(response=>response.json());
 		const settledRealRequest=userInvestments.requests.find((item:{id:string})=>item.id===realRequest.id);
-		expect(settledRealRequest).toMatchObject({status:'SETTLED',settlementReference:`SIMULATED-AUTO-SETTLEMENT:REAL:${realRequest.id}`,simulatedPayout:'540'});
+		expect(settledRealRequest).toMatchObject({status:'SETTLED',settlementReference:`REAL-AUTO-PAYOUT:${realRequest.id}`,simulatedPayout:'540'});
 		expect(await db.ledgerTransaction.count({where:{reference:`INVESTMENT:${realRequest.id}:PAYOUT`}})).toBe(1);
 		expect(Number((await page.request.get('/api/wallet').then(response=>response.json())).balance)).toBeCloseTo(initialRealBalance+1040,2);
 		const tradeableInstrument=(await page.request.get('/api/market').then(response=>response.json())).find((item:{price:number})=>Number(item.price)<500);
