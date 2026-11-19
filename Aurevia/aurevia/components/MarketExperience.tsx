@@ -62,7 +62,7 @@ export default function MarketExperience(){
 			}finally{if(active)setChartLoading(false)}
 		};
 		void load();
-		const timer=window.setInterval(()=>{if(document.visibilityState==='visible')void load()},chartTimeframe==='1m'||chartTimeframe==='5m'?15_000:60_000);
+		const timer=window.setInterval(()=>void load(),chartTimeframe==='1m'||chartTimeframe==='5m'?15_000:60_000);
 		return()=>{active=false;window.clearInterval(timer)};
 	},[chartAssetId,chartRetry,chartTimeframe]);
 
@@ -81,7 +81,7 @@ export default function MarketExperience(){
 			}catch{if(active)setChartQuote(undefined)}
 		};
 		void load();
-		const timer=window.setInterval(()=>{if(document.visibilityState==='visible')void load()},30_000);
+		const timer=window.setInterval(()=>void load(),30_000);
 		return()=>{active=false;window.clearInterval(timer)};
 	},[chartAssetId]);
 

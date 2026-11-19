@@ -248,7 +248,7 @@ export default function Trade() {
         if(!update)return item;
         if(accountMode==="DEMO")return {...item,price:update.price,change:update.change,updatedAt:update.lastUpdatedAt,lastUpdatedAt:update.lastUpdatedAt};
         if(!item.liveQuote)return item;
-        const liveQuote={...item.liveQuote,price:update.price,change:update.change,changePercent:update.changePercent,source:update.source,isStale:false};
+        const liveQuote={...item.liveQuote,price:update.price,change:update.change,changePercent:update.changePercent,source:update.source,updatedAt:update.lastUpdatedAt,isStale:false};
         return {...item,price:update.price,change:update.changePercent,updatedAt:update.lastUpdatedAt,lastUpdatedAt:update.lastUpdatedAt,source:update.source,liveQuote};
       }));
       if(accountMode==="DEMO")updateStore(updates.filter(update=>update.dataMode==="SIMULATED").map(({symbol,price,change})=>({symbol,price,change})));
@@ -361,10 +361,7 @@ export default function Trade() {
       }finally{if(active)setChartLoading(false);}
     };
     void loadHistory();
-    const timer=window.setInterval(()=>{
-      if(document.visibilityState!=='visible')return;
-      void loadHistory();
-    },chartTimeframe==="1m"||chartTimeframe==="5m"?15_000:60_000);
+    const timer=window.setInterval(()=>void loadHistory(),chartTimeframe==="1m"||chartTimeframe==="5m"?15_000:60_000);
     return()=>{active=false;window.clearInterval(timer);};
   },[accountMode,chartAssetId,chartTimeframe,selected,demoMark]);
   useEffect(()=>{
@@ -384,7 +381,7 @@ export default function Trade() {
       }
     };
     void loadQuote();
-    const timer=window.setInterval(()=>{if(document.visibilityState==='visible')void loadQuote()},30_000);
+    const timer=window.setInterval(()=>void loadQuote(),30_000);
     return()=>{active=false;window.clearInterval(timer);};
   },[accountMode,chartAssetId]);
   const requestedQuantity = Number(qty);

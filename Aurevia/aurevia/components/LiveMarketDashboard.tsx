@@ -25,7 +25,7 @@ const MARKET_CATEGORIES:MarketCategory[]=['Favorites','Forex','Crypto','Stocks',
 const marketTypeIcons:Record<string,LucideIcon>={INDEX:ChartNoAxesCombined,STOCK:Building2,FOREX:ArrowLeftRight,CRYPTO:Coins};
 
 export default function LiveMarketDashboard(){
-  const [queryClient]=useState(()=>new QueryClient({defaultOptions:{queries:{staleTime:4_000,refetchOnWindowFocus:true,retry:1}}}));
+  const [queryClient]=useState(()=>new QueryClient({defaultOptions:{queries:{staleTime:4_000,refetchOnWindowFocus:true,refetchIntervalInBackground:true,retry:1}}}));
   return <QueryClientProvider client={queryClient}><LiveMarketDashboardContent/></QueryClientProvider>;
 }
 
