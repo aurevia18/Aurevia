@@ -337,7 +337,7 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
       twilioAccountSid,
       twilioAuthToken,
       twilioVerifyServiceSid,
-      appUrl: cleanUrl(env('NEXT_PUBLIC_APP_URL', source) || env('NEXTAUTH_URL', source) || env('RENDER_EXTERNAL_URL', source) || 'https://aurevia-exchange-6hfi.onrender.com'),
+      appUrl: cleanUrl(env('NEXT_PUBLIC_APP_URL', source) || env('NEXTAUTH_URL', source) || env('RENDER_EXTERNAL_URL', source) || 'https://aurevia-et63.onrender.com'),
       configured:termiiConfigured||twilioConfigured,
       termiiConfigured,
       twilioConfigured,

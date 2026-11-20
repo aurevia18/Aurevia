@@ -239,25 +239,25 @@ describe('canonical environment configuration',()=>{
   it('uses the Render HTTPS origin until a custom domain is explicitly verified',()=>{
     expect(resolveRenderApplicationUrls({
       NODE_ENV:'production',
-      RENDER_EXTERNAL_URL:'https://aurevia.onrender.com',
+      RENDER_EXTERNAL_URL:'https://aurevia-et63.onrender.com',
       NEXTAUTH_URL:'http://localhost:3000',
       NEXT_PUBLIC_APP_URL:'http://localhost:3000',
     })).toEqual({
-      nextAuthUrl:'https://aurevia.onrender.com',
-      publicAppUrl:'https://aurevia.onrender.com',
+      nextAuthUrl:'https://aurevia-et63.onrender.com',
+      publicAppUrl:'https://aurevia-et63.onrender.com',
     });
     expect(resolveRenderApplicationUrls({
       NODE_ENV:'production',
-      RENDER_EXTERNAL_URL:'https://aurevia.onrender.com',
+      RENDER_EXTERNAL_URL:'https://aurevia-et63.onrender.com',
       NEXTAUTH_URL:'https://auth.example.com',
       NEXT_PUBLIC_APP_URL:'https://app.example.com',
     })).toEqual({
-      nextAuthUrl:'https://aurevia.onrender.com',
-      publicAppUrl:'https://aurevia.onrender.com',
+      nextAuthUrl:'https://aurevia-et63.onrender.com',
+      publicAppUrl:'https://aurevia-et63.onrender.com',
     });
     expect(resolveRenderApplicationUrls({
       NODE_ENV:'production',
-      RENDER_EXTERNAL_URL:'https://aurevia.onrender.com',
+      RENDER_EXTERNAL_URL:'https://aurevia-et63.onrender.com',
       NEXTAUTH_URL:'https://auth.example.com',
       NEXT_PUBLIC_APP_URL:'https://app.example.com',
       AUREVIA_CUSTOM_DOMAIN_VERIFIED:'true',

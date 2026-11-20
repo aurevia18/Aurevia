@@ -119,14 +119,14 @@ describe('password recovery',()=>{
 
 	it('uses the canonical Render origin instead of an unverified public URL',async()=>{
 		vi.stubEnv('NODE_ENV','production');
-		vi.stubEnv('RENDER_EXTERNAL_URL','https://aurevia.onrender.com');
+		vi.stubEnv('RENDER_EXTERNAL_URL','https://aurevia-et63.onrender.com');
 		vi.stubEnv('NEXT_PUBLIC_APP_URL','https://unverified.example.invalid');
 		mocks.userFindFirst.mockResolvedValue({id:'user-1',email:'person@example.invalid',status:'ACTIVE'});
 
 		const response=await requestReset(request('/api/password-reset/request',{email:'person@example.invalid'}));
 
 		expect(response.status).toBe(202);
-		expect(mocks.sendEmail.mock.calls[0][0].text).toContain('https://aurevia.onrender.com/reset-password#token=');
+		expect(mocks.sendEmail.mock.calls[0][0].text).toContain('https://aurevia-et63.onrender.com/reset-password#token=');
 	});
 
 	it('invalidates an undelivered reset token and logs sanitized delivery diagnostics',async()=>{
@@ -184,7 +184,7 @@ describe('password recovery',()=>{
 	it.each(['localhost','127.0.0.1','127.0.0.2','[::1]','[::ffff:7f00:1]'])('rejects loopback HTTP reset URLs in production (%s)',async(host)=>{
 		vi.stubEnv('NODE_ENV','production');
 		vi.stubEnv('NEXT_PUBLIC_APP_URL',`http://${host}:3000`);
-		vi.stubEnv('RENDER_EXTERNAL_URL','https://aurevia.onrender.com');
+		vi.stubEnv('RENDER_EXTERNAL_URL','https://aurevia-et63.onrender.com');
 		const warning=vi.spyOn(console,'warn').mockImplementation(()=>undefined);
 
 		const response=await requestReset(request('/api/password-reset/request',{email:'person@example.invalid'}));
