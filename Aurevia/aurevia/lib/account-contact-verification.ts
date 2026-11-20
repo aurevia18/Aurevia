@@ -124,12 +124,17 @@ export async function restoreAccountContactVerificationReservation(reservation:{
 export async function finalizeAccountContactVerificationReservation(input:{
 	id:string;
 	codeHash:string;
+	verificationCodeHash?:string;
 	providerReference:string|null;
 	expiresAt:Date;
 }){
 	const saved=await db.accountContactVerification.updateMany({
 		where:{id:input.id,codeHash:input.codeHash,verifiedAt:null},
-		data:{providerReference:input.providerReference,expiresAt:input.expiresAt},
+		data:{
+			providerReference:input.providerReference,
+			expiresAt:input.expiresAt,
+			...(input.verificationCodeHash?{codeHash:input.verificationCodeHash}:{}),
+		},
 	});
 	if(saved.count!==1)throw new AccountContactVerificationError('RESERVATION_LOST');
 }

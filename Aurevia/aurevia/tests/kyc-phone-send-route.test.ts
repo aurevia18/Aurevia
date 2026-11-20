@@ -1,8 +1,8 @@
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 
 const mocks=vi.hoisted(()=>({
-	TermiiProviderError:class extends Error{
-		constructor(message:'PHONE_VERIFICATION_PROVIDER_UNAVAILABLE'|'PHONE_VERIFICATION_PROVIDER_FAILED',readonly failureStage:'transport'|'provider_response'|'invalid_response',readonly httpStatus:number|null,readonly underlyingErrorType:string|null=null){super(message)}
+	BrevoSmsDeliveryError:class extends Error{
+		constructor(readonly failureStage:'configuration'|'transport'|'provider_response'|'invalid_response',readonly httpStatus:number|null,readonly providerCode:string|null=null,readonly underlyingErrorType:string|null=null){super('SMS_DELIVERY_FAILED')}
 	},
 	requireUser:vi.fn(),
 	userFindUnique:vi.fn(),
@@ -14,8 +14,8 @@ const mocks=vi.hoisted(()=>({
 	transaction:vi.fn(),
 	getSmsProvider:vi.fn(),
 	hashCode:vi.fn(),
-	sendTermii:vi.fn(),
-	verifyTermii:vi.fn(),
+	generateCode:vi.fn(),
+	sendBrevo:vi.fn(),
 	rateLimit:vi.fn(),
 	synchronizeTier:vi.fn(),
 }));
@@ -30,7 +30,8 @@ vi.mock('@/lib/verification-delivery',()=>({
 	getConfiguredSmsVerificationProvider:mocks.getSmsProvider,
 	formatSmsProviderReference:(provider:{id:string},reference:string)=>`${provider.id.toUpperCase()}:${reference}`,
 	hashVerificationCode:mocks.hashCode,
-	TermiiProviderError:mocks.TermiiProviderError,
+	generateVerificationCode:mocks.generateCode,
+	BrevoSmsDeliveryError:mocks.BrevoSmsDeliveryError,
 }));
 vi.mock('@/lib/rate-limit',()=>({rateLimit:mocks.rateLimit}));
 vi.mock('@/lib/tier-progression',()=>({synchronizeCompletedProfileTier:mocks.synchronizeTier}));
@@ -64,29 +65,32 @@ describe('Tier 3 SMS verification',()=>{
 		}));
 		mocks.synchronizeTier.mockResolvedValue(false);
 		mocks.getSmsProvider.mockReturnValue({
-			id:'termii',
-			send:mocks.sendTermii,
-			verify:mocks.verifyTermii,
+			id:'brevo',
+			send:mocks.sendBrevo,
 		});
 		mocks.hashCode.mockReturnValue('hashed-reservation');
-		mocks.sendTermii.mockResolvedValue('termii-pin-reference');
+		mocks.generateCode.mockReturnValue('483921');
+		mocks.sendBrevo.mockResolvedValue('brevo-message-reference');
 		mocks.rateLimit.mockImplementation(()=>undefined);
 	});
 
 	afterEach(()=>vi.unstubAllEnvs());
 
-	it('uses the configured SMS provider and records its namespaced reference',async()=>{
+	it('sends a generated OTP with Brevo and stores only its hash and message reference',async()=>{
 		const response=await POST(request());
+		const body=await response.json();
 
 		expect(response.status).toBe(200);
-		expect(await response.json()).toMatchObject({message:'A verification code was sent to your phone.'});
-		expect(mocks.sendTermii).toHaveBeenCalledWith('+12125550123');
+		expect(body).toMatchObject({message:'A verification code was sent to your phone.'});
+		expect(mocks.sendBrevo).toHaveBeenCalledWith('+12125550123','483921');
 		expect(mocks.codeCreate).toHaveBeenCalledWith(expect.objectContaining({
 			data:expect.objectContaining({userId:'user-1',channel:'SMS'}),
 		}));
 		expect(mocks.codeUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
-			data:expect.objectContaining({providerReference:'TERMII:termii-pin-reference'}),
+			data:expect.objectContaining({providerReference:'BREVO:brevo-message-reference',codeHash:'hashed-reservation'}),
 		}));
+		expect(JSON.stringify(body)).not.toContain('483921');
+		expect(mocks.hashCode).toHaveBeenCalledWith('user-1','+12125550123:483921');
 	});
 
 	it('does not send or claim a code was sent when SMS is not configured',async()=>{
@@ -95,7 +99,7 @@ describe('Tier 3 SMS verification',()=>{
 
 		expect(response.status).toBe(503);
 		expect(await response.json()).toMatchObject({error:expect.stringContaining('No code was sent')});
-		expect(mocks.sendTermii).not.toHaveBeenCalled();
+		expect(mocks.sendBrevo).not.toHaveBeenCalled();
 	});
 
 	it('enforces user and phone rate limits before sending',async()=>{
@@ -105,6 +109,6 @@ describe('Tier 3 SMS verification',()=>{
 		const response=await POST(request());
 
 		expect(response.status).toBe(429);
-		expect(mocks.sendTermii).not.toHaveBeenCalled();
+		expect(mocks.sendBrevo).not.toHaveBeenCalled();
 	});
 });

@@ -233,7 +233,14 @@ describe('canonical environment configuration',()=>{
   it('reports only configured phone OTP delivery and never treats email as verification',()=>{
     expect(getServerConfiguration({}).verification.configured).toBe(false);
     expect(getServerConfiguration({RESEND_API_KEY:'email-notifications-key'}).verification.configured).toBe(false);
-    expect(getServerConfiguration({TERMII_API_KEY:'termii-key',TERMII_SENDER_ID:'AUREVIA'}).verification.configured).toBe(true);
+    expect(getServerConfiguration({BREVO_API_KEY:'brevo-key',BREVO_SENDER_NAME:'Aurevia'}).verification).toMatchObject({
+      configured:true,
+      brevoSmsConfigured:true,
+    });
+    expect(getServerConfiguration({BREVO_API_KEY:'brevo-key',BREVO_SENDER_NAME:'Aurevia Finance'}).verification).toMatchObject({
+      configured:false,
+      brevoSmsConfigured:false,
+    });
     expect(getServerConfiguration({TWILIO_ACCOUNT_SID:`AC${'1'.repeat(32)}`,TWILIO_AUTH_TOKEN:'test-token',TWILIO_VERIFY_SERVICE_SID:`VA${'2'.repeat(32)}`}).verification).toMatchObject({
       configured:false,
       termiiConfigured:false,

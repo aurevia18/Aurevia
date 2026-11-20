@@ -8,6 +8,7 @@ import {trustedProxyClientIp} from '@/lib/request-ip';
 import {
 	accountContactVerificationConfig,
 	auditContactVerificationFailure,
+	accountContactVerificationCodeMatches,
 } from '@/lib/account-contact-verification';
 import {resolveSmsProviderReference,TermiiProviderError} from '@/lib/verification-delivery';
 import {confirmSettingsPhoneVerification} from '@/lib/settings-phone-verification';
@@ -75,18 +76,24 @@ export async function POST(request:Request){
 			return NextResponse.json({error:'This code is invalid or no longer available.'},{status:409});
 		}
 		let verified:boolean;
-		try{
-			verified=await smsChallenge.provider.verify(smsChallenge.reference,code);
-		}catch(error){
-			await auditContactVerificationFailure(user.id,VerificationChannel.SMS,'provider_check_failed',smsChallenge.provider.id);
-			console.error('[account-contact-verification] Phone provider check failed.',{
-				userId:user.id,
-				provider:smsChallenge.provider.id,
-				failureStage:error instanceof TermiiProviderError?error.failureStage:'unclassified',
-				httpStatus:error instanceof TermiiProviderError?error.httpStatus:null,
-				errorType:error instanceof Error?error.name:'UnknownError',
-			});
-			return NextResponse.json({error:'Phone verification is temporarily unavailable. Try again later.'},{status:503});
+		if(smsChallenge.provider.id==='brevo'){
+			verified=accountContactVerificationCodeMatches(
+				user.id,VerificationChannel.SMS,challenge.contact,code,challenge.codeHash,
+			);
+		}else{
+			try{
+				verified=await smsChallenge.provider.verify!(smsChallenge.reference,code);
+			}catch(error){
+				await auditContactVerificationFailure(user.id,VerificationChannel.SMS,'provider_check_failed',smsChallenge.provider.id);
+				console.error('[account-contact-verification] Phone provider check failed.',{
+					userId:user.id,
+					provider:smsChallenge.provider.id,
+					failureStage:error instanceof TermiiProviderError?error.failureStage:'unclassified',
+					httpStatus:error instanceof TermiiProviderError?error.httpStatus:null,
+					errorType:error instanceof Error?error.name:'UnknownError',
+				});
+				return NextResponse.json({error:'Phone verification is temporarily unavailable. Try again later.'},{status:503});
+			}
 		}
 		if(!verified){
 			const current=await db.accountContactVerification.findUnique({

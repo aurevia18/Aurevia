@@ -3,9 +3,9 @@ import {
 	formatSmsProviderReference,
 	generateVerificationCode,
 	hashVerificationCode,
-	hasConfiguredTermii,
+	getConfiguredSmsVerificationProvider,
+	hasConfiguredBrevoSms,
 	resolveSmsProviderReference,
-	sendTermiiVerificationToken,
 	verificationCodeMatches,
 	verifyTermiiVerificationToken,
 } from '../lib/verification-delivery';
@@ -14,10 +14,13 @@ describe('phone verification delivery',()=>{
 	const previousSecret=process.env.VERIFICATION_CODE_SECRET;
 	const deliveryKeys=['TERMII_API_KEY','TERMII_SENDER_ID','TERMII_BASE_URL'];
 	const previousDeliveryValues=Object.fromEntries(deliveryKeys.map(key=>[key,process.env[key]]));
+	const previousBrevoValues=['BREVO_API_KEY','BREVO_SENDER_NAME'].map(key=>process.env[key]);
 
 	beforeEach(()=>{
 		delete process.env.VERIFICATION_CODE_SECRET;
 		for(const key of deliveryKeys)delete process.env[key];
+		delete process.env.BREVO_API_KEY;
+		delete process.env.BREVO_SENDER_NAME;
 	});
 
 	afterEach(()=>{
@@ -26,6 +29,11 @@ describe('phone verification delivery',()=>{
 		else process.env.VERIFICATION_CODE_SECRET=previousSecret;
 		for(const key of deliveryKeys){
 			const value=previousDeliveryValues[key];
+			if(value===undefined)delete process.env[key];
+			else process.env[key]=value;
+		}
+		for(const [index,key] of ['BREVO_API_KEY','BREVO_SENDER_NAME'].entries()){
+			const value=previousBrevoValues[index];
 			if(value===undefined)delete process.env[key];
 			else process.env[key]=value;
 		}
@@ -44,27 +52,27 @@ describe('phone verification delivery',()=>{
 		expect(verificationCodeMatches(userId,'000000',hash)).toBe(code==='000000');
 	});
 
-	it('uses Termii send-token and verify-token APIs for SMS verification',async()=>{
+	it('uses Brevo as the only configured provider for new phone OTPs',()=>{
+		process.env.BREVO_API_KEY='test-brevo-key';
+		process.env.BREVO_SENDER_NAME='Aurevia';
+
+		expect(hasConfiguredBrevoSms()).toBe(true);
+		expect(getConfiguredSmsVerificationProvider()?.id).toBe('brevo');
+		expect(formatSmsProviderReference(getConfiguredSmsVerificationProvider()!,'message-1')).toBe('BREVO:message-1');
+		expect(getConfiguredSmsVerificationProvider()?.send).toBeTypeOf('function');
+	});
+
+	it('verifies already-issued Termii challenges without enabling new Termii sends',async()=>{
 		process.env.TERMII_API_KEY='test-termii-key';
 		process.env.TERMII_SENDER_ID='AUREVIA';
-		const fetchMock=vi.fn()
-			.mockResolvedValueOnce(new Response(JSON.stringify({pin_id:'termii-pin-1'}),{status:200}))
-			.mockResolvedValueOnce(new Response(JSON.stringify({verified:'True'}),{status:200}));
+		const fetchMock=vi.fn().mockResolvedValue(new Response(JSON.stringify({verified:'True'}),{status:200}));
 		vi.stubGlobal('fetch',fetchMock);
 
-		expect(hasConfiguredTermii()).toBe(true);
-		const reference=await sendTermiiVerificationToken('+12125550123');
-		expect(reference).toBe('termii-pin-1');
-		expect(await verifyTermiiVerificationToken(reference,'123456')).toBe(true);
-		expect(fetchMock.mock.calls.map(([url])=>url)).toEqual([
-			'https://api.ng.termii.com/api/sms/otp/send',
-			'https://api.ng.termii.com/api/sms/otp/verify',
-		]);
+		expect(getConfiguredSmsVerificationProvider()).toBeNull();
+		expect(await verifyTermiiVerificationToken('legacy-pin','123456')).toBe(true);
+		expect(fetchMock.mock.calls.map(([url])=>url)).toEqual(['https://api.ng.termii.com/api/sms/otp/verify']);
 		expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
-			api_key:'test-termii-key',to:'+12125550123',from:'AUREVIA',pin_length:6,pin_attempts:5,
-		});
-		expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({
-			api_key:'test-termii-key',pin_id:'termii-pin-1',pin:'123456',
+			api_key:'test-termii-key',pin_id:'legacy-pin',pin:'123456',
 		});
 	});
 
@@ -76,22 +84,21 @@ describe('phone verification delivery',()=>{
 		expect(resolveSmsProviderReference('TWILIO:verification-id')).toBeNull();
 	});
 
-	it('uses an official configured Termii base URL and rejects invalid domains',async()=>{
+	it('uses the official Termii endpoint only for a legacy challenge verification',async()=>{
 		process.env.TERMII_API_KEY='test-termii-key';
 		process.env.TERMII_SENDER_ID='AUREVIA';
 		process.env.TERMII_BASE_URL='https://api.eu.termii.com';
-		const fetchMock=vi.fn().mockResolvedValue(new Response(JSON.stringify({pin_id:'termii-pin-2'}),{status:200}));
+		const fetchMock=vi.fn().mockResolvedValue(new Response(JSON.stringify({verified:true}),{status:200}));
 		vi.stubGlobal('fetch',fetchMock);
 
-		await sendTermiiVerificationToken('+12125550123');
-		expect(fetchMock.mock.calls[0][0]).toBe('https://api.eu.termii.com/api/sms/otp/send');
+		await verifyTermiiVerificationToken('legacy-pin','123456');
+		expect(fetchMock.mock.calls[0][0]).toBe('https://api.eu.termii.com/api/sms/otp/verify');
 
 		process.env.TERMII_BASE_URL='https://example.invalid';
-		expect(hasConfiguredTermii()).toBe(false);
-		await expect(sendTermiiVerificationToken('+12125550123')).rejects.toThrow('PHONE_VERIFICATION_DELIVERY_UNAVAILABLE');
+		await expect(verifyTermiiVerificationToken('legacy-pin','123456')).rejects.toThrow('PHONE_VERIFICATION_DELIVERY_UNAVAILABLE');
 	});
 
-	it('does not expose provider response bodies in delivery errors',async()=>{
+	it('does not expose provider response bodies when checking a legacy challenge',async()=>{
 		process.env.TERMII_API_KEY='test-termii-key';
 		process.env.TERMII_SENDER_ID='AUREVIA';
 		vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(
@@ -99,9 +106,7 @@ describe('phone verification delivery',()=>{
 			{status:401},
 		)));
 
-		await expect(sendTermiiVerificationToken('+12125550123')).rejects.toMatchObject({
-			failureStage:'provider_response',
-			httpStatus:401,
-		});
+		await expect(verifyTermiiVerificationToken('legacy-pin','123456'))
+			.rejects.toMatchObject({failureStage:'provider_response',httpStatus:401});
 	});
 });

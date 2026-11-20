@@ -6,7 +6,7 @@ import {requireUser} from '@/lib/auth';
 import {db} from '@/lib/db';
 import {rateLimit} from '@/lib/rate-limit';
 import {verificationConfig} from '@/lib/config';
-import {formatSmsProviderReference,getConfiguredSmsVerificationProvider,hashVerificationCode,TermiiProviderError} from '@/lib/verification-delivery';
+import {formatSmsProviderReference,generateVerificationCode,getConfiguredSmsVerificationProvider,hashVerificationCode,BrevoSmsDeliveryError} from '@/lib/verification-delivery';
 import {isValidE164} from '@/lib/registration-validation';
 import {trustedProxyClientIp} from '@/lib/request-ip';
 import {isTierThreePhoneVerificationEligible,getTierProfileRequirements} from '@/lib/production-policy';
@@ -14,7 +14,7 @@ import {synchronizeCompletedProfileTier} from '@/lib/tier-progression';
 
 const schema=z.object({
 	phone:z.string().trim().max(16).refine(isValidE164,'Enter a valid phone number with its country code.'),
-	delivery:z.enum(['automatic','sms','termii']).optional(),
+	delivery:z.enum(['automatic','sms','brevo','termii']).optional(),
 });
 
 export async function POST(request:Request){
@@ -44,11 +44,7 @@ export async function POST(request:Request){
 
 		const smsProvider=getConfiguredSmsVerificationProvider();
 		if(!smsProvider){
-			if(input.delivery==='termii'){
-				console.warn('[kyc-phone] Termii SMS delivery is not configured.');
-				return NextResponse.json({error:'The SMS provider is not configured. No code was sent. Contact support or try again later.'},{status:503});
-			}
-			console.warn('[kyc-phone] No SMS provider is configured.');
+			console.warn('[kyc-phone] Brevo transactional SMS is not configured.');
 			return NextResponse.json({error:'Phone verification is not configured for this service. No code was sent. Contact support instead of retrying.'},{status:503});
 		}
 
@@ -57,6 +53,7 @@ export async function POST(request:Request){
 		if(existing&&existing.resendAfter>now)return NextResponse.json({error:'Please wait before requesting another code.'},{status:429});
 		const challengeId=existing?.id||randomUUID();
 		const reservation=hashVerificationCode(user.id,`${input.phone}:${randomUUID()}`);
+		const code=generateVerificationCode();
 		const expiresAt=new Date(now.getTime()+verificationConfig.expiresInMinutes*60_000);
 		const resendAfter=new Date(now.getTime()+verificationConfig.resendCooldownSeconds*1000);
 		try{
@@ -86,7 +83,7 @@ export async function POST(request:Request){
 
 		let providerReference:string;
 		try{
-			const providerAttempt=await smsProvider.send(input.phone);
+			const providerAttempt=await smsProvider.send(input.phone,code);
 			providerReference=formatSmsProviderReference(smsProvider,providerAttempt);
 		}catch(error){
 			await db.verificationCode.deleteMany({where:{id:challengeId,codeHash:reservation}});
@@ -94,16 +91,15 @@ export async function POST(request:Request){
 				requestId,
 				referenceId:requestId,
 				provider:smsProvider.id,
-				endpoint:'/api/sms/otp/send',
-				failureStage:error instanceof TermiiProviderError?error.failureStage:'unclassified',
-				providerHttpStatus:error instanceof TermiiProviderError?error.httpStatus:null,
-				underlyingErrorType:error instanceof TermiiProviderError?error.underlyingErrorType:error instanceof Error?error.name:'UnknownError',
+				failureStage:error instanceof BrevoSmsDeliveryError?error.failureStage:'unclassified',
+				providerHttpStatus:error instanceof BrevoSmsDeliveryError?error.httpStatus:null,
+				underlyingErrorType:error instanceof BrevoSmsDeliveryError?error.underlyingErrorType:error instanceof Error?error.name:'UnknownError',
 			});
 			return NextResponse.json({error:'We could not send a verification code. Check the phone number and try again.',requestId,referenceId:requestId},{status:502});
 		}
 		const saved=await db.verificationCode.updateMany({
 			where:{id:challengeId,codeHash:reservation},
-			data:{providerReference,codeHash:hashVerificationCode(user.id,`${input.phone}:${providerReference}`)},
+			data:{providerReference,codeHash:hashVerificationCode(user.id,`${input.phone}:${code}`)},
 		});
 		if(saved.count!==1)return NextResponse.json({error:'The phone number changed while sending the code. Request a new code.'},{status:409});
 		return NextResponse.json({message:'A verification code was sent to your phone.',resendAfterSeconds:verificationConfig.resendCooldownSeconds},{status:200});

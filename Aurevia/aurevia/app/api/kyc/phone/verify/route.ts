@@ -6,7 +6,7 @@ import {db} from '@/lib/db';
 import {createNotification} from '@/lib/notifications';
 import {rateLimit} from '@/lib/rate-limit';
 import {verificationConfig} from '@/lib/config';
-import {resolveSmsProviderReference,verificationCodeMatches,TermiiProviderError} from '@/lib/verification-delivery';
+import {resolveSmsProviderReference,verificationCodeMatches,verifyBrevoVerificationCode,TermiiProviderError} from '@/lib/verification-delivery';
 import {trustedProxyClientIp} from '@/lib/request-ip';
 import {isTierThreePhoneVerificationEligible,getTierProfileRequirements} from '@/lib/production-policy';
 
@@ -45,20 +45,23 @@ export async function POST(request:Request){
 			return NextResponse.json({error:'This code has expired. Request a new code.'},{status:410});
 		}
 		if(challenge.attempts>=verificationConfig.maxAttempts)return NextResponse.json({error:'Too many attempts. Request a new code.'},{status:429});
-		if(!verificationCodeMatches(user.id,`${account.phone}:${challenge.providerReference}`,challenge.codeHash))return NextResponse.json({error:'The phone number changed. Request a new code.'},{status:409});
-
 		let verified:boolean;
-		try{
-			verified=await smsChallenge.provider.verify(smsChallenge.reference,code);
-		}catch(error){
-			console.error('[kyc-phone] SMS provider verification failed.',{
-				userId:user.id,
-				provider:smsChallenge.provider.id,
-				failureStage:error instanceof TermiiProviderError?error.failureStage:'unclassified',
-				providerHttpStatus:error instanceof TermiiProviderError?error.httpStatus:null,
-				errorType:error instanceof Error?error.name:'UnknownError',
-			});
-			return NextResponse.json({error:'Phone verification is temporarily unavailable. Please try again.'},{status:503});
+		if(smsChallenge.provider.id==='brevo'){
+			verified=verifyBrevoVerificationCode(user.id,account.phone,code,challenge.codeHash);
+		}else{
+			if(!verificationCodeMatches(user.id,`${account.phone}:${challenge.providerReference}`,challenge.codeHash))return NextResponse.json({error:'The phone number changed. Request a new code.'},{status:409});
+			try{
+				verified=await smsChallenge.provider.verify!(smsChallenge.reference,code);
+			}catch(error){
+				console.error('[kyc-phone] SMS provider verification failed.',{
+					userId:user.id,
+					provider:smsChallenge.provider.id,
+					failureStage:error instanceof TermiiProviderError?error.failureStage:'unclassified',
+					providerHttpStatus:error instanceof TermiiProviderError?error.httpStatus:null,
+					errorType:error instanceof Error?error.name:'UnknownError',
+				});
+				return NextResponse.json({error:'Phone verification is temporarily unavailable. Please try again.'},{status:503});
+			}
 		}
 		if(!verified){
 			await db.verificationCode.updateMany({where:{id:challenge.id,attempts:{lt:verificationConfig.maxAttempts},expiresAt:{gt:now}},data:{attempts:{increment:1}}});

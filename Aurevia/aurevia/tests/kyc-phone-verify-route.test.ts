@@ -8,6 +8,7 @@ const mocks=vi.hoisted(()=>({
 	userUpdateMany:vi.fn(),
 	transaction:vi.fn(),
 	codeMatches:vi.fn(),
+	verifyBrevoCode:vi.fn(),
 	verifyTermii:vi.fn(),
 	createNotification:vi.fn(),
 	rateLimit:vi.fn(),
@@ -25,8 +26,11 @@ vi.mock('@/lib/rate-limit',()=>({rateLimit:mocks.rateLimit}));
 vi.mock('@/lib/config',()=>({verificationConfig:{maxAttempts:6}}));
 vi.mock('@/lib/verification-delivery',()=>({
 	verificationCodeMatches:mocks.codeMatches,
+	verifyBrevoVerificationCode:mocks.verifyBrevoCode,
 	resolveSmsProviderReference:(reference:string)=>reference.startsWith('TERMII:')
 		?{provider:{id:'termii',verify:mocks.verifyTermii},reference:reference.slice('TERMII:'.length)}
+		:reference.startsWith('BREVO:')
+			?{provider:{id:'brevo'},reference:reference.slice('BREVO:'.length)}
 		:null,
 	TermiiProviderError:mocks.TermiiProviderError,
 }));
@@ -52,9 +56,24 @@ describe('Tier 3 phone verification provider references',()=>{
 			user:{updateMany:mocks.userUpdateMany},
 		}));
 		mocks.codeMatches.mockReturnValue(true);
+		mocks.verifyBrevoCode.mockReturnValue(true);
 		mocks.verifyTermii.mockResolvedValue(true);
 		mocks.createNotification.mockResolvedValue({});
 		mocks.rateLimit.mockImplementation(()=>undefined);
+	});
+
+	it('validates Brevo-delivered OTP locally without asking the SMS provider to verify it',async()=>{
+		mocks.codeFindUnique.mockResolvedValue({
+			id:'challenge-2',channel:'SMS',providerReference:'BREVO:message-1',codeHash:'otp-hash',
+			expiresAt:new Date(Date.now()+60_000),attempts:0,
+		});
+		const request=new Request('https://aurevia.test/api/kyc/phone/verify',{
+			method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code:'483921'}),
+		});
+		const response=await POST(request);
+		expect(response.status).toBe(200);
+		expect(mocks.verifyBrevoCode).toHaveBeenCalledWith('user-1','+2348031234567','483921','otp-hash');
+		expect(mocks.verifyTermii).not.toHaveBeenCalled();
 	});
 
 	it('uses the provider recorded on the challenge and enforces the request limits',async()=>{

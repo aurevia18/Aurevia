@@ -44,6 +44,7 @@ export type ServerConfiguration = {
   };
   verification: {
     codeSecret: string;
+    brevoSmsConfigured: boolean;
     termiiApiKey: string;
     termiiSenderId: string;
     termiiBaseUrl: string;
@@ -218,6 +219,7 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
   const brevoApiKey=env('BREVO_API_KEY',source);
   const brevoSenderEmail=env('BREVO_SENDER_EMAIL',source);
   const brevoSenderName=env('BREVO_SENDER_NAME',source);
+  const brevoSmsConfigured=Boolean(brevoApiKey&&/^[A-Za-z0-9]{1,11}$/.test(brevoSenderName));
   const termiiBaseUrlValue=env('TERMII_BASE_URL',source);
   const termiiBaseUrl=normalizeTermiiBaseUrl(termiiBaseUrlValue||'https://api.ng.termii.com');
   const termiiBaseUrlValid=Boolean(termiiBaseUrl);
@@ -343,12 +345,13 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
     },
     verification: {
       codeSecret: env('VERIFICATION_CODE_SECRET', source) || env('NEXTAUTH_SECRET', source),
+      brevoSmsConfigured,
       termiiApiKey: env('TERMII_API_KEY', source),
       termiiSenderId: env('TERMII_SENDER_ID', source),
       termiiBaseUrl:termiiBaseUrl||'',
       termiiBaseUrlValid,
       appUrl: cleanUrl(env('NEXT_PUBLIC_APP_URL', source) || env('NEXTAUTH_URL', source) || env('RENDER_EXTERNAL_URL', source) || 'https://aurevia-et63.onrender.com'),
-      configured:termiiConfigured,
+      configured:brevoSmsConfigured,
       termiiConfigured,
     },
     execution: {

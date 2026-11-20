@@ -6,13 +6,14 @@ import {getFinnhubQuote} from '@/lib/providers/finnhub-market-data';
 import {getAlpacaPaperAccountHealth} from '@/lib/providers/alpaca-crypto-provider';
 
 export type IntegrationStatus='CONNECTED'|'MISSING_CREDENTIALS'|'CONFIGURATION_REQUIRED'|'CONNECTION_FAILED'|'PROVIDER_UNAVAILABLE'|'PENDING_ADMIN_APPROVAL'|'NOT_CONFIGURED'|'DISABLED';
-export type IntegrationId='openai'|'openrouter'|'gemini'|'groq'|'alpaca'|'finnhub'|'currency'|'supabase_auth'|'supabase_storage'|'brevo'|'termii'|'browser_push'|'gnews'|'payment'|'database'|'akedly'|'aurevia_kyc'|'didit';
+export type IntegrationId='openai'|'openrouter'|'gemini'|'groq'|'alpaca'|'finnhub'|'currency'|'supabase_auth'|'supabase_storage'|'brevo'|'brevo_sms'|'termii'|'browser_push'|'gnews'|'payment'|'database'|'akedly'|'aurevia_kyc'|'didit';
 export type IntegrationCheck={id:IntegrationId;name:string;status:IntegrationStatus;detail:string;feature:string;documentation:string;checkedAt:string;canTest:boolean};
 
 const docs:Record<IntegrationId,string>={
 	openai:'https://platform.openai.com/docs/overview',openrouter:'https://openrouter.ai/docs/quickstart',gemini:'https://ai.google.dev/gemini-api/docs',groq:'https://console.groq.com/docs/quickstart',
 	alpaca:'https://docs.alpaca.markets/docs/getting-started',finnhub:'https://finnhub.io/docs/api',currency:'https://finnhub.io/docs/api/forex-rates',
 	supabase_auth:'https://supabase.com/docs/guides/auth',supabase_storage:'https://supabase.com/docs/guides/storage',brevo:'https://developers.brevo.com/docs/send-a-transactional-email',
+	brevo_sms:'https://developers.brevo.com/docs/send-a-transactional-sms',
 	termii:'https://developers.termii.com/',browser_push:'https://developer.mozilla.org/en-US/docs/Web/API/Push_API',
 	gnews:'https://docs.gnews.io/',payment:'https://render.com/docs/configure-environment-variables',database:'https://supabase.com/docs/guides/database/connecting-to-postgres',
 	akedly:'https://docs.akedly.io/authentication/v2',
@@ -146,12 +147,14 @@ export async function checkIntegration(id:IntegrationId,aiEngineStatus?:Promise<
 	if(id==='supabase_auth')return checkSupabaseAuth();
 	if(id==='supabase_storage')return checkSupabaseStorage();
 	if(id==='brevo')return checkBrevo();
+	if(id==='brevo_sms'){
+		const configured=getServerConfiguration().verification.brevoSmsConfigured;
+		return checkConfiguredOnly(id,'Brevo transactional SMS',configured,'Phone number verification by SMS OTP','BREVO_API_KEY and an SMS-enabled BREVO_SENDER_NAME (1-11 alphanumeric characters) are required.');
+	}
 	if(id==='gnews')return checkGnews();
 	if(id==='database')return checkDatabase();
 	if(id==='termii'){
-		const config=getServerConfiguration().verification;
-		if(!config.termiiBaseUrlValid)return item(id,'Termii SMS','CONFIGURATION_REQUIRED','TERMII_BASE_URL must be an HTTPS URL on an official Termii domain, without a path.','Phone verification',false);
-		return checkConfiguredOnly(id,'Termii SMS',Boolean(config.termiiApiKey&&config.termiiSenderId),'Phone verification','TERMII_API_KEY and TERMII_SENDER_ID are required.');
+		return item(id,'Termii SMS','DISABLED','Termii is retained only for verification of already-issued challenges until expiry. New phone OTPs use Brevo.','Legacy phone verification challenges',false);
 	}
 	if(id==='akedly'){
 		return item('akedly','Akedly (legacy)','DISABLED','Akedly is retained only for historical records. New KYC and phone-verification flows do not call it.','Historical verification records',false);
@@ -169,13 +172,13 @@ export async function checkIntegration(id:IntegrationId,aiEngineStatus?:Promise<
 }
 
 export async function getIntegrationInventory(aiStatus?:Promise<AiEngineStatus>):Promise<IntegrationCheck[]>{
-	const ids:IntegrationId[]=['openai','openrouter','gemini','groq','alpaca','finnhub','currency','supabase_auth','supabase_storage','brevo','termii','browser_push','gnews','payment','database','akedly','aurevia_kyc','didit'];
+	const ids:IntegrationId[]=['openai','openrouter','gemini','groq','alpaca','finnhub','currency','supabase_auth','supabase_storage','brevo','brevo_sms','termii','browser_push','gnews','payment','database','akedly','aurevia_kyc','didit'];
 	const aiEngineStatus=aiStatus||getAiEngineStatus();
 	return Promise.all(ids.map(id=>checkIntegration(id,aiEngineStatus)));
 }
 
 export function isIntegrationId(value:unknown):value is IntegrationId{
-	return typeof value==='string'&&['openai','openrouter','gemini','groq','alpaca','finnhub','currency','supabase_auth','supabase_storage','brevo','termii','browser_push','gnews','payment','database','akedly','aurevia_kyc','didit'].includes(value);
+	return typeof value==='string'&&['openai','openrouter','gemini','groq','alpaca','finnhub','currency','supabase_auth','supabase_storage','brevo','brevo_sms','termii','browser_push','gnews','payment','database','akedly','aurevia_kyc','didit'].includes(value);
 }
 
 export function mapAiStatusForDisplay(value:string){return aiStatus(value)}

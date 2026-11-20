@@ -12,7 +12,7 @@ type ContactStatus={
 	phoneVerified:boolean;
 	phonePending:boolean;
 	pendingPhone:string|null;
-	phoneProvider:'TERMII'|null;
+	phoneProvider:'BREVO'|'TERMII'|null;
 	phoneResendAfter:string|null;
 	phoneDeliveryAvailable:boolean;
 	emailDeliveryAvailable:boolean;
@@ -199,7 +199,7 @@ export default function AccountContactVerification({country}:{country:string|nul
 						{phoneBusy?'Working…':phonePending?'Resend phone code':'Verify Phone Number'}
 					</button>
 					{phoneCooldown>0&&<p className="text-xs muted">You can request another code in {phoneCooldown}s.</p>}
-					{phonePending&&status?.phoneProvider==='TERMII'&&<form className="grid max-w-sm gap-2" onSubmit={event=>void verifyPhoneCode(event)}>
+					{phonePending&&status?.phoneProvider&&<form className="grid max-w-sm gap-2" onSubmit={event=>void verifyPhoneCode(event)}>
 						<label className="account-label" htmlFor="settings-phone-verification-code">Enter the six-digit code</label>
 						<input id="settings-phone-verification-code" className="input" type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required value={phoneCode} onChange={event=>setPhoneCode(event.target.value.replace(/\D/g,'').slice(0,6))}/>
 						<button type="submit" className="btn w-fit bg-gold text-black" disabled={phoneBusy||phoneCode.length!==6}>{phoneBusy?'Checking…':'Confirm Phone Number'}</button>

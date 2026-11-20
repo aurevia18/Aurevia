@@ -32,18 +32,16 @@ const mocks=vi.hoisted(()=>({
 	getSmsProvider:vi.fn(),
 	formatSmsProviderReference:vi.fn(),
 	resolveSmsProviderReference:vi.fn(),
-	sendTermii:vi.fn(),
+	sendBrevo:vi.fn(),
 	verifyTermii:vi.fn(),
+	BrevoSmsDeliveryError:class BrevoSmsDeliveryError extends Error{},
 	rateLimit:vi.fn(),
 }));
 
 vi.mock('@/lib/auth',()=>({requireUser:mocks.requireUser}));
 vi.mock('@/lib/config/env',()=>({
 	getServerConfiguration:()=>({
-		verification:{
-			codeSecret:'test-code-secret',
-			termiiConfigured:true,
-		},
+		verification:{codeSecret:'test-code-secret',brevoSmsConfigured:true},
 		email:{configured:true},
 	}),
 }));
@@ -66,9 +64,11 @@ vi.mock('@/lib/email',()=>({
 }));
 vi.mock('@/lib/verification-delivery',()=>({
 	getConfiguredSmsVerificationProvider:mocks.getSmsProvider,
+	generateVerificationCode:()=> '483921',
 	formatSmsProviderReference:mocks.formatSmsProviderReference,
 	resolveSmsProviderReference:mocks.resolveSmsProviderReference,
 	TermiiProviderError:class TermiiProviderError extends Error{},
+	BrevoSmsDeliveryError:mocks.BrevoSmsDeliveryError,
 }));
 vi.mock('@/lib/request-ip',()=>({trustedProxyClientIp:()=> '127.0.0.1'}));
 vi.mock('@/lib/rate-limit',()=>({rateLimit:mocks.rateLimit}));
@@ -178,13 +178,13 @@ describe('independent Settings contact verification',()=>{
 			state.emailText=message.text;
 			return {sent:true,provider:'brevo'};
 		});
-		const provider={id:'termii',send:mocks.sendTermii,verify:mocks.verifyTermii};
+		const provider={id:'brevo',send:mocks.sendBrevo};
 		mocks.getSmsProvider.mockReturnValue(provider);
-		mocks.formatSmsProviderReference.mockImplementation((_provider:{id:string},reference:string)=>`TERMII:${reference}`);
-		mocks.resolveSmsProviderReference.mockImplementation((reference:string)=>reference.startsWith('TERMII:')
-			?{provider,reference:reference.slice('TERMII:'.length)}
+		mocks.formatSmsProviderReference.mockImplementation((_provider:{id:string},reference:string)=>`BREVO:${reference}`);
+		mocks.resolveSmsProviderReference.mockImplementation((reference:string)=>reference.startsWith('BREVO:')
+			?{provider,reference:reference.slice('BREVO:'.length)}
 			:null);
-		mocks.sendTermii.mockResolvedValue('test-pin-id');
+		mocks.sendBrevo.mockResolvedValue('brevo-message-id');
 		mocks.verifyTermii.mockResolvedValue(true);
 		mocks.rateLimit.mockImplementation(()=>undefined);
 	});
@@ -229,16 +229,20 @@ describe('independent Settings contact verification',()=>{
 	it('normalizes phone numbers and rejects invalid numbers before requesting SMS',async()=>{
 		const invalid=await sendPhoneCode(request({phone:'123',countryCode:'US'}));
 		expect(invalid.status).toBe(400);
-		expect(mocks.sendTermii).not.toHaveBeenCalled();
+		expect(mocks.sendBrevo).not.toHaveBeenCalled();
 
 		const valid=await sendPhoneCode(request({phone:'(202) 555-0123',countryCode:'US'}));
+		const otp=mocks.sendBrevo.mock.calls[0][1] as string;
 		expect(valid.status).toBe(200);
-		expect(mocks.sendTermii).toHaveBeenCalledWith('+12025550123');
-		expect(state.challenge).toMatchObject({channel:'SMS',contact:'+12025550123',providerReference:'TERMII:test-pin-id'});
+		expect(otp).toMatch(/^\d{6}$/);
+		expect(mocks.sendBrevo).toHaveBeenCalledWith('+12025550123',otp);
+		expect(state.challenge).toMatchObject({channel:'SMS',contact:'+12025550123',providerReference:'BREVO:brevo-message-id'});
+		expect(state.challenge?.codeHash).not.toBe(otp);
+		expect(JSON.stringify(await valid.json())).not.toContain(otp);
 	});
 
 	it('does not persist a phone challenge when SMS delivery fails',async()=>{
-		mocks.sendTermii.mockRejectedValueOnce(new Error('provider unavailable'));
+		mocks.sendBrevo.mockRejectedValueOnce(new mocks.BrevoSmsDeliveryError());
 
 		const response=await sendPhoneCode(request({phone:'2025550123',countryCode:'US'}));
 
@@ -247,34 +251,32 @@ describe('independent Settings contact verification',()=>{
 		expect(state.user.phone).toBeNull();
 	});
 
-	it('stores the Termii PIN reference with its provider type and verifies against that attempt',async()=>{
+	it('stores a Brevo SMS reference and verifies its hashed OTP locally',async()=>{
 		expect((await sendPhoneCode(request({phone:'2025550123',countryCode:'US'}))).status).toBe(200);
-		expect(state.challenge?.providerReference).toBe('TERMII:test-pin-id');
-		expect((await verifyPhoneCode(request({code:'123456'}))).status).toBe(200);
-		expect(mocks.verifyTermii).toHaveBeenCalledWith('test-pin-id','123456');
+		const otp=mocks.sendBrevo.mock.calls[0][1] as string;
+		expect(state.challenge?.providerReference).toBe('BREVO:brevo-message-id');
+		expect((await verifyPhoneCode(request({code:otp}))).status).toBe(200);
+		expect(mocks.verifyTermii).not.toHaveBeenCalled();
 	});
 
 	it('accepts a confirmed phone code, rejects incorrect codes, and prevents replay',async()=>{
 		await sendPhoneCode(request({phone:'2025550123',countryCode:'US'}));
-		mocks.verifyTermii.mockResolvedValueOnce(false);
 		expect((await verifyPhoneCode(request({code:'111111'}))).status).toBe(400);
 		expect(state.user.phone).toBeNull();
 
-		mocks.verifyTermii.mockResolvedValueOnce(true);
-		expect((await verifyPhoneCode(request({code:'222222'}))).status).toBe(200);
+		const otp=mocks.sendBrevo.mock.calls[0][1] as string;
+		expect((await verifyPhoneCode(request({code:otp}))).status).toBe(200);
 		expect(state.user.phone).toBe('+12025550123');
 		expect(state.challenge?.verifiedAt).toBeInstanceOf(Date);
-		expect(mocks.verifyTermii).toHaveBeenLastCalledWith('test-pin-id','222222');
 		const status=await (await getContactStatus()).json();
 		expect(status).toMatchObject({emailVerified:false,phoneVerified:true});
-		expect((await verifyPhoneCode(request({code:'222222'}))).status).toBe(409);
+		expect((await verifyPhoneCode(request({code:otp}))).status).toBe(409);
 	});
 
 	it('rejects expired phone codes and applies verification rate limits',async()=>{
 		await sendPhoneCode(request({phone:'2025550123',countryCode:'US'}));
 		state.challenge!.expiresAt=new Date(Date.now()-1);
 		expect((await verifyPhoneCode(request({code:'123456'}))).status).toBe(410);
-		expect(mocks.verifyTermii).not.toHaveBeenCalled();
 
 		mocks.rateLimit.mockImplementationOnce(()=>{throw new Error('RATE_LIMITED');});
 		expect((await sendEmailCode(request())).status).toBe(429);
@@ -284,7 +286,7 @@ describe('independent Settings contact verification',()=>{
 		mocks.rateLimit.mockImplementationOnce(()=>{throw new Error('RATE_LIMITED');});
 
 		expect((await sendPhoneCode(request({phone:'2025550123',countryCode:'US'}))).status).toBe(429);
-		expect(mocks.sendTermii).not.toHaveBeenCalled();
+		expect(mocks.sendBrevo).not.toHaveBeenCalled();
 	});
 
 	it('enforces the persisted per-challenge phone attempt limit',async()=>{

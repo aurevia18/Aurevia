@@ -1,20 +1,22 @@
 import {randomInt,createHmac,timingSafeEqual} from 'node:crypto';
 import {verificationConfig} from './config';
 import {getServerConfiguration} from './config/env';
+import {sendBrevoTransactionalSms} from '@/lib/brevo-sms';
+export {BrevoSmsDeliveryError} from '@/lib/brevo-sms';
 
-export type SmsVerificationProviderId='termii';
+export type SmsVerificationProviderId='brevo'|'termii';
 export type SmsVerificationProvider={
 	id:SmsVerificationProviderId;
-	send(phone:string):Promise<string>;
-	verify(reference:string,code:string):Promise<boolean>;
+	send(phone:string,code:string):Promise<string>;
+	verify?(reference:string,code:string):Promise<boolean>;
 };
 
-export function hasConfiguredTermii(){
-	return getServerConfiguration().verification.termiiConfigured;
+export function hasConfiguredBrevoSms(){
+	return getServerConfiguration().verification.brevoSmsConfigured;
 }
 
 export function getConfiguredSmsVerificationProvider():SmsVerificationProvider|null{
-	return hasConfiguredTermii()?termiiProvider:null;
+	return hasConfiguredBrevoSms()?brevoProvider:null;
 }
 
 export function formatSmsProviderReference(provider:SmsVerificationProvider,reference:string){
@@ -22,12 +24,20 @@ export function formatSmsProviderReference(provider:SmsVerificationProvider,refe
 }
 
 export function resolveSmsProviderReference(value:string):{provider:SmsVerificationProvider;reference:string}|null{
+	if(value.startsWith('BREVO:')){
+		const reference=value.slice('BREVO:'.length);
+		return reference?{provider:brevoProvider,reference}:null;
+	}
 	if(value.startsWith('TERMII:')){
 		const reference=value.slice('TERMII:'.length);
 		return reference?{provider:termiiProvider,reference}:null;
 	}
 	if(!value||value.includes(':')||value==='TWILIO')return null;
 	return {provider:termiiProvider,reference:value};
+}
+
+export function verifyBrevoVerificationCode(userId:string,phone:string,code:string,hash:string){
+	return verificationCodeMatches(userId,`${phone}:${code}`,hash);
 }
 
 export function generateVerificationCode(){
@@ -58,39 +68,6 @@ export class TermiiProviderError extends Error{
 	}
 }
 
-export async function sendTermiiVerificationToken(phone:string){
-	const config=getServerConfiguration().verification;
-	if(!config.termiiConfigured)throw new Error('PHONE_VERIFICATION_DELIVERY_UNAVAILABLE');
-	let response:Response;
-	try{
-		response=await fetch(`${config.termiiBaseUrl}/api/sms/otp/send`,{
-			method:'POST',
-			headers:{'content-type':'application/json'},
-			body:JSON.stringify({
-				api_key:config.termiiApiKey,
-				message_type:'NUMERIC',
-				to:phone,
-				from:config.termiiSenderId,
-				channel:'generic',
-				pin_attempts:verificationConfig.maxAttempts,
-				pin_time_to_live:verificationConfig.expiresInMinutes,
-				pin_length:6,
-				pin_type:'NUMERIC',
-				pin_placeholder:'< 123456 >',
-				message:'Your Aurevia Exchange phone verification code is < 123456 >.',
-			}),
-			signal:AbortSignal.timeout(8000),
-			redirect:'error',
-		});
-	}catch(error){
-		throw new TermiiProviderError('PHONE_VERIFICATION_PROVIDER_UNAVAILABLE','transport',null,error instanceof Error?error.name:'UnknownError');
-	}
-	const result=await response.json().catch(()=>null) as {pin_id?:unknown}|null;
-	if(!response.ok)throw new TermiiProviderError('PHONE_VERIFICATION_PROVIDER_FAILED','provider_response',response.status);
-	if(typeof result?.pin_id!=='string'||!result.pin_id)throw new TermiiProviderError('PHONE_VERIFICATION_PROVIDER_FAILED','invalid_response',response.status);
-	return result.pin_id;
-}
-
 export async function verifyTermiiVerificationToken(pinId:string,code:string){
 	const config=getServerConfiguration().verification;
 	if(!config.termiiConfigured)throw new Error('PHONE_VERIFICATION_DELIVERY_UNAVAILABLE');
@@ -116,6 +93,11 @@ export async function verifyTermiiVerificationToken(pinId:string,code:string){
 
 const termiiProvider:SmsVerificationProvider={
 	id:'termii',
-	send:sendTermiiVerificationToken,
+	send:async()=>{throw new Error('LEGACY_SMS_PROVIDER_SEND_DISABLED')},
 	verify:(_reference,code)=>verifyTermiiVerificationToken(_reference,code),
+};
+
+const brevoProvider:SmsVerificationProvider={
+	id:'brevo',
+	send:(phone,code)=>sendBrevoTransactionalSms(phone,`Your Aurevia Exchange phone verification code is ${code}. It expires in ${verificationConfig.expiresInMinutes} minutes.`),
 };

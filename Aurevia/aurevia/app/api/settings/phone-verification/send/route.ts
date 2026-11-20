@@ -5,7 +5,7 @@ import {NextResponse} from 'next/server';
 import {z,ZodError} from 'zod';
 import {requireUser} from '@/lib/auth';
 import {db} from '@/lib/db';
-import {formatSmsProviderReference,getConfiguredSmsVerificationProvider,TermiiProviderError} from '@/lib/verification-delivery';
+import {formatSmsProviderReference,generateVerificationCode,getConfiguredSmsVerificationProvider,BrevoSmsDeliveryError} from '@/lib/verification-delivery';
 import {normalizePhoneE164} from '@/lib/registration-validation';
 import {trustedProxyClientIp} from '@/lib/request-ip';
 import {rateLimit} from '@/lib/rate-limit';
@@ -25,10 +25,11 @@ const schema=z.object({
 });
 
 function providerFailureDetails(error:unknown){
-	if(error instanceof TermiiProviderError)return {
-		provider:'termii',
+	if(error instanceof BrevoSmsDeliveryError)return {
+		provider:'brevo',
 		failureStage:error.failureStage,
 		httpStatus:error.httpStatus,
+		providerCode:error.providerCode,
 		errorType:error.underlyingErrorType||error.name,
 	};
 	return {provider:'unknown',failureStage:'unclassified',httpStatus:null,errorType:error instanceof Error?error.name:'UnknownError'};
@@ -67,9 +68,11 @@ export async function POST(request:Request){
 			now,
 		});
 		let providerReference:string;
+		const code=generateVerificationCode();
+		const verificationCodeHash=createAccountContactVerificationHash(user.id,VerificationChannel.SMS,phone,code);
 		const expiresAt=reservation.expiresAt;
 		try{
-			providerReference=formatSmsProviderReference(provider,await provider.send(phone));
+			providerReference=formatSmsProviderReference(provider,await provider.send(phone,code));
 		}catch(error){
 			await restoreAccountContactVerificationReservation(reservation);
 			reservation=null;
@@ -82,6 +85,7 @@ export async function POST(request:Request){
 		await finalizeAccountContactVerificationReservation({
 			id:reservation.id,
 			codeHash:reservation.codeHash,
+			verificationCodeHash,
 			providerReference,
 			expiresAt,
 		});
