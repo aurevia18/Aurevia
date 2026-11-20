@@ -6,7 +6,7 @@ import {requireUser} from '@/lib/auth';
 import {db} from '@/lib/db';
 import {rateLimit} from '@/lib/rate-limit';
 import {verificationConfig} from '@/lib/config';
-import {hashVerificationCode,hasConfiguredTermii,hasConfiguredTwilio,sendTermiiVerificationToken,sendTwilioVerificationCode,TermiiProviderError,TwilioVerifyProviderError} from '@/lib/verification-delivery';
+import {formatSmsProviderReference,getConfiguredSmsVerificationProvider,hashVerificationCode,TermiiProviderError} from '@/lib/verification-delivery';
 import {isValidE164} from '@/lib/registration-validation';
 import {trustedProxyClientIp} from '@/lib/request-ip';
 import {isTierThreePhoneVerificationEligible,getTierProfileRequirements} from '@/lib/production-policy';
@@ -42,13 +42,11 @@ export async function POST(request:Request){
 		if(!phoneVerificationEligible)return NextResponse.json({error:'Complete your name and country in Profile before verifying your phone.'},{status:403});
 		if(current.phone===input.phone&&current.phoneVerified)return NextResponse.json({error:'This phone number is already verified.'},{status:409});
 
-		const smsProvider=input.delivery==='termii'
-			?(hasConfiguredTermii()?'termii':null)
-			:hasConfiguredTwilio()?'twilio':hasConfiguredTermii()?'termii':null;
+		const smsProvider=getConfiguredSmsVerificationProvider();
 		if(!smsProvider){
 			if(input.delivery==='termii'){
-				console.warn('[kyc-phone] Requested SMS fallback is not configured.');
-				return NextResponse.json({error:'The requested SMS provider is not configured. No code was sent. Contact support or try again later.'},{status:503});
+				console.warn('[kyc-phone] Termii SMS delivery is not configured.');
+				return NextResponse.json({error:'The SMS provider is not configured. No code was sent. Contact support or try again later.'},{status:503});
 			}
 			console.warn('[kyc-phone] No SMS provider is configured.');
 			return NextResponse.json({error:'Phone verification is not configured for this service. No code was sent. Contact support instead of retrying.'},{status:503});
@@ -88,19 +86,18 @@ export async function POST(request:Request){
 
 		let providerReference:string;
 		try{
-			providerReference=smsProvider==='twilio'
-				?await sendTwilioVerificationCode(input.phone)
-				:await sendTermiiVerificationToken(input.phone);
+			const providerAttempt=await smsProvider.send(input.phone);
+			providerReference=formatSmsProviderReference(smsProvider,providerAttempt);
 		}catch(error){
 			await db.verificationCode.deleteMany({where:{id:challengeId,codeHash:reservation}});
 			console.error('[kyc-phone] SMS provider send failed.',{
 				requestId,
 				referenceId:requestId,
-				provider:smsProvider,
-				endpoint:smsProvider==='twilio'?'/v2/Services/{ServiceSid}/Verifications':'/api/sms/otp/send',
-				failureStage:error instanceof TermiiProviderError||error instanceof TwilioVerifyProviderError?error.failureStage:'unclassified',
-				providerHttpStatus:error instanceof TermiiProviderError||error instanceof TwilioVerifyProviderError?error.httpStatus:null,
-				underlyingErrorType:error instanceof TermiiProviderError||error instanceof TwilioVerifyProviderError?error.underlyingErrorType:error instanceof Error?error.name:'UnknownError',
+				provider:smsProvider.id,
+				endpoint:'/api/sms/otp/send',
+				failureStage:error instanceof TermiiProviderError?error.failureStage:'unclassified',
+				providerHttpStatus:error instanceof TermiiProviderError?error.httpStatus:null,
+				underlyingErrorType:error instanceof TermiiProviderError?error.underlyingErrorType:error instanceof Error?error.name:'UnknownError',
 			});
 			return NextResponse.json({error:'We could not send a verification code. Check the phone number and try again.',requestId,referenceId:requestId},{status:502});
 		}

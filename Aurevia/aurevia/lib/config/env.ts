@@ -31,30 +31,24 @@ export type ServerConfiguration = {
     configured: boolean;
     missingConfiguration: string[];
   };
-  smtp: {
-    host: string;
-    port: number;
-    user: string;
-    password: string;
-    from: string;
+  email: {
+    brevoApiKey: string;
+    senderEmail: string;
+    senderName: string;
+    configured: boolean;
+  };
+  support: {
     supportEmail: string;
     complaintsEmail: string;
     supportPhone: string;
-    configured: boolean;
   };
   verification: {
     codeSecret: string;
-    resendApiKey: string;
-    emailFrom: string;
     termiiApiKey: string;
     termiiSenderId: string;
     termiiBaseUrl: string;
     termiiBaseUrlValid: boolean;
     termiiConfigured: boolean;
-    twilioAccountSid:string;
-    twilioAuthToken:string;
-    twilioVerifyServiceSid:string;
-    twilioConfigured:boolean;
     appUrl: string;
     configured: boolean;
   };
@@ -104,6 +98,8 @@ export type ServerConfiguration = {
   };
   akedly: {
     enabled: boolean;
+    settingsPhoneEnabled: boolean;
+    settingsPhoneConfigured: boolean;
     apiKey: string;
     pipelineId: string;
     widgetId: string;
@@ -120,6 +116,15 @@ export type ServerConfiguration = {
     maxDocumentSizeMb: number;
     formattingIssues: string[];
     configured: boolean;
+  };
+  didit: {
+    enabled: boolean;
+    environment: 'sandbox' | 'production' | null;
+    apiKey: string;
+    workflowId: string;
+    webhookSecret: string;
+    configured: boolean;
+    formattingIssues: string[];
   };
 };
 
@@ -210,24 +215,13 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
   const appUrl = cleanUrl(env('NEXT_PUBLIC_APP_URL', source) || env('NEXTAUTH_URL', source) || env('RENDER_EXTERNAL_URL', source));
   const supabaseUrl = cleanUrl(env('SUPABASE_URL', source));
   const kycSupabaseUrl = cleanUrl(env('KYC_SUPABASE_URL', source));
-  const smtpHost = env('SMTP_HOST', source);
-  const smtpUser = env('SMTP_USER', source);
-  const smtpPassword = env('SMTP_PASSWORD', source);
-  const smtpFrom = env('SMTP_FROM', source);
-  const smtpPortValue = env('SMTP_PORT', source);
-  const smtpPort = smtpPortValue ? Number(smtpPortValue) : 587;
-  const smtpConfigured = Boolean(smtpHost && smtpUser && smtpPassword && smtpFrom)
-    && Number.isInteger(smtpPort) && smtpPort > 0 && smtpPort <= 65535;
+  const brevoApiKey=env('BREVO_API_KEY',source);
+  const brevoSenderEmail=env('BREVO_SENDER_EMAIL',source);
+  const brevoSenderName=env('BREVO_SENDER_NAME',source);
   const termiiBaseUrlValue=env('TERMII_BASE_URL',source);
   const termiiBaseUrl=normalizeTermiiBaseUrl(termiiBaseUrlValue||'https://api.ng.termii.com');
   const termiiBaseUrlValid=Boolean(termiiBaseUrl);
   const termiiConfigured=Boolean(env('TERMII_API_KEY',source)&&env('TERMII_SENDER_ID',source)&&termiiBaseUrlValid);
-  const twilioAccountSid=env('TWILIO_ACCOUNT_SID',source);
-  const twilioAuthToken=env('TWILIO_AUTH_TOKEN',source);
-  const twilioVerifyServiceSid=env('TWILIO_VERIFY_SERVICE_SID',source);
-  const twilioConfigured=/^AC[0-9a-f]{32}$/i.test(twilioAccountSid)
-    &&Boolean(twilioAuthToken)
-    &&/^VA[0-9a-f]{32}$/i.test(twilioVerifyServiceSid);
   const executionProvider = env('ALPACA_PROVIDER', source) || env('BROKER_PROVIDER', source) || null;
   const alpacaProvider = env('ALPACA_PROVIDER', source) || 'alpaca';
   const brokerProvider = env('BROKER_PROVIDER', source);
@@ -256,6 +250,7 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
   const marketDataConfigured = Boolean(env('MARKET_DATA_API_URL', source) || finnhubApiKey||twelveDataApiKey||alphaVantageApiKey||fmpApiKey);
   const akedly = {
     enabled: akedlyEnabledEnv(source),
+    settingsPhoneEnabled: booleanEnv('AKEDLY_SETTINGS_PHONE_ENABLED', source),
     apiKey: env('AKEDLY_API_KEY', source),
     pipelineId: env('AKEDLY_PIPELINE_ID', source),
     widgetId: env('AKEDLY_WIDGET_ID', source),
@@ -264,6 +259,10 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
     webhookSecret: env('AKEDLY_WEBHOOK_SECRET', source),
     formattingIssues: akedlyEnvironmentFormattingIssues(source),
   };
+  const akedlySettingsPhoneConfigured=Boolean(
+    akedly.apiKey&&akedly.pipelineId&&akedly.widgetId&&akedly.publicKey
+      &&akedly.widgetSecret&&akedly.webhookSecret&&akedly.formattingIssues.length===0,
+  );
   const kycEncryptionKey=env('KYC_ENCRYPTION_KEY',source);
   const kycEncryptionKeyBytes=Buffer.from(kycEncryptionKey,'base64');
   const kycMaxDocumentSizeMb=numberEnv('KYC_MAX_DOCUMENT_SIZE_MB',15,source);
@@ -280,6 +279,22 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
       ...(kycEncryptionKey&&(kycEncryptionKeyBytes.length!==32||kycEncryptionKeyBytes.toString('base64')!==kycEncryptionKey)?['KYC_ENCRYPTION_KEY must be a 32-byte Base64 key']:[]),
     ],
   };
+  const diditEnabled=booleanEnv('DIDIT_ENABLED',source);
+  const diditEnvironmentValue=env('DIDIT_ENV',source).toLowerCase();
+  const diditEnvironment=diditEnvironmentValue==='sandbox'||diditEnvironmentValue==='production'
+    ?diditEnvironmentValue
+    :null;
+  const diditApiKey=env('DIDIT_API_KEY',source);
+  const diditWorkflowId=env('DIDIT_WORKFLOW_ID',source);
+  const diditWebhookSecret=env('DIDIT_WEBHOOK_SECRET',source);
+  const diditFormattingIssues=diditEnabled?[
+    ...(!diditEnvironment?['DIDIT_ENV must be sandbox or production']:[]),
+    ...(!diditApiKey?['DIDIT_API_KEY is missing']:[]),
+    ...(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(diditWorkflowId)?['DIDIT_WORKFLOW_ID must be a UUID']:[]),
+    ...(!diditWebhookSecret?['DIDIT_WEBHOOK_SECRET is missing']:[]),
+    ...(diditEnvironment==='sandbox'&&diditApiKey.startsWith('sk_live_')?['DIDIT_API_KEY is a live key but DIDIT_ENV is sandbox']:[]),
+    ...(diditEnvironment==='production'&&diditApiKey.startsWith('sk_test_')?['DIDIT_API_KEY is a sandbox key but DIDIT_ENV is production']:[]),
+  ]:[];
 
   return {
     database: {
@@ -315,32 +330,26 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
         ...(!env('KYC_SUPABASE_SERVICE_ROLE_KEY', source) ? ['KYC_SUPABASE_SERVICE_ROLE_KEY'] : []),
       ],
     },
-    smtp: {
-      host: smtpHost,
-      port: smtpPort,
-      user: smtpUser,
-      password: smtpPassword,
-      from: smtpFrom,
+    email: {
+      brevoApiKey,
+      senderEmail:brevoSenderEmail,
+      senderName:brevoSenderName,
+      configured:Boolean(brevoApiKey&&brevoSenderEmail&&brevoSenderName),
+    },
+    support: {
       supportEmail: env('SUPPORT_EMAIL', source) || 'aureviainvest@gmail.com',
       complaintsEmail: env('COMPLAINTS_EMAIL', source) || env('SUPPORT_EMAIL', source) || 'aureviainvest@gmail.com',
       supportPhone: env('SUPPORT_PHONE', source) || '+1 (210) 504-7697',
-      configured: smtpConfigured,
     },
     verification: {
       codeSecret: env('VERIFICATION_CODE_SECRET', source) || env('NEXTAUTH_SECRET', source),
-      resendApiKey: env('RESEND_API_KEY', source),
-      emailFrom: env('RESEND_FROM_EMAIL', source) || env('VERIFICATION_EMAIL_FROM', source) || 'noreply@aureviaexchanged.dpdns.org',
       termiiApiKey: env('TERMII_API_KEY', source),
       termiiSenderId: env('TERMII_SENDER_ID', source),
       termiiBaseUrl:termiiBaseUrl||'',
       termiiBaseUrlValid,
-      twilioAccountSid,
-      twilioAuthToken,
-      twilioVerifyServiceSid,
       appUrl: cleanUrl(env('NEXT_PUBLIC_APP_URL', source) || env('NEXTAUTH_URL', source) || env('RENDER_EXTERNAL_URL', source) || 'https://aurevia-et63.onrender.com'),
-      configured:termiiConfigured||twilioConfigured,
+      configured:termiiConfigured,
       termiiConfigured,
-      twilioConfigured,
     },
     execution: {
       realEnabled: booleanEnv('REAL_EXECUTION_ENABLED', source),
@@ -388,6 +397,7 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
     },
     akedly: {
       ...akedly,
+      settingsPhoneConfigured: akedlySettingsPhoneConfigured,
       configured: [akedly.apiKey,akedly.pipelineId,akedly.widgetId,akedly.publicKey,akedly.widgetSecret,akedly.webhookSecret]
         .every(Boolean)&&akedly.formattingIssues.length===0,
     },
@@ -395,6 +405,15 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
       ...kyc,
       configured:kyc.enabled&&kyc.engine==='internal'&&kycEncryptionKeyBytes.length===32
         &&kycEncryptionKeyBytes.toString('base64')===kycEncryptionKey&&kyc.formattingIssues.length===0,
+    },
+    didit:{
+      enabled:diditEnabled,
+      environment:diditEnvironment,
+      apiKey:diditApiKey,
+      workflowId:diditWorkflowId,
+      webhookSecret:diditWebhookSecret,
+      configured:diditEnabled&&diditFormattingIssues.length===0,
+      formattingIssues:diditFormattingIssues,
     },
   };
 }
@@ -426,6 +445,7 @@ export function validateServerConfiguration(config: ServerConfiguration): string
   }
   issues.push(...config.akedly.formattingIssues.map(issue=>`Invalid Akedly environment formatting: ${issue}`));
   issues.push(...config.kyc.formattingIssues);
+  issues.push(...config.didit.formattingIssues);
   if(config.kyc.engine!=='internal')issues.push('AUREVIA_KYC_ENGINE must be internal');
   if(config.execution.realEnabled && (!config.execution.alpacaTradingConfigured || config.execution.alpacaProvider.toLowerCase() !== 'alpaca')) issues.push('REAL_EXECUTION_ENABLED requires a complete Individual Alpaca Trading API configuration selected with ALPACA_PROVIDER=alpaca');
   if(config.execution.realEnabled && config.execution.alpacaTradingUrlConfigured && !config.execution.alpacaTradingUrlValid) issues.push('ALPACA_TRADING_BASE_URL must use an approved HTTPS Alpaca Trading API host');
@@ -443,7 +463,7 @@ export function configurationSummary(config: ServerConfiguration) {
       bucket: config.kycStorage.bucket,
       missingConfiguration: config.kycStorage.missingConfiguration,
     },
-    smtpConfigured: config.smtp.configured,
+    brevoConfigured:config.email.configured,
     verificationConfigured: config.verification.configured,
     execution: {
       realEnabled: config.execution.realEnabled,
@@ -461,6 +481,7 @@ export function configurationSummary(config: ServerConfiguration) {
     },
     akedlyConfigured: config.akedly.configured,
     kycConfigured: config.kyc.configured,
+    diditConfigured:config.didit.configured,
     paymentConfigured: config.payment.configured,
   };
 }

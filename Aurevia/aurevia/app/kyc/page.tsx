@@ -6,6 +6,7 @@ import {ShieldCheck} from 'lucide-react';
 import Link from 'next/link';
 import Nav from '@/components/Nav';
 import KycVerificationCenter from '@/components/KycVerificationCenter';
+import DiditKycPanel from '@/components/DiditKycPanel';
 
 type KycDocument={id:string;kind:string;filename:string;status:string;uploadedAt:string;reviewedAt:string|null;reviewNote:string|null};
 type PageState={kycStatus:string;phone:string;phoneVerified:boolean;address:string;currentTier:number;documents:KycDocument[]};
@@ -78,6 +79,7 @@ export default function Kyc(){
 		{sessionStatus==='authenticated'&&!isRealAccount?<section className="account-panel card p-5" role="status"><h2 className="font-semibold">REAL mode required</h2><p className="mt-2 text-sm leading-6 muted">Identity verification is available only in REAL mode. Switch account mode from the navigation to continue.</p></section>:<>
 			{error&&<div className="account-callout mb-4" role="alert"><span>{error}</span><button type="button" className="text-link" disabled={loading||uploadingProof} onClick={()=>void load()}>Retry</button></div>}
 			{message&&<p className="mb-4 text-sm text-profit" role="status">{message}</p>}
+			<DiditKycPanel/>
 			<KycVerificationCenter currentTier={page.currentTier} onUpdated={refreshTier}/>
 			<section className="account-panel card mt-4 p-5">
 				<h2 className="text-lg font-semibold">Verification tiers</h2>

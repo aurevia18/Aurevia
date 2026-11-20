@@ -6,7 +6,7 @@ import {db} from '@/lib/db';
 import {createNotification} from '@/lib/notifications';
 import {rateLimit} from '@/lib/rate-limit';
 import {verificationConfig} from '@/lib/config';
-import {verificationCodeMatches,verifyTermiiVerificationToken,verifyTwilioVerificationCode,TwilioVerifyProviderError} from '@/lib/verification-delivery';
+import {resolveSmsProviderReference,verificationCodeMatches,TermiiProviderError} from '@/lib/verification-delivery';
 import {trustedProxyClientIp} from '@/lib/request-ip';
 import {isTierThreePhoneVerificationEligible,getTierProfileRequirements} from '@/lib/production-policy';
 
@@ -35,7 +35,8 @@ export async function POST(request:Request){
 
 		const challenge=await db.verificationCode.findUnique({where:{userId:user.id}});
 		if(!challenge||challenge.channel!==VerificationChannel.SMS||!challenge.providerReference)return NextResponse.json({error:'Request a new phone verification code.'},{status:400});
-		if(challenge.providerReference.startsWith('AKEDLY:')||challenge.providerReference==='AKEDLY_PENDING'){
+		const smsChallenge=resolveSmsProviderReference(challenge.providerReference);
+		if(!smsChallenge){
 			return NextResponse.json({error:'This legacy phone attempt is no longer active. Request a new SMS code to continue.'},{status:409});
 		}
 		const now=new Date();
@@ -48,15 +49,13 @@ export async function POST(request:Request){
 
 		let verified:boolean;
 		try{
-			verified=challenge.providerReference==='TWILIO'
-				?await verifyTwilioVerificationCode(account.phone,code)
-				:await verifyTermiiVerificationToken(challenge.providerReference,code);
+			verified=await smsChallenge.provider.verify(smsChallenge.reference,code);
 		}catch(error){
 			console.error('[kyc-phone] SMS provider verification failed.',{
 				userId:user.id,
-				provider:challenge.providerReference==='TWILIO'?'twilio':'termii',
-				failureStage:error instanceof TwilioVerifyProviderError?error.failureStage:'unclassified',
-				providerHttpStatus:error instanceof TwilioVerifyProviderError?error.httpStatus:null,
+				provider:smsChallenge.provider.id,
+				failureStage:error instanceof TermiiProviderError?error.failureStage:'unclassified',
+				providerHttpStatus:error instanceof TermiiProviderError?error.httpStatus:null,
 				errorType:error instanceof Error?error.name:'UnknownError',
 			});
 			return NextResponse.json({error:'Phone verification is temporarily unavailable. Please try again.'},{status:503});

@@ -10,12 +10,11 @@ import {createQuoteOnlyCandle} from "@/lib/chart-candles";
 import { useTradingStore } from "@/lib/store";
 import { io, type Socket } from "socket.io-client";
 import { AlertCircle, CheckCircle2, X } from "lucide-react";
-import { formatUsd } from "@/lib/currency-format";
 import "./trade-polish.css";
 const LivePriceChart=dynamic(()=>import("@/components/LivePriceChart"),{
   loading:()=><div className="trade-chart-loading" role="status">Preparing market chart…</div>,
 });
-type I = { id: string; symbol: string; price: number; change?: number; takerFee?: number; leverage?: number; updatedAt?:string; lastUpdatedAt?:string; assetId?:string; assetType?:string; source?:string; bid?:number|null; ask?:number|null; liveQuote?:MarketQuote };
+type I = { id: string; symbol: string; price: number; internalPrice?:number; internalUpdatedAt?:string; baseAsset?:string; quoteAsset?:string; change?: number; takerFee?: number; leverage?: number; updatedAt?:string; lastUpdatedAt?:string; assetId?:string; assetType?:string; source?:string; bid?:number|null; ask?:number|null; liveQuote?:MarketQuote };
 type NumericValue=number|string;
 type Order = {
   id: string;
@@ -44,7 +43,8 @@ type PositionResponse=Omit<Pos,"quantity"|"entryPrice"|"margin"|"instrument">&{
   margin:NumericValue;
   instrument:{symbol:string;price:NumericValue;updatedAt:string};
 };
-type WalletResponse={accountMode:"DEMO"|"REAL";cashBalance:NumericValue;paperReservedBalance:NumericValue;paperAvailableBalance:NumericValue};
+type PortfolioResponse={cashBalance:NumericValue};
+type WalletResponse={accountMode:"DEMO"|"REAL";balances?:Array<{currency:string;availableBalance?:NumericValue;reservedBalance?:NumericValue}>};
 type OrderBookLevel={price:number;quantity:number};
 type OrderBook={kind?:"SIMULATED_BOOK"|"TOP_OF_BOOK";bids?:OrderBookLevel[];asks?:OrderBookLevel[];symbol?:string;last?:number;bid?:number|null;ask?:number|null;spread?:number|null;change?:number;changePercent?:number;marketStatus?:'OPEN'|'CLOSED'|'PREMARKET'|'AFTER_HOURS'|'UNKNOWN';source?:string;updatedAt?:string;depthAvailable?:false;error?:string};
 type LiveQuotesResponse={quotes:Array<MarketQuote|{asset:MarketQuote['asset'];error:string}>};
@@ -80,6 +80,9 @@ async function loadTradingMarkets(mode:"DEMO"|"REAL",initialInstrumentResponse?:
     return age<=30_000&&age>=-5_000;
   });
   return instruments.flatMap(instrument=>{
+    const internalPrice=Number(instrument.price);
+    const internalUpdatedAt=instrument.lastUpdatedAt||instrument.updatedAt;
+    const internalFields={internalPrice,internalUpdatedAt,baseAsset:instrument.baseAsset,quoteAsset:instrument.quoteAsset};
     const symbol=normalizedSymbol(instrument.symbol);
     const quote=availableQuotes.find(item=>
       symbol===normalizedSymbol(item.asset.id)||
@@ -90,14 +93,16 @@ async function loadTradingMarkets(mode:"DEMO"|"REAL",initialInstrumentResponse?:
       const supportedAsset=getMarketAssetForTradingSymbol(instrument.symbol);
       return supportedAsset?[{
         ...instrument,
+        ...internalFields,
         price:Number(instrument.price),
-        updatedAt:instrument.lastUpdatedAt||instrument.updatedAt,
+        updatedAt:internalUpdatedAt,
         assetId:supportedAsset.id,
         assetType:supportedAsset.type,
       }]:[];
     }
     return [{
       ...instrument,
+      ...internalFields,
       price:quote.price,
       change:quote.changePercent,
       updatedAt:quote.updatedAt,
@@ -129,8 +134,8 @@ export default function Trade() {
   const [positions, setPositions] = useState<Pos[]>([]);
   const [book, setBook] = useState<OrderBook>({ bids: [], asks: [] });
   const [availableBalance, setAvailableBalance] = useState<number | null>(null);
-  const [paperReservedBalance,setPaperReservedBalance]=useState(0);
-  const [paperAvailableBalance,setPaperAvailableBalance]=useState(0);
+  const [walletBalances,setWalletBalances]=useState<WalletResponse["balances"]>([]);
+  const [clock,setClock]=useState(0);
   const [accountMode, setAccountMode] = useState<'DEMO'|'REAL'|'LOADING'>(session?.user?.accountMode||'LOADING');
   const [placing, setPlacing] = useState(false);
   const [chartTimeframe,setChartTimeframe]=useState<TimeframeId>("1m");
@@ -143,6 +148,12 @@ export default function Trade() {
   const providerHistoryLoaded=useRef(false);
   const currentLiveQuote=useRef<MarketQuote|undefined>(undefined);
   const currentChartPrice=useRef<number|undefined>(undefined);
+  useEffect(()=>{
+    const refresh=()=>setClock(Date.now());
+    refresh();
+    const timer=window.setInterval(refresh,1_000);
+    return()=>window.clearInterval(timer);
+  },[]);
   useEffect(()=>{
     if(!session?.user?.id||(accountMode!=="DEMO"&&accountMode!=="REAL")){
       setDismissedFailedOrderIds([]);
@@ -185,15 +196,17 @@ export default function Trade() {
       });
     const load = async () => {
       try {
-        const [orderResponse,positionResponse,walletResponse] = await Promise.all([
+        const [orderResponse,positionResponse,portfolioResponse,currencyWalletResponse] = await Promise.all([
           fetch("/api/orders"),
           fetch("/api/positions"),
           fetch("/api/portfolio"),
+          fetch("/api/wallet",{cache:"no-store"}),
         ]);
-        if ([orderResponse,positionResponse,walletResponse].some((response) => !response.ok))
+        if ([orderResponse,positionResponse,portfolioResponse,currencyWalletResponse].some((response) => !response.ok))
           throw new Error("Unable to load trading data.");
-        const walletData=await walletResponse.json() as WalletResponse;
-        activeMode=walletData.accountMode;
+        const portfolioData=await portfolioResponse.json() as PortfolioResponse;
+        const currencyWalletData=await currencyWalletResponse.json() as WalletResponse;
+        activeMode=currencyWalletData.accountMode;
         if(activeMode!==(session?.user?.accountMode)){
           setAccountMode(activeMode);
           void marketPromise.then(()=>loadTradingMarkets(activeMode!)).then(market=>{
@@ -201,17 +214,16 @@ export default function Trade() {
             setItems(market);
             setSelected(current=>market.some(item=>item.id===current)?current:market[0]?.id||"");
           }).catch(()=>{if(active)setMessage({text:"Market quotes could not load. Refresh to try again.",kind:'error'})});
-        }else setAccountMode(walletData.accountMode);
+        }else setAccountMode(currencyWalletData.accountMode);
         const [orderData,positionData]=await Promise.all([
           orderResponse.json() as Promise<Order[]>,
           positionResponse.json() as Promise<PositionResponse[]>,
         ]);
         if (!active) return;
         setOrders(orderData);
-        setAccountMode(walletData.accountMode);
-        setAvailableBalance(Number(walletData.cashBalance));
-        setPaperReservedBalance(Number(walletData.paperReservedBalance));
-        setPaperAvailableBalance(Number(walletData.paperAvailableBalance));
+        setAccountMode(currencyWalletData.accountMode);
+        setAvailableBalance(Number(portfolioData.cashBalance));
+        setWalletBalances(currencyWalletData.balances||[]);
         setPositions(
           positionData.map((position) => ({
             ...position,
@@ -419,17 +431,33 @@ export default function Trade() {
     return()=>{active=false;window.clearInterval(timer);};
   },[accountMode,chartAssetId]);
   const requestedQuantity = Number(qty);
-  const enteredOrderPrice=Number(price);
-  const realReferencePrice=type==="MARKET"
-    ?side==="BUY"?(cur?.ask??cur?.price):(cur?.bid??cur?.price)
-    :Number.isFinite(enteredOrderPrice)&&enteredOrderPrice>0?enteredOrderPrice:cur?.price;
+  const realReferencePrice=cur?.internalPrice??cur?.price;
   const estimatedPrice=accountMode==="REAL"?realReferencePrice:cur?.price;
   const estimatedNotional = (estimatedPrice ?? 0) * (Number.isFinite(requestedQuantity) ? requestedQuantity : 0);
-  const estimatedFee = accountMode==='DEMO'?estimatedNotional * Number(cur?.takerFee ?? 0):0;
+  const estimatedFee = estimatedNotional * Number(cur?.takerFee ?? 0);
   const estimatedTradeValue=side==="BUY"?estimatedNotional+estimatedFee:Math.max(0,estimatedNotional-estimatedFee);
+  const selectedBaseCurrency=(cur?.baseAsset||cur?.symbol.split('/')[0]||'').toUpperCase();
+  const selectedQuoteCurrency=(cur?.quoteAsset||cur?.symbol.split('/')[1]||'USD').toUpperCase();
+  const tradeWalletCurrency=side==="BUY"?selectedQuoteCurrency:selectedBaseCurrency;
+  const tradeWalletBalance=walletBalances?.find(item=>item.currency.toUpperCase()===tradeWalletCurrency);
   const heldSellQuantity=positions.filter(position=>position.instrumentId===selected&&position.side==="BUY").reduce((total,position)=>total+position.quantity,0);
   const reservedSellQuantity=orders.filter(order=>order.instrument.symbol===cur?.symbol&&order.side==="SELL"&&["OPEN","PARTIALLY_FILLED","PENDING_CANCEL"].includes(order.status)).reduce((total,order)=>total+Math.max(0,order.quantity-order.filledQuantity),0);
-  const availableSellQuantity=Math.max(0,heldSellQuantity-reservedSellQuantity);
+  const availableSellQuantity=accountMode==="REAL"
+    ?Number(tradeWalletBalance?.availableBalance??0)
+    :Math.max(0,heldSellQuantity-reservedSellQuantity);
+  const availableTradeBalance=accountMode==="REAL"?Number(tradeWalletBalance?.availableBalance??0):availableBalance;
+  const reservedTradeBalance=Number(tradeWalletBalance?.reservedBalance??0);
+  const internalQuoteAge=cur?.internalUpdatedAt?clock-Date.parse(cur.internalUpdatedAt):Infinity;
+  const realExecutionQuoteFresh=accountMode!=="REAL"||
+    (Number.isFinite(realReferencePrice)&&Number(realReferencePrice)>0&&Number.isFinite(internalQuoteAge)&&internalQuoteAge>=-5_000&&internalQuoteAge<=30_000);
+  const hasFreshInternalPrice=(instrument:I)=>!!instrument.internalUpdatedAt&&Number.isFinite(clock-Date.parse(instrument.internalUpdatedAt))&&clock-Date.parse(instrument.internalUpdatedAt)>=-5_000&&clock-Date.parse(instrument.internalUpdatedAt)<=30_000;
+  const formatWalletAmount=(value:number|null|undefined,currency:string)=>{
+    if(value===null||value===undefined||!Number.isFinite(value))return "—";
+    if(["USD","EUR","GBP","JPY","CAD","AUD","CHF"].includes(currency)){
+      try{return new Intl.NumberFormat(undefined,{style:"currency",currency,maximumFractionDigits:currency==="JPY"?0:2}).format(value)}catch{}
+    }
+    return `${new Intl.NumberFormat(undefined,{maximumFractionDigits:currency==="BTC"?8:10}).format(value)} ${currency}`;
+  };
   const hiddenFailedOrderIds=new Set(dismissedFailedOrderIds);
   const failedOrders=orders.filter(isFailedOrder);
   const visibleFailedOrders=failedOrders.filter(order=>!hiddenFailedOrderIds.has(order.id));
@@ -453,8 +481,8 @@ export default function Trade() {
   async function place(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (placing) return;
-    if(!cur||(accountMode==="REAL"&&!cur.liveQuote)){
-      setMessage({text:"A current market quote is required before submitting this order.",kind:'error'});
+    if(!cur||!realExecutionQuoteFresh){
+      setMessage({text:"A fresh Aurevia internal simulated price is required before submitting this order.",kind:'error'});
       return;
     }
     setPlacing(true);
@@ -466,8 +494,8 @@ export default function Trade() {
       quantity: Number(qty),
       price: type === "LIMIT" && price ? Number(price) : undefined,
       stopPrice: type === "STOP" && price ? Number(price) : undefined,
-      expectedPrice:cur.price,
-      observedAt:cur.updatedAt,
+      expectedPrice:accountMode==="REAL"?(cur.internalPrice??cur.price):cur.price,
+      observedAt:accountMode==="REAL"?(cur.internalUpdatedAt??cur.updatedAt):cur.updatedAt,
     };
     let response:Response;
     try{
@@ -498,14 +526,13 @@ export default function Trade() {
     setMessage({text:`Order ${String(result.status||'submitted').replaceAll('_',' ').toLowerCase()}.`,kind:isFailedOrder(result)?'error':'success'});
     setOrders(current=>[result,...current]);
     try{
-      const [positionResponse,portfolioResponse]=await Promise.all([fetch("/api/positions"),fetch("/api/portfolio")]);
+      const [positionResponse,portfolioResponse,currencyWalletResponse]=await Promise.all([fetch("/api/positions"),fetch("/api/portfolio"),fetch("/api/wallet",{cache:"no-store"})]);
       if(positionResponse.ok)setPositions((await positionResponse.json()).map((position:PositionResponse)=>({...position,quantity:Number(position.quantity),entryPrice:Number(position.entryPrice),margin:Number(position.margin),instrument:{...position.instrument,price:Number(position.instrument.price)}})));
       if(portfolioResponse.ok){
-        const wallet=await portfolioResponse.json() as {cashBalance:NumericValue;paperReservedBalance:NumericValue;paperAvailableBalance:NumericValue};
+        const wallet=await portfolioResponse.json() as PortfolioResponse;
         setAvailableBalance(Number(wallet.cashBalance));
-        setPaperReservedBalance(Number(wallet.paperReservedBalance));
-        setPaperAvailableBalance(Number(wallet.paperAvailableBalance));
       }
+      if(currencyWalletResponse.ok)setWalletBalances((await currencyWalletResponse.json() as WalletResponse).balances||[]);
     }catch{
       setMessage({text:"The order was accepted, but account balances could not be refreshed. Refresh the page before placing another order.",kind:'info'});
     }
@@ -530,29 +557,7 @@ export default function Trade() {
     const position=positions.find((item)=>item.id===id);
     if(!position)return;
     if(position.requiresSellOrder){
-      const quote=items.find((item)=>item.id===position.instrumentId);
-      if(!quote?.liveQuote){
-        setMessage({text:"A current market quote is required before submitting this sell order.",kind:'error'});
-        return;
-      }
-      const response=await fetch('/api/orders',{
-        method:'POST',
-        headers:{'content-type':'application/json','Idempotency-Key':crypto.randomUUID()},
-        body:JSON.stringify({
-          instrumentId:position.instrumentId,side:'SELL',type:'MARKET',quantity:position.quantity,
-          expectedPrice:quote.price,observedAt:quote.updatedAt,
-        }),
-      });
-      const result=await response.json();
-      setMessage({
-        text:response.ok?`Sell order ${String(result.status||'submitted').replaceAll('_',' ').toLowerCase()}.`:result.error||'Unable to submit sell order.',
-        kind:response.ok?'success':'error',
-      });
-      if(response.ok){
-        const [orderResponse,positionResponse]=await Promise.all([fetch('/api/orders'),fetch('/api/positions')]);
-        if(orderResponse.ok)setOrders(await orderResponse.json());
-        if(positionResponse.ok)setPositions((await positionResponse.json()).map((item:PositionResponse)=>({...item,quantity:Number(item.quantity),entryPrice:Number(item.entryPrice),margin:Number(item.margin),instrument:{...item.instrument,price:Number(item.instrument.price)}})));
-      }
+      setMessage({text:"This is a retained legacy provider-linked position and is not backed by a matching Aurevia Wallet asset. It cannot be closed as an internal simulated wallet order.",kind:'error'});
       return;
     }
     const r = await fetch("/api/positions", {
@@ -657,7 +662,7 @@ export default function Trade() {
             </div>
           </section>
           <section className="trade-ticket-card card p-5">
-            <div className="account-panel-title"><div><h2>{translate('orderTicket')}</h2><p className="account-panel-subtitle">{accountMode==='REAL'?'Alpaca sandbox · provider-confirmed orders':'DEMO practice order'}</p></div></div>
+            <div className="account-panel-title"><div><h2>{translate('orderTicket')}</h2><p className="account-panel-subtitle">{accountMode==='REAL'?'Aurevia internal simulated execution':'DEMO practice order'}</p></div></div>
             <form onSubmit={place} className="space-y-3">
               <fieldset className="space-y-3">
               <div className="grid grid-cols-2 gap-2" role="group" aria-label={translate('orderSide')}>
@@ -677,9 +682,9 @@ export default function Trade() {
               <label className="account-label">{translate('orderType')}<select className="input" required value={type} onChange={(event) => setType(event.target.value as "MARKET"|"LIMIT"|"STOP")}><option value="MARKET">Market</option><option value="LIMIT">Limit</option><option value="STOP" disabled={accountMode==="REAL"&&cur?.assetType==="CRYPTO"}>Stop</option></select></label>
               <label className="account-label">{translate('quantity')}<input className="input" type="number" min="0.00000001" step="any" inputMode="decimal" required value={qty} onChange={(event) => setQty(event.target.value)} placeholder="0.00"/></label>
               {type !== "MARKET" && <label className="account-label">{type === "STOP" ? translate('stopPrice') : translate('limitPrice')}<input className="input" type="number" min="0.00000001" step="any" inputMode="decimal" required value={price} onChange={(event) => setPrice(event.target.value)} placeholder="0.00"/></label>}
-              <div className="trade-estimate" aria-live="polite"><div><span>Available Aurevia wallet · {accountMode}</span><b>{availableBalance===null?"Loading…":formatUsd(availableBalance)}</b></div>{accountMode==='REAL'&&<><div><span>Reserved for open orders</span><b>{formatUsd(paperReservedBalance)}</b></div><div><span>Available to trade</span><b>{formatUsd(paperAvailableBalance)}</b></div>{side==='SELL'&&<div><span>Available quantity to sell</span><b>{availableSellQuantity.toLocaleString(undefined,{maximumFractionDigits:8})}</b></div>}<div><span>Estimated price per unit</span><b>{estimatedPrice?formatUsd(estimatedPrice):"—"}</b></div></>}<div><span>{side==='BUY'?(accountMode==='REAL'?'Estimated buy notional':'Estimated required cash'):'Estimated sell proceeds'}</span><b>{cur?formatUsd(estimatedTradeValue):"—"}</b></div>{accountMode==='DEMO'&&<div><span>{translate('estimatedFee')}</span><b>{cur?.takerFee===undefined?"Not configured":formatUsd(estimatedFee)}</b></div>}</div>
-              <p className="trade-estimate-note">{accountMode==='REAL'?'Market estimates use the current ask or bid; limit and stop estimates use your entered price. Final execution prices may vary. Your wallet and positions update only after a fill is confirmed.':'Quotes, order matching, positions, and P/L are for practice and isolated to your DEMO account.'}</p>
-              <button type="submit" disabled={placing||!selected||!cur||(accountMode==="REAL"&&(!cur.liveQuote||side==="SELL"&&requestedQuantity>availableSellQuantity))} className="btn w-full bg-gold text-black disabled:opacity-50">{placing?translate('submittingOrder'):translate('placeOrder',{side})}</button>
+              <div className="trade-estimate" aria-live="polite"><div><span>Available Aurevia wallet · {accountMode} · {accountMode==='REAL'?tradeWalletCurrency:'USD'}</span><b>{availableTradeBalance===null?"Loading…":formatWalletAmount(availableTradeBalance,accountMode==='REAL'?tradeWalletCurrency:'USD')}</b></div>{accountMode==='REAL'&&<><div><span>Reserved {side==='BUY'?'funds':'assets'} · {tradeWalletCurrency}</span><b>{formatWalletAmount(reservedTradeBalance,tradeWalletCurrency)}</b></div><div><span>Available to trade · {tradeWalletCurrency}</span><b>{formatWalletAmount(availableTradeBalance,tradeWalletCurrency)}</b></div>{side==='SELL'&&<div><span>Available quantity to sell</span><b>{availableSellQuantity.toLocaleString(undefined,{maximumFractionDigits:8})} {tradeWalletCurrency}</b></div>}<div><span>Aurevia simulated execution price</span><b>{formatWalletAmount(estimatedPrice,selectedQuoteCurrency)}</b></div></>}<div><span>{side==='BUY'?'Estimated required funds':'Estimated net proceeds'} · {accountMode==='REAL'?selectedQuoteCurrency:'USD'}</span><b>{formatWalletAmount(estimatedTradeValue,accountMode==='REAL'?selectedQuoteCurrency:'USD')}</b></div><div><span>{translate('estimatedFee')}</span><b>{cur?.takerFee===undefined?"Not configured":formatWalletAmount(estimatedFee,accountMode==='REAL'?selectedQuoteCurrency:'USD')}</b></div></div>
+              <p className="trade-estimate-note">{accountMode==='REAL'?'REAL orders are simulated by Aurevia against its current internal price, not sent to an external exchange. Provider market data and historical charts are displayed separately. Currency conversion is not performed.':'Quotes, order matching, positions, and P/L are for practice and isolated to your DEMO account.'}</p>
+              <button type="submit" disabled={placing||!selected||!cur||!realExecutionQuoteFresh||(accountMode==="REAL"&&side==="SELL"&&requestedQuantity>availableSellQuantity)} className="btn w-full bg-gold text-black disabled:opacity-50">{placing?translate('submittingOrder'):translate('placeOrder',{side})}</button>
               </fieldset>
               {message&&<div className={`trade-message is-${message.kind}`} role={message.kind==='error'?'alert':'status'}><span className="trade-message-icon">{message.kind==='success'?<CheckCircle2 size={17}/>:<AlertCircle size={17}/>}</span><p>{message.text}</p><button type="button" aria-label="Dismiss message" onClick={()=>setMessage(null)}><X size={16}/></button></div>}
             </form>
@@ -722,8 +727,8 @@ export default function Trade() {
                   <span className={pnl(p)===null?"muted":pnl(p)! >= 0 ? "text-profit" : "text-loss"}>
                     {pnl(p)===null?"P/L unavailable":`${pnl(p)! >= 0 ? "+" : ""}$${pnl(p)!.toFixed(2)}`}
                   </span>
-                  <button type="button" disabled={accountMode==='REAL'&&!items.some(item=>item.id===p.instrumentId&&item.liveQuote)} className="btn bg-loss disabled:opacity-50" onClick={() => void close(p.id)}>
-                    {accountMode==='REAL'?'Market sell':translate('close')}
+                  <button type="button" disabled={p.requiresSellOrder||accountMode==='REAL'&&!items.some(item=>item.id===p.instrumentId&&hasFreshInternalPrice(item))} className="btn bg-loss disabled:opacity-50" onClick={() => void close(p.id)}>
+                    {p.requiresSellOrder?'Legacy provider holding':accountMode==='REAL'?'Close internally':translate('close')}
                   </button>
                 </div>
               ))}

@@ -136,6 +136,7 @@ export async function deleteAccountData(tx:Prisma.TransactionClient,input:{
 		tx.pushSubscription.deleteMany({where:{userId:current.id}}),
 		tx.pushPreference.deleteMany({where:{userId:current.id}}),
 		tx.kycEmailOutbox.deleteMany({where:{userId:current.id}}),
+		tx.withdrawalApprovalSmsOutbox.deleteMany({where:{userId:current.id}}),
 		tx.activityVisibilityPreference.deleteMany({where:{userId:current.id}}),
 		tx.notification.deleteMany({where:{userId:current.id}}),
 	]);

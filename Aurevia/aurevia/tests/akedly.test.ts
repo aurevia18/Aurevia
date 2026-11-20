@@ -5,11 +5,13 @@ import {
 	akedlyAttemptFailureDiagnostics,
 	akedlyReadiness,
 	createAkedlyAttempt,
+	createAkedlySettingsPhoneAttempt,
 	isConfirmedAkedlyAttempt,
 	isConfirmedAkedlyLookup,
 	logAkedlyReadiness,
 	lookupAkedlyAttempt,
 	verifyAkedlyWebhook,
+	verifyAkedlySettingsPhoneWebhook,
 } from '@/lib/akedly';
 
 const cryptoFailureState=vi.hoisted(()=>({failCreateHmac:false}));
@@ -91,6 +93,7 @@ describe('Akedly V2 server integration',()=>{
 				timestamp,
 				phoneNumber:'+12125550123',
 			});
+
 			const wrongSecret=createHmac('sha256','incorrect-widget-secret').update(signingMessage,'utf8').digest('hex');
 			const wrongApiKeySecret=createHmac('sha256','test-api-key').update(signingMessage,'utf8').digest('hex');
 			const wrongWebhookSecret=createHmac('sha256',akedlyEnvironment.AKEDLY_WEBHOOK_SECRET).update(signingMessage,'utf8').digest('hex');
@@ -125,6 +128,35 @@ describe('Akedly V2 server integration',()=>{
 		}finally{
 			now.mockRestore();
 		}
+	});
+
+	it('keeps Settings phone attempts behind their own disabled-by-default feature flag',async()=>{
+		vi.stubEnv('AKEDLY_ENABLED','false');
+		vi.stubEnv('AKEDLY_SETTINGS_PHONE_ENABLED','true');
+		vi.stubGlobal('fetch',vi.fn(async()=>providerResponse()));
+
+		await createAkedlySettingsPhoneAttempt({phoneNumber:'+12125550123'});
+
+		expect(fetch).toHaveBeenCalledOnce();
+		await expect(createAkedlyAttempt({phoneNumber:'+12125550123'})).rejects.toMatchObject({
+			message:'AKEDLY_INTEGRATION_DISABLED',
+		});
+	});
+
+	it('verifies Settings callback signatures without enabling global Akedly',()=>{
+		vi.stubEnv('AKEDLY_ENABLED','false');
+		vi.stubEnv('AKEDLY_SETTINGS_PHONE_ENABLED','true');
+		const rawBody=JSON.stringify(successfulResult());
+		const timestamp=new Date();
+		const webhook=new Webhook(akedlyEnvironment.AKEDLY_WEBHOOK_SECRET);
+		const headers={
+			'svix-id':'msg_settings_123',
+			'svix-timestamp':String(Math.floor(timestamp.getTime()/1000)),
+			'svix-signature':webhook.sign('msg_settings_123',timestamp,rawBody),
+		};
+
+		expect(()=>verifyAkedlySettingsPhoneWebhook(rawBody,headers)).not.toThrow();
+		expect(()=>verifyAkedlySettingsPhoneWebhook(`${rawBody} `,headers)).toThrow();
 	});
 
 	it('signs the email-only request without adding the email to the HMAC message',async()=>{

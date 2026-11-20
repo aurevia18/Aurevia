@@ -5,6 +5,7 @@ import {requireUser} from '@/lib/auth';
 import {db} from '@/lib/db';
 import {createNotification} from '@/lib/notifications';
 import {ensureSystemAccount,ensureUserLedger,postWithdrawalRefund} from '@/lib/ledger';
+import {cancelWithdrawalApprovalSms} from '@/lib/withdrawal-approval-sms-outbox';
 
 const schema=z.object({reason:z.string().trim().max(300).optional()});
 const cancellable:FundingStatus[]=[FundingStatus.PENDING,FundingStatus.PENDING_REVIEW,FundingStatus.APPROVED,FundingStatus.PROCESSING];
@@ -45,6 +46,7 @@ export async function POST(request:Request,{params}:{params:Promise<{id:string}>
 			const changed=await tx.fundingRequest.updateMany({where:{id:current.id,userId:user.id,type:FundingType.WITHDRAWAL,status:current.status},data:{status:FundingStatus.CANCELLED,adminNote:body.reason||null,settlementReference:refundReference||undefined}});
 			if(changed.count!==1)throw new Error('WITHDRAWAL_NOT_CANCELLABLE');
 			const updated=await tx.fundingRequest.findUniqueOrThrow({where:{id:current.id}});
+			await cancelWithdrawalApprovalSms(tx,current.id);
 			await tx.auditLog.create({data:{actorId:user.id,action:'WITHDRAWAL_CANCELLED_BY_USER',entity:'FUNDING',entityId:current.id,metadata:{accountMode:current.accountMode,oldStatus:current.status,newStatus:FundingStatus.CANCELLED,idempotencyKey,reason:body.reason||null,refundReference}}});
 			await createNotification(tx,{userId:user.id,type:NotificationType.WITHDRAWAL,title:'Withdrawal request cancelled',message:refundReference?'Your withdrawal was cancelled and the full gross debit was refunded idempotently to your REAL wallet.':'Your withdrawal request was cancelled before approval. Any reservation was released and no ledger debit occurred.',dedupeKey:`withdrawal:${current.id}:cancelled:${idempotencyKey}`,relatedEntity:'FUNDING',relatedId:current.id,actionUrl:`/wallet/transactions/${current.id}`});
 			return {request:updated,replayed:false};

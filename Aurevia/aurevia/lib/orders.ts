@@ -1,10 +1,11 @@
 import {randomUUID} from 'node:crypto';
 import {db} from './db';
 import {balance,ensureSystemAccount,ensureUserLedger,postDoubleEntry,roundUsdAmount} from './ledger';
-import {AccountMode,NotificationType,OrderSide,OrderStatus,OrderType,Prisma} from '@prisma/client';
+import {AccountMode,EntryType,NotificationType,OrderSide,OrderStatus,OrderType,Prisma} from '@prisma/client';
 import {createNotification} from '@/lib/notifications';
 import {assertFreshQuote,assertSellableQuantity,averageEntryPrice,realizedSpotPnl} from '@/lib/trading-policy';
 import {getDemoAiConfig} from '@/lib/demo-ai-config';
+import {availableWalletAmount,getRealWalletReservations,lockRealWalletCurrencies,roundWalletAmount} from '@/lib/real-wallet-reservations';
 
 export type PlaceOrderInput={instrumentId:string;side:OrderSide;type:OrderType;quantity:number;price?:number;stopPrice?:number;expectedPrice:number;observedAt:string};
 
@@ -74,10 +75,221 @@ export async function executeOrderTx(tx:Prisma.TransactionClient,orderId:string,
  return tx.order.findUnique({where:{id:order.id},include:{executions:true,instrument:true}});
 }
 
+export async function executeRealOrderTx(tx:Prisma.TransactionClient,orderId:string,fill:number,fillQuantity?:Prisma.Decimal,specificPositionId?:string){
+ const order=await tx.order.findUnique({where:{id:orderId},include:{instrument:true}});
+ if(!order||order.accountMode!==AccountMode.REAL||(order.status!==OrderStatus.OPEN&&order.status!==OrderStatus.PARTIALLY_FILLED))throw new Error('ORDER_NOT_OPEN');
+ if(order.providerName)throw new Error('EXTERNAL_PROVIDER_ORDER');
+ const instrument=order.instrument;
+ const settlementCurrency=(order.settlementCurrency||instrument.quoteAsset).trim().toUpperCase();
+ const baseAsset=instrument.baseAsset.trim().toUpperCase();
+ if(!settlementCurrency||!baseAsset||settlementCurrency===baseAsset||settlementCurrency!==instrument.quoteAsset.toUpperCase())throw new Error('ORDER_CURRENCY_MISMATCH');
+ if(!instrument.takerFee.isFinite()||instrument.takerFee.lt(0)||instrument.takerFee.gte(1))throw new Error('INSTRUMENT_FEE_INVALID');
+ const remaining=order.quantity.minus(order.filledQuantity);
+ const quantity=fillQuantity??remaining;
+ if(!quantity.isFinite()||quantity.lte(0)||quantity.gt(remaining))throw new Error('INVALID_FILL_QUANTITY');
+ const fillPrice=new Prisma.Decimal(fill);
+ if(!fillPrice.isFinite()||fillPrice.lte(0))throw new Error('INVALID_PRICE');
+ const age=Date.now()-instrument.updatedAt.getTime();
+ if(!Number.isFinite(age)||age < -5_000||age > 30_000)throw new Error('STALE_MARKET_QUOTE');
+ await lockRealWalletCurrencies(tx,order.userId,[settlementCurrency,baseAsset]);
+ const quoteAccount=await tx.ledgerAccount.findUniqueOrThrow({where:{code:`USER:${order.userId}:${AccountMode.REAL}:${settlementCurrency}`}});
+ const baseAccount=await tx.ledgerAccount.findUniqueOrThrow({where:{code:`USER:${order.userId}:${AccountMode.REAL}:${baseAsset}`}});
+ const reservations=await getRealWalletReservations(tx,order.userId,order.side===OrderSide.BUY?settlementCurrency:baseAsset,order.id);
+ const walletBalance=await balance(tx,order.side===OrderSide.BUY?quoteAccount.id:baseAccount.id);
+ const available=availableWalletAmount(walletBalance,reservations);
+ const notional=roundWalletAmount(settlementCurrency,fillPrice.mul(quantity));
+ const fee=roundWalletAmount(settlementCurrency,notional.mul(instrument.takerFee));
+ const required=order.side===OrderSide.BUY?notional.plus(fee):quantity;
+ if(notional.lte(0)||fee.lt(0)||available.lt(required))throw new Error(order.side===OrderSide.BUY?'INSUFFICIENT_REAL_WALLET_COLLATERAL':'INSUFFICIENT_POSITION');
+
+ const executionId=randomUUID();
+ const quoteClearing=await ensureSystemAccount(tx,`SYSTEM:REAL:TRADING_CLEARING:${settlementCurrency}`,`REAL simulated trading clearing ${settlementCurrency}`,settlementCurrency,AccountMode.REAL);
+ const baseClearing=await ensureSystemAccount(tx,`SYSTEM:REAL:TRADING_CLEARING:${baseAsset}`,`REAL simulated trading clearing ${baseAsset}`,baseAsset,AccountMode.REAL);
+ const feeAccount=fee.gt(0)?await ensureSystemAccount(tx,`SYSTEM:REAL:TRADING_FEES:${settlementCurrency}`,`REAL simulated trading fees ${settlementCurrency}`,settlementCurrency,AccountMode.REAL):null;
+ const entries:Prisma.LedgerEntryCreateWithoutTransactionInput[]=[];
+ if(order.side===OrderSide.BUY){
+  entries.push(
+   {account:{connect:{id:quoteAccount.id}},accountMode:AccountMode.REAL,type:EntryType.DEBIT,amount:notional},
+   {account:{connect:{id:quoteClearing.id}},accountMode:AccountMode.REAL,type:EntryType.CREDIT,amount:notional},
+   {account:{connect:{id:baseClearing.id}},accountMode:AccountMode.REAL,type:EntryType.DEBIT,amount:quantity},
+   {account:{connect:{id:baseAccount.id}},accountMode:AccountMode.REAL,type:EntryType.CREDIT,amount:quantity},
+  );
+  if(fee.gt(0)&&feeAccount)entries.push(
+   {account:{connect:{id:quoteAccount.id}},accountMode:AccountMode.REAL,type:EntryType.DEBIT,amount:fee},
+   {account:{connect:{id:feeAccount.id}},accountMode:AccountMode.REAL,type:EntryType.CREDIT,amount:fee},
+  );
+ }else{
+  const netProceeds=notional.minus(fee);
+  if(netProceeds.lte(0))throw new Error('INVALID_NET_PROCEEDS');
+  entries.push(
+   {account:{connect:{id:baseAccount.id}},accountMode:AccountMode.REAL,type:EntryType.DEBIT,amount:quantity},
+   {account:{connect:{id:baseClearing.id}},accountMode:AccountMode.REAL,type:EntryType.CREDIT,amount:quantity},
+   {account:{connect:{id:quoteClearing.id}},accountMode:AccountMode.REAL,type:EntryType.DEBIT,amount:notional},
+   {account:{connect:{id:quoteAccount.id}},accountMode:AccountMode.REAL,type:EntryType.CREDIT,amount:netProceeds},
+  );
+  if(fee.gt(0)&&feeAccount)entries.push(
+   {account:{connect:{id:feeAccount.id}},accountMode:AccountMode.REAL,type:EntryType.CREDIT,amount:fee},
+  );
+ }
+ await tx.ledgerTransaction.create({data:{
+  reference:`REAL:SIMULATED_TRADE:${order.side}:${order.id}:${executionId}`,
+  description:`REAL internal simulated ${order.side.toLowerCase()} ${instrument.symbol} · ${settlementCurrency}`,
+  accountMode:AccountMode.REAL,entries:{create:entries},
+ }});
+
+ if(order.side===OrderSide.BUY){
+  const position=await tx.position.findFirst({where:{userId:order.userId,instrumentId:order.instrumentId,accountMode:AccountMode.REAL,providerName:null,status:'OPEN',side:OrderSide.BUY},orderBy:{openedAt:'asc'}});
+  const basis=notional.plus(fee);
+  if(position){
+   const entryPrice=averageEntryPrice(position.quantity,position.entryPrice,quantity,fillPrice,fee);
+   await tx.position.update({where:{id:position.id},data:{quantity:{increment:quantity},entryPrice,margin:{increment:basis},settlementCurrency}});
+  }else{
+   const entryPrice=averageEntryPrice(new Prisma.Decimal(0),new Prisma.Decimal(0),quantity,fillPrice,fee);
+   await tx.position.create({data:{userId:order.userId,instrumentId:order.instrumentId,accountMode:AccountMode.REAL,side:OrderSide.BUY,quantity,entryPrice,leverage:1,margin:basis,status:'OPEN',settlementCurrency}});
+  }
+ }else{
+  let leftToMatch=quantity;
+  const positions=await tx.position.findMany({where:{userId:order.userId,instrumentId:order.instrumentId,accountMode:AccountMode.REAL,providerName:null,status:'OPEN',side:OrderSide.BUY,OR:[{settlementCurrency},{settlementCurrency:null}],...(specificPositionId?{id:specificPositionId}:{})},orderBy:{openedAt:'asc'}});
+  for(const position of positions){
+   if(leftToMatch.isZero())break;
+   const matched=Prisma.Decimal.min(leftToMatch,position.quantity);
+   if(matched.lte(0))continue;
+   const allocatedFee=fee.mul(matched).div(quantity);
+   const realized=realizedSpotPnl(position.entryPrice,fillPrice,matched,allocatedFee);
+   const left=position.quantity.minus(matched);
+   const basisReduction=position.margin.mul(matched).div(position.quantity);
+   await tx.position.update({where:{id:position.id},data:left.isZero()
+    ?{quantity:0,status:'CLOSED',closedAt:new Date(),margin:0,realizedPnl:{increment:realized},settlementCurrency}
+    :{quantity:left,margin:position.margin.minus(basisReduction),realizedPnl:{increment:realized},settlementCurrency}});
+   leftToMatch=leftToMatch.minus(matched);
+  }
+  if(specificPositionId&&!leftToMatch.isZero())throw new Error('POSITION_NOT_FOUND');
+ }
+
+ await tx.execution.create({data:{id:executionId,orderId:order.id,accountMode:AccountMode.REAL,quantity,price:fillPrice,fee,settlementCurrency}});
+ const filledQuantity=order.filledQuantity.plus(quantity);
+ const averageFillPrice=order.filledQuantity.isZero()?fillPrice:
+  order.averageFillPrice!.mul(order.filledQuantity).plus(fillPrice.mul(quantity)).div(filledQuantity);
+ const status=filledQuantity.eq(order.quantity)?OrderStatus.FILLED:OrderStatus.PARTIALLY_FILLED;
+ const updated=await tx.order.update({where:{id:order.id},data:{
+  filledQuantity,averageFillPrice,fee:{increment:fee},status,settlementCurrency,
+ },include:{executions:true,instrument:true}});
+ await tx.auditLog.create({data:{actorId:order.userId,action:`REAL_SIMULATED_ORDER_${order.side}_FILLED`,entity:'ORDER',entityId:order.id,metadata:{
+  oldState:order.status,newState:status,accountMode:AccountMode.REAL,simulated:true,executionProvider:'AUREVIA_INTERNAL',
+  instrument:instrument.symbol,baseAsset,settlementCurrency,quantity:quantity.toString(),fillPrice:fillPrice.toString(),fee:fee.toString(),
+ } }});
+ await createNotification(tx,{userId:order.userId,type:NotificationType.TRADE,title:`REAL simulated order ${status.toLowerCase().replaceAll('_',' ')}`,message:`Your ${order.side.toLowerCase()} order for ${instrument.symbol} was filled ${quantity.toString()} at ${fillPrice.toString()} ${settlementCurrency} in Aurevia's internal simulated trading engine. No external exchange order was placed.`,dedupeKey:`real-order:${order.id}:${filledQuantity.toString()}`,relatedEntity:'ORDER',relatedId:order.id,actionUrl:'/orders'});
+ return updated;
+}
+
+export async function placeRealOrder(userId:string,input:PlaceOrderInput,idempotencyKey:string,options:{requireExpectedPriceMatch?:boolean}={}){
+ if(!Number.isFinite(input.quantity)||input.quantity<=0||input.quantity>1_000_000_000||new Prisma.Decimal(input.quantity).decimalPlaces()>10)throw new Error('INVALID_QUANTITY');
+ if(!Number.isFinite(input.expectedPrice)||input.expectedPrice<=0)throw new Error('INVALID_PRICE');
+ assertFreshQuote(input.observedAt);
+ if(input.type===OrderType.LIMIT&&(!Number.isFinite(input.price)||Number(input.price)<=0))throw new Error('LIMIT_PRICE_REQUIRED');
+ if(input.type===OrderType.STOP&&(!Number.isFinite(input.stopPrice)||Number(input.stopPrice)<=0))throw new Error('STOP_PRICE_REQUIRED');
+ const create=()=>db.$transaction(async tx=>{
+  const prior=await tx.order.findUnique({where:{idempotencyKey},include:{executions:true,instrument:true}});
+  if(prior){
+   if(prior.providerName||!matchesOrder(prior,userId,AccountMode.REAL,input))throw new Error('IDEMPOTENCY_KEY_REUSED');
+   return prior;
+  }
+  const user=await tx.user.findUnique({where:{id:userId},select:{id:true,accountMode:true,status:true,accountRestricted:true,role:true,bankAccount:{select:{status:true}}}});
+  if(!user||user.role!=='USER'||user.status!=='ACTIVE'||user.accountMode!==AccountMode.REAL||user.accountRestricted)throw new Error('ORDER_ACCOUNT_UNAVAILABLE');
+  if(user.bankAccount&&(user.bankAccount.status==='FROZEN'||user.bankAccount.status==='CLOSED'))throw new Error('REAL_BANK_ACCOUNT_UNAVAILABLE');
+  const instrument=await tx.instrument.findUnique({where:{id:input.instrumentId}});
+  if(!instrument||!instrument.enabled)throw new Error('INSTRUMENT_UNAVAILABLE');
+  if(!instrument.takerFee.isFinite()||instrument.takerFee.lt(0)||instrument.takerFee.gte(1))throw new Error('INSTRUMENT_FEE_INVALID');
+  const settlementCurrency=instrument.quoteAsset.trim().toUpperCase();
+  const baseAsset=instrument.baseAsset.trim().toUpperCase();
+  if(!/^[A-Z0-9]{2,8}$/.test(settlementCurrency)||!/^[A-Z0-9]{2,8}$/.test(baseAsset)||settlementCurrency===baseAsset)throw new Error('INSTRUMENT_CURRENCY_UNAVAILABLE');
+  const age=Date.now()-instrument.updatedAt.getTime();
+  if(!Number.isFinite(age)||age < -5_000||age > 30_000)throw new Error('STALE_MARKET_QUOTE');
+  if(options.requireExpectedPriceMatch&&!instrument.price.equals(input.expectedPrice))throw new Error('STALE_MARKET_QUOTE');
+  const market=Number(instrument.price);
+  const reservePrice=input.type===OrderType.LIMIT?new Prisma.Decimal(input.price!):
+   input.type===OrderType.STOP?new Prisma.Decimal(input.stopPrice!):instrument.price;
+  const quantity=new Prisma.Decimal(input.quantity);
+  await lockRealWalletCurrencies(tx,userId,[settlementCurrency,baseAsset]);
+  const quoteAccount=await tx.ledgerAccount.findUniqueOrThrow({where:{code:`USER:${userId}:${AccountMode.REAL}:${settlementCurrency}`}});
+  const baseAccount=await tx.ledgerAccount.findUniqueOrThrow({where:{code:`USER:${userId}:${AccountMode.REAL}:${baseAsset}`}});
+  if(input.side===OrderSide.BUY){
+   const reservations=await getRealWalletReservations(tx,userId,settlementCurrency);
+   const walletBalance=await balance(tx,quoteAccount.id);
+   const available=availableWalletAmount(walletBalance,reservations);
+   const reserveNotional=roundWalletAmount(settlementCurrency,quantity.mul(reservePrice));
+   const reserveFee=roundWalletAmount(settlementCurrency,reserveNotional.mul(instrument.takerFee));
+   if(available.lt(reserveNotional.plus(reserveFee)))throw new Error('INSUFFICIENT_REAL_WALLET_COLLATERAL');
+  }else{
+   const reservations=await getRealWalletReservations(tx,userId,baseAsset);
+   const assetBalance=await balance(tx,baseAccount.id);
+   const available=availableWalletAmount(assetBalance,reservations);
+   if(available.lt(quantity))throw new Error('INSUFFICIENT_POSITION');
+  }
+  const reservedAmount=input.side===OrderSide.BUY
+   ?roundWalletAmount(settlementCurrency,quantity.mul(reservePrice).plus(roundWalletAmount(settlementCurrency,quantity.mul(reservePrice).mul(instrument.takerFee))))
+   :null;
+  const order=await tx.order.create({data:{
+   userId,instrumentId:instrument.id,accountMode:AccountMode.REAL,side:input.side,type:input.type,
+   quantity,price:input.price,stopPrice:input.stopPrice,idempotencyKey,status:OrderStatus.OPEN,
+   providerReservedAmount:reservedAmount,settlementCurrency,
+  },include:{executions:true,instrument:true}});
+  await tx.auditLog.create({data:{actorId:userId,action:'REAL_SIMULATED_ORDER_SUBMITTED',entity:'ORDER',entityId:order.id,metadata:{
+   newState:OrderStatus.OPEN,accountMode:AccountMode.REAL,simulated:true,executionProvider:'AUREVIA_INTERNAL',
+   instrument:instrument.symbol,baseAsset,settlementCurrency,side:input.side,type:input.type,
+   quantity:order.quantity.toString(),expectedPrice:input.expectedPrice,observedAt:input.observedAt,
+   reservedAmount:reservedAmount?.toString()??null,reservationCurrency:input.side===OrderSide.BUY?settlementCurrency:baseAsset,
+  }}});
+  await createNotification(tx,{userId,type:NotificationType.TRADE,title:'REAL simulated order submitted',message:`Your ${input.side.toLowerCase()} ${input.type.toLowerCase()} order for ${instrument.symbol} was submitted to Aurevia's internal simulated trading engine. No external exchange order will be placed.`,dedupeKey:`real-order:${order.id}:submitted`,relatedEntity:'ORDER',relatedId:order.id,actionUrl:'/orders'});
+  if(!executable(input.type,input.side,market,input.price,input.stopPrice))return order;
+  return executeRealOrderTx(tx,order.id,market,quantity);
+ },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable,maxWait:5_000,timeout:15_000});
+ try{return await create();}
+ catch(error){
+  if(error&&typeof error==='object'&&'code'in error&&['P2002','P2034'].includes(String(error.code))){
+   const prior=await db.order.findUnique({where:{idempotencyKey},include:{executions:true,instrument:true}});
+   if(prior&&!prior.providerName&&matchesOrder(prior,userId,AccountMode.REAL,input))return prior;
+   if(prior)throw new Error('IDEMPOTENCY_KEY_REUSED');
+  }
+  throw error;
+ }
+}
+
 export async function closeSimulatedPositionTx(tx:Prisma.TransactionClient,userId:string,positionId:string,actorId=userId,accountMode?:AccountMode){
+ const realCloseKey=`REAL:POSITION_CLOSE:${positionId}`;
  const position=await tx.position.findFirst({where:{id:positionId,userId,status:'OPEN',...(accountMode?{accountMode}:{})},include:{instrument:true}});
- if(!position)throw new Error('POSITION_NOT_FOUND');
+ if(!position){
+  if(accountMode!==AccountMode.DEMO){
+   const previousRealClose=await tx.order.findUnique({where:{idempotencyKey:realCloseKey}});
+   if(previousRealClose){
+    if(previousRealClose.userId!==userId||previousRealClose.accountMode!==AccountMode.REAL||previousRealClose.providerName)throw new Error('IDEMPOTENCY_KEY_REUSED');
+    return tx.position.findUniqueOrThrow({where:{id:positionId}});
+   }
+  }
+  throw new Error('POSITION_NOT_FOUND');
+ }
  if(position.providerName==='alpaca-paper')throw new Error('PROVIDER_POSITION_REQUIRES_PROVIDER_ORDER');
+ if(position.accountMode===AccountMode.REAL){
+  if(position.side!==OrderSide.BUY)throw new Error('UNSUPPORTED_REAL_POSITION_SIDE');
+  const previousRealClose=await tx.order.findUnique({where:{idempotencyKey:realCloseKey}});
+  if(previousRealClose){
+   if(previousRealClose.userId!==userId||previousRealClose.accountMode!==AccountMode.REAL||previousRealClose.providerName)throw new Error('IDEMPOTENCY_KEY_REUSED');
+   return tx.position.findUniqueOrThrow({where:{id:positionId}});
+  }
+  assertFreshQuote(position.instrument.updatedAt);
+  const settlementCurrency=(position.settlementCurrency||position.instrument.quoteAsset).trim().toUpperCase();
+  const closingOrder=await tx.order.create({data:{
+   userId,instrumentId:position.instrumentId,accountMode:AccountMode.REAL,side:OrderSide.SELL,type:OrderType.MARKET,
+   status:OrderStatus.OPEN,quantity:position.quantity,filledQuantity:0,idempotencyKey:realCloseKey,settlementCurrency,
+  }});
+  await executeRealOrderTx(tx,closingOrder.id,position.instrument.price.toNumber(),position.quantity,position.id);
+  const closed=await tx.position.findUniqueOrThrow({where:{id:position.id}});
+  await tx.auditLog.create({data:{actorId,action:`REAL_SIMULATED_POSITION_${actorId===userId?'CLOSED':'ADMIN_CLOSED'}`,entity:'POSITION',entityId:position.id,metadata:{
+   accountMode:AccountMode.REAL,simulated:true,symbol:position.instrument.symbol,quantity:position.quantity.toString(),
+   exitPrice:position.instrument.price.toString(),settlementCurrency,closingOrderId:closingOrder.id,
+  }}});
+  return closed;
+ }
  const price=position.instrument.price;
  if(price.lte(0))throw new Error('INVALID_PRICE');
  const userAccount=await ensureUserLedger(tx,userId,position.accountMode);
@@ -121,6 +333,7 @@ export async function closeSimulatedPositionTx(tx:Prisma.TransactionClient,userI
 }
 
 export async function placeOrder(userId:string,accountMode:AccountMode,input:PlaceOrderInput,idempotencyKey:string){
+ if(accountMode===AccountMode.REAL)return placeRealOrder(userId,input,idempotencyKey,{requireExpectedPriceMatch:true});
  if(!Number.isFinite(input.quantity)||input.quantity<=0||input.quantity>1_000_000_000)throw new Error('INVALID_QUANTITY');
  if(!Number.isFinite(input.expectedPrice)||input.expectedPrice<=0)throw new Error('INVALID_PRICE');
  assertFreshQuote(input.observedAt);
@@ -168,11 +381,11 @@ export async function placeOrder(userId:string,accountMode:AccountMode,input:Pla
 }
 
 export async function processOpenOrders(){
- const orders=await db.order.findMany({where:{status:OrderStatus.OPEN,providerName:null,accountMode:{in:[AccountMode.DEMO,AccountMode.REAL]}},include:{instrument:true},take:500,orderBy:{createdAt:'asc'}});
+ const orders=await db.order.findMany({where:{status:{in:[OrderStatus.OPEN,OrderStatus.PARTIALLY_FILLED]},providerName:null,accountMode:{in:[AccountMode.DEMO,AccountMode.REAL]}},include:{instrument:true},take:500,orderBy:{createdAt:'asc'}});
  for(const o of orders){
    const p=Number(o.instrument.price); const hit=executable(o.type,o.side,p,o.price===null?undefined:Number(o.price),o.stopPrice===null?undefined:Number(o.stopPrice));
    if(!hit)continue;
-  try{await db.$transaction(tx=>executeOrderTx(tx,o.id,p),{isolationLevel:Prisma.TransactionIsolationLevel.Serializable,maxWait:5_000,timeout:15_000});}
-  catch(e){if(e instanceof Error&&['INSUFFICIENT_SIMULATED_BALANCE','INSUFFICIENT_POSITION','ORDER_NOT_OPEN','ORDER_FILLED'].includes(e.message))await db.$transaction(async tx=>{const rejected=await tx.order.updateMany({where:{id:o.id,status:OrderStatus.OPEN},data:{status:OrderStatus.REJECTED}});if(rejected.count){await tx.auditLog.create({data:{actorId:o.userId,action:`${o.accountMode}_SIMULATED_ORDER_REJECTED`,entity:'ORDER',entityId:o.id,metadata:{oldState:OrderStatus.OPEN,newState:OrderStatus.REJECTED,accountMode:o.accountMode,simulated:true,reason:e.message}}});await createNotification(tx,{userId:o.userId,type:NotificationType.TRADE,title:`${o.accountMode} order rejected`,message:`Your ${o.side.toLowerCase()} order for ${o.instrument.symbol} was rejected in the ${o.accountMode==='DEMO'?'DEMO':'PAPER'} account.`,dedupeKey:`order:${o.id}:rejected`,relatedEntity:'ORDER',relatedId:o.id,actionUrl:'/trade'});}});}
+  try{await db.$transaction(tx=>o.accountMode===AccountMode.REAL?executeRealOrderTx(tx,o.id,p):executeOrderTx(tx,o.id,p),{isolationLevel:Prisma.TransactionIsolationLevel.Serializable,maxWait:5_000,timeout:15_000});}
+  catch(e){if(e instanceof Error&&['INSUFFICIENT_SIMULATED_BALANCE','INSUFFICIENT_REAL_WALLET_COLLATERAL','INSUFFICIENT_POSITION','ORDER_NOT_OPEN','ORDER_FILLED'].includes(e.message))await db.$transaction(async tx=>{const rejected=await tx.order.updateMany({where:{id:o.id,status:{in:[OrderStatus.OPEN,OrderStatus.PARTIALLY_FILLED]}},data:{status:OrderStatus.REJECTED}});if(rejected.count){await tx.auditLog.create({data:{actorId:o.userId,action:`${o.accountMode}_SIMULATED_ORDER_REJECTED`,entity:'ORDER',entityId:o.id,metadata:{oldState:o.status,newState:OrderStatus.REJECTED,accountMode:o.accountMode,simulated:true,reason:e.message}}});await createNotification(tx,{userId:o.userId,type:NotificationType.TRADE,title:`${o.accountMode} order rejected`,message:`Your ${o.side.toLowerCase()} order for ${o.instrument.symbol} was rejected in the ${o.accountMode===AccountMode.DEMO?'DEMO':'REAL'} account. Any completed partial fills remain recorded in your Aurevia wallet.`,dedupeKey:`order:${o.id}:rejected`,relatedEntity:'ORDER',relatedId:o.id,actionUrl:'/trade'});}});}
  }
 }

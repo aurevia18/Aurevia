@@ -15,6 +15,7 @@ import {useAccountTier} from '@/components/useAccountTier';
 import {useLocale} from '@/lib/i18n-context';
 import SecurityCenter from '@/components/SecurityCenter';
 import {removeCurrentBrowserPushSubscription} from '@/lib/push-browser';
+import AccountContactVerification from '@/components/AccountContactVerification';
 
 type Profile={id:string;aureviaExchangeId:string|null;email:string;name:string|null;firstName:string;lastName:string;label:string;phone:string|null;phoneVerified:boolean;country:string|null;address:string|null;hasAvatar:boolean;twoFactorEnabled:boolean;twoFactorAvailable:boolean;role:'USER'|'ADMIN';status:string;kycStatus:string;profileLocked:boolean;profileLockAt:string|null};
 
@@ -151,7 +152,7 @@ export default function Settings(){
 				<button type="button" role="tab" aria-selected={section==='preferences'} className={section==='preferences'?'is-active':''} onClick={()=>selectSection('preferences')}><Bell size={16}/>{translate('preferences')}</button>
 			</nav>
 			<div className="settings-content">
-				{section==='profile'&&<section className="account-panel card p-5" role="tabpanel"><div className="account-panel-title"><div><h2>{translate('personalProfile')}</h2><p className="account-panel-subtitle">{translate('profileDetailsSubtitle')}</p></div><UserRound size={18} className="gold" aria-hidden="true"/></div>
+				{section==='profile'&&<><section className="account-panel card p-5" role="tabpanel"><div className="account-panel-title"><div><h2>{translate('personalProfile')}</h2><p className="account-panel-subtitle">{translate('profileDetailsSubtitle')}</p></div><UserRound size={18} className="gold" aria-hidden="true"/></div>
 					{profile&&<form onSubmit={save} className="account-form-grid">
 						{profile.profileLocked&&<div className="account-callout md:col-span-2" role="status"><ShieldCheck size={16}/><span>Verified profile details are locked as of {profile.profileLockAt?new Date(profile.profileLockAt).toLocaleDateString():''}. Contact support to request a correction.</span></div>}
 						{profile.aureviaExchangeId&&<AureviaExchangeId id={profile.aureviaExchangeId} className="md:col-span-2"/>}
@@ -160,14 +161,13 @@ export default function Settings(){
 						<label className="account-label">{translate('firstName')}<input className="input" autoComplete="given-name" required maxLength={60} value={profile.firstName} disabled={profile.profileLocked} onChange={event=>setProfile({...profile,firstName:event.target.value})}/></label>
 						<label className="account-label">{translate('lastName')}<input className="input" autoComplete="family-name" maxLength={60} value={profile.lastName} disabled={profile.profileLocked} onChange={event=>setProfile({...profile,lastName:event.target.value})}/></label>
 						<label className="account-label">{translate('phone')}<input className="input" type="tel" autoComplete="tel" maxLength={40} value={profile.phone||''} disabled={profile.profileLocked} onChange={event=>setProfile({...profile,phone:event.target.value})}/></label>
-						<p className="muted text-xs">{translate('phoneVerification')}: {profile.phoneVerified?translate('verifiedThroughSms'):translate('notVerified')}</p>
 						<label className="account-label">{translate('country')}<input className="input" autoComplete="country-name" required minLength={2} maxLength={80} value={profile.country||''} disabled={profile.profileLocked} onChange={event=>setProfile({...profile,country:event.target.value})}/></label>
 						<label className="account-label md:col-span-2">{translate('addressOptional')}<input className="input" autoComplete="street-address" maxLength={500} value={profile.address||''} disabled={profile.profileLocked} onChange={event=>setProfile({...profile,address:event.target.value})}/></label>
 						<div className="account-callout md:col-span-2"><ShieldCheck size={16}/><span>{translate('verificationStatus')}: <b>{verification}</b>. {translate('reviewYourDetails')} <a className="gold" href="/kyc">{translate('verificationPage')}</a>.</span></div>
 						<div className="md:col-span-2"><button type="submit" className="btn bg-gold text-black" disabled={profile.profileLocked||saving||loading} aria-busy={saving}>{saving?translate('saving'):translate('saveProfile')}</button>{message&&<p className="mt-3 text-sm text-profit" role="status">{message}</p>}</div>
 					</form>}
 					{loading&&!profile&&<div className="account-empty" role="status">{translate('loadingProfile')}</div>}
-				</section>}
+				</section>{profile&&<AccountContactVerification country={profile.country}/>}</>}
 				{section==='security'&&<div role="tabpanel"><SecurityCenter email={profile?.email||session?.user?.email||''} twoFactorEnabled={profile?.twoFactorEnabled||false} twoFactorAvailable={profile?.twoFactorAvailable||false}/>
 					<section className="account-panel card mt-4 p-5" aria-labelledby="delete-account-heading"><div className="flex items-center gap-2"><Trash2 size={17} className="text-loss"/><h3 id="delete-account-heading" className="font-semibold">Delete My Account</h3></div><p className="mt-2 max-w-2xl text-sm muted">This permanently deletes your account and its related records and uploaded files. Deletion is blocked while you have pending or approved funding requests or a non-zero balance. Re-enter your current password and type DELETE to confirm.</p>
 						{!showDeleteForm?<button type="button" className="btn mt-4 bg-loss text-black" onClick={()=>setShowDeleteForm(true)}>Delete My Account</button>:<form className="mt-4 grid max-w-xl gap-3" onSubmit={event=>void deleteAccount(event)}>

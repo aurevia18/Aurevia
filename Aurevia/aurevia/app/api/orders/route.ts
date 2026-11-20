@@ -7,7 +7,7 @@ import {jsonSafe} from '@/lib/serializers';
 import {NotificationType} from '@prisma/client';
 import {createNotification} from '@/lib/notifications';
 import {AccountMode} from '@prisma/client';
-import {cancelAlpacaPaperOrder,submitAlpacaPaperOrder,ALPACA_PAPER_PROVIDER,AlpacaPaperOrderError} from '@/lib/alpaca-paper-orders';
+import {cancelAlpacaPaperOrder,ALPACA_PAPER_PROVIDER,AlpacaPaperOrderError} from '@/lib/alpaca-paper-orders';
 import {rateLimit} from '@/lib/rate-limit';
 
 const schema=z.object({instrumentId:z.string().min(1),accountMode:z.nativeEnum(AccountMode).optional(),side:z.enum(['BUY','SELL']),type:z.enum(['MARKET','LIMIT','STOP']),quantity:z.number().positive().max(1_000_000_000),price:z.number().positive().optional(),stopPrice:z.number().positive().optional(),expectedPrice:z.number().positive(),observedAt:z.string().datetime()});
@@ -51,9 +51,7 @@ export async function POST(request:Request){
 		if(!currentUser||currentUser.status!=='ACTIVE'||currentUser.role!=='USER')return NextResponse.json({error:'This account cannot submit orders.'},{status:403});
 		if(input.accountMode&&input.accountMode!==currentUser.accountMode)return NextResponse.json({error:'Order account mode does not match your active account.'},{status:409});
 		rateLimit(`order-submit:${user.id}`,10,60_000);
-		const order=currentUser.accountMode===AccountMode.REAL
-			?await submitAlpacaPaperOrder(user.id,input,idempotencyKey)
-			:await placeOrder(user.id,currentUser.accountMode,input,idempotencyKey);
+		const order=await placeOrder(user.id,currentUser.accountMode,input,idempotencyKey);
 		if(!order)throw new Error('ORDER_SUBMISSION_RETURNED_NO_ORDER');
 		return NextResponse.json(jsonSafe(customerOrder(order)),{status:201});
 	}catch(error){
@@ -61,8 +59,11 @@ export async function POST(request:Request){
 		if(error instanceof AlpacaPaperOrderError)return NextResponse.json({error:paperOrderMessage(error.code)},{status:error.httpStatus});
 		if(error instanceof Error&&error.message==='RATE_LIMITED')return NextResponse.json({error:'Order requests are temporarily limited. Try again shortly.'},{status:429});
 		if(error instanceof Error&&error.message==='DEMO_POSITION_LIMIT')return NextResponse.json({error:'Order exceeds the configured DEMO maximum position size.'},{status:409});
-		if(error instanceof Error&&error.message==='INSUFFICIENT_SIMULATED_BALANCE')return NextResponse.json({error:'Insufficient available account cash for this order, including fees and execution costs.'},{status:409});
-		if(error instanceof Error&&error.message==='INSUFFICIENT_POSITION')return NextResponse.json({error:'The sell quantity exceeds your available DEMO position.'},{status:409});
+		if(error instanceof Error&&error.message==='INSUFFICIENT_SIMULATED_BALANCE')return NextResponse.json({error:'Insufficient available DEMO account cash for this order, including fees and execution costs.'},{status:409});
+		if(error instanceof Error&&error.message==='INSUFFICIENT_REAL_WALLET_COLLATERAL')return NextResponse.json({error:'Your REAL Aurevia Wallet does not have enough available funds in this order’s settlement currency after fees and existing reservations.'},{status:409});
+		if(error instanceof Error&&error.message==='INSUFFICIENT_POSITION')return NextResponse.json({error:'The sell quantity exceeds the available position or wallet asset balance.'},{status:409});
+		if(error instanceof Error&&error.message==='INSTRUMENT_CURRENCY_UNAVAILABLE')return NextResponse.json({error:'This instrument does not have a supported base asset and settlement currency.'},{status:409});
+		if(error instanceof Error&&error.message==='ORDER_CURRENCY_MISMATCH')return NextResponse.json({error:'The instrument settlement currency changed. Refresh the instrument and try again.'},{status:409});
 		if(error instanceof Error&&error.message==='STALE_MARKET_QUOTE')return NextResponse.json({error:'The market quote is stale. Refresh market data before submitting this order.'},{status:503});
 		if(error instanceof Error&&error.message==='ACCOUNT_MODE_CHANGED')return NextResponse.json({error:'Your active account mode changed. Refresh and submit the order again.'},{status:409});
 		if(error instanceof Error&&error.message==='ORDER_ACCOUNT_UNAVAILABLE')return NextResponse.json({error:'This account cannot submit orders.'},{status:403});
@@ -104,9 +105,9 @@ export async function DELETE(request:Request){
 			}
 		}
 		const cancelled=await db.$transaction(async tx=>{
-			const order=await tx.order.findFirst({where:{id:body.orderId,userId:user.id,accountMode:currentUser.accountMode,status:'OPEN'},include:{instrument:true}});
+			const order=await tx.order.findFirst({where:{id:body.orderId,userId:user.id,accountMode:currentUser.accountMode,status:{in:['OPEN','PARTIALLY_FILLED']}},include:{instrument:true}});
 			if(!order)return false;
-			const changed=await tx.order.updateMany({where:{id:order.id,status:'OPEN'},data:{status:'CANCELLED'}});
+			const changed=await tx.order.updateMany({where:{id:order.id,status:{in:['OPEN','PARTIALLY_FILLED']}},data:{status:'CANCELLED'}});
 			if(!changed.count)return false;
 			await tx.auditLog.create({data:{actorId:user.id,action:`${currentUser.accountMode}_SIMULATED_ORDER_CANCELLED`,entity:'ORDER',entityId:order.id,metadata:{oldState:'OPEN',newState:'CANCELLED',accountMode:currentUser.accountMode,simulated:true,instrument:order.instrument.symbol}}});
 			await createNotification(tx,{userId:user.id,type:NotificationType.TRADE,title:`${currentUser.accountMode} order cancelled`,message:currentUser.accountMode===AccountMode.REAL?`Your REAL order for ${order.instrument.symbol} was cancelled. Any fills already recorded remain in your Aurevia wallet and holdings.`:`Your order for ${order.instrument.symbol} was cancelled.`,dedupeKey:`order:${order.id}:cancelled`,relatedEntity:'ORDER',relatedId:order.id,actionUrl:'/trade'});

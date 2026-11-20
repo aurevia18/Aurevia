@@ -1,13 +1,15 @@
 import {randomBytes} from 'node:crypto';
 import {defineConfig,devices} from '@playwright/test';
 import {loadEnvConfig} from '@next/env';
+import {isolateExternalProviderEnvironment} from './tests/e2e/isolate-provider-environment.mjs';
 
 const configuredE2eDatabaseUrl=process.env.AUREVIA_E2E_DATABASE_URL;
 const configuredE2eDirectUrl=process.env.AUREVIA_E2E_DIRECT_URL;
 for(const name of ['DATABASE_URL','DIRECT_URL'])delete process.env[name];
-loadEnvConfig(process.cwd(),false,undefined,true);
+loadEnvConfig(process.cwd(),false);
 if(configuredE2eDatabaseUrl)process.env.AUREVIA_E2E_DATABASE_URL=configuredE2eDatabaseUrl;
 if(configuredE2eDirectUrl)process.env.AUREVIA_E2E_DIRECT_URL=configuredE2eDirectUrl;
+isolateExternalProviderEnvironment(process.env);
 function isolatedDatabaseTarget(name:string){
 	const value=process.env[name];
 	if(!value)throw new Error(`Refusing to start Playwright: ${name} is not set.`);
@@ -20,6 +22,16 @@ function isolatedDatabaseTarget(name:string){
 	}
 	return `${parsed.hostname}:${parsed.port||'5432'}/${databaseName}`;
 }
+function isolatedHttpOrigin(name:string,fallback:string){
+	const value=process.env[name]||fallback;
+	let parsed:URL;
+	try{parsed=new URL(value)}catch{throw new Error(`Refusing to start Playwright: ${name} is not a valid URL.`)}
+	if(parsed.protocol!=='http:'||!['localhost','127.0.0.1','[::1]'].includes(parsed.hostname)
+		||parsed.username||parsed.password||parsed.pathname!=='/'||parsed.search||parsed.hash){
+		throw new Error(`Refusing to start Playwright: ${name} must be a loopback HTTP origin.`);
+	}
+	return parsed.origin;
+}
 const e2eDatabaseUrl=process.env.AUREVIA_E2E_DATABASE_URL;
 const e2eDirectUrl=process.env.AUREVIA_E2E_DIRECT_URL;
 if(isolatedDatabaseTarget('AUREVIA_E2E_DATABASE_URL')!==isolatedDatabaseTarget('AUREVIA_E2E_DIRECT_URL')){
@@ -29,8 +41,9 @@ process.env.DATABASE_URL=e2eDatabaseUrl;
 process.env.DIRECT_URL=e2eDirectUrl;
 const appPort=Number(process.env.AUREVIA_E2E_APP_PORT||4310);
 const providerPort=Number(process.env.AUREVIA_E2E_PROVIDER_PORT||4311);
-const baseURL=process.env.AUREVIA_E2E_APP_URL||`http://127.0.0.1:${appPort}`;
-const providerURL=process.env.AUREVIA_E2E_PROVIDER_URL||`http://127.0.0.1:${providerPort}`;
+const baseURL=isolatedHttpOrigin('AUREVIA_E2E_APP_URL',`http://127.0.0.1:${appPort}`);
+const providerURL=isolatedHttpOrigin('AUREVIA_E2E_PROVIDER_URL',`http://127.0.0.1:${providerPort}`);
+if(baseURL===providerURL)throw new Error('Refusing to start Playwright: the app and mock provider must use separate loopback origins.');
 const testSecret=randomBytes(32).toString('hex');
 const browserDevices={
 	chromium:devices['Desktop Chrome'],
@@ -114,6 +127,7 @@ export default defineConfig({
 				NEXT_PUBLIC_SUPABASE_URL:'',
 				NEXT_PUBLIC_SUPABASE_ANON_KEY:'',
 				REAL_EXECUTION_ENABLED:'false',
+				ALPACA_PAPER_ORDERS_ENABLED:'false',
 				ALPACA_PROVIDER:'',
 				ALPACA_TRADING_BASE_URL:'',
 				ALPACA_API_KEY:'',
@@ -129,6 +143,24 @@ export default defineConfig({
 				PAYMENT_API_URL:'',
 				PAYMENT_API_KEY:'',
 				PAYMENT_WEBHOOK_SECRET:'',
+				SMTP_HOST:'',
+				SMTP_PORT:'',
+				SMTP_USER:'',
+				SMTP_PASSWORD:'',
+				SMTP_FROM:'',
+				VERIFICATION_EMAIL_API_URL:'',
+				VERIFICATION_EMAIL_API_KEY:'',
+				VERIFICATION_SMS_API_URL:'',
+				VERIFICATION_SMS_API_KEY:'',
+				TWILIO_ACCOUNT_SID:'',
+				TWILIO_AUTH_TOKEN:'',
+				TWILIO_VERIFY_SERVICE_SID:'',
+				OPENAI_API_KEY:'',
+				OPENROUTER_API_KEY:'',
+				GEMINI_API_KEY:'',
+				GROQ_API_KEY:'',
+				GNEWS_API_KEY:'',
+				AUREVIA_GNEWS_ALLOW_PRODUCTION:'false',
 			},
 		},
 	],

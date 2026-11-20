@@ -30,6 +30,7 @@ function transaction(overrides:Record<string,unknown>={}){
 		pushSubscription:{deleteMany:vi.fn().mockResolvedValue({count:0})},
 		pushPreference:{deleteMany:vi.fn().mockResolvedValue({count:0})},
 		kycEmailOutbox:{deleteMany:vi.fn().mockResolvedValue({count:0})},
+		withdrawalApprovalSmsOutbox:{deleteMany:vi.fn().mockResolvedValue({count:0})},
 		activityVisibilityPreference:{deleteMany:vi.fn().mockResolvedValue({count:0})},
 		securitySession:{updateMany:vi.fn().mockResolvedValue({count:0})},
 		twoFactorEnrollment:{deleteMany:vi.fn().mockResolvedValue({count:0})},
@@ -60,6 +61,7 @@ describe('safe permanent account deactivation',()=>{
 		expect(tx.kycDocument).toHaveProperty('count');
 		expect(tx.taxCaseDocument).toHaveProperty('count');
 		expect(tx.notification.deleteMany).toHaveBeenCalledWith({where:{userId:'user-1'}});
+		expect(tx.withdrawalApprovalSmsOutbox.deleteMany).toHaveBeenCalledWith({where:{userId:'user-1'}});
 		expect(tx.auditLog.create).toHaveBeenCalledWith({data:expect.objectContaining({
 			actorId:'admin-1',action:'ADMIN_ACCOUNT_PERMANENTLY_DELETED',entity:'USER',entityId:'user-1',
 			metadata:expect.objectContaining({reason:deletionInput.reason,accountRecordRetained:true,financialAndRegulatoryRecordsRetained:true}),

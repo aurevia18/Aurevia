@@ -16,6 +16,7 @@ import {decryptWithdrawalDestination} from '@/lib/withdrawal-destinations';
 import {rateLimit} from '@/lib/rate-limit';
 import {normalizeBitcoinWithdrawalSubmission} from '@/lib/bitcoin-withdrawal-submission';
 import {calculateWithdrawalAmounts,getWithdrawalEligibilityIssue,MAX_REAL_WITHDRAWAL_USD,MIN_REAL_WITHDRAWAL_USD,REQUIRED_REAL_WITHDRAWAL_RESERVE_USD,WITHDRAWAL_COMMISSION_PERCENT} from '@/lib/withdrawal-fee';
+import {availableWalletAmount,getRealWalletReservations,lockRealWalletCurrencies} from '@/lib/real-wallet-reservations';
 
 const schema=z.object({
 	type:z.nativeEnum(FundingType),
@@ -59,8 +60,23 @@ export async function GET(){
 				withdrawalDestinationSnapshot:{select:{nickname:true,countryCode:true,network:true,asset:true,maskedLabel:true}},
 			}}),
 		]);
-		const balances=await Promise.all(accounts.map(async account=>({currency:account.currency,balance:await balance(db,account.id,account.currency)})));
-		const usdBalance=balances.find(item=>item.currency==='USD')?.balance??null;
+		const balances=await Promise.all(accounts.map(async account=>{
+			const [walletBalance,reservations]=await Promise.all([
+				balance(db,account.id,account.currency),
+				getRealWalletReservations(db,user.id,account.currency),
+			]);
+			const availableBalance=availableWalletAmount(walletBalance,reservations);
+			return {
+				currency:account.currency,
+				balance:walletBalance,
+				availableBalance,
+				reservedBalance:walletBalance.minus(availableBalance),
+				reservedBuyFunds:reservations.buy,
+				reservedSellAssets:reservations.sell,
+				reservedWithdrawals:reservations.withdrawals,
+			};
+		}));
+		const usdBalance=balances.find(item=>item.currency.toUpperCase()==='USD')?.balance??null;
 		const accountIds=accounts.map(account=>account.id);
 		const usdAccountIds=accounts.filter(account=>account.currency.toUpperCase()==='USD').map(account=>account.id);
 		const [withdrawableBalance,adminLedgerTransactions,tradingTransactions,approvals]=await Promise.all([
@@ -81,6 +97,11 @@ export async function GET(){
 			}):Promise.resolve([]),
 			transactions.length?db.auditLog.findMany({where:{entity:'FUNDING',entityId:{in:transactions.map(transaction=>transaction.id)},action:{in:['FUNDING_APPROVED','BTC_DEPOSIT_APPROVED','WITHDRAWAL_APPROVE']}},select:{entityId:true,createdAt:true,metadata:true,actor:{select:{name:true,email:true}}},orderBy:{createdAt:'desc'}}):Promise.resolve([]),
 		]);
+		const balanceDetails=balances.map(item=>({
+			...item,
+			withdrawableBalance:item.currency.toUpperCase()==='USD'?withdrawableBalance:null,
+			withdrawalSupported:item.currency.toUpperCase()==='USD',
+		}));
 		const adminLedgerReceipts=adminLedgerTransactions.flatMap(transaction=>{
 			const entry=transaction.entries[0];
 			return entry?[{id:transaction.id,reference:transaction.reference,description:transaction.description,type:entry.type,amount:entry.amount,currency:entry.account.currency,createdAt:transaction.createdAt}]:[];
@@ -99,7 +120,7 @@ export async function GET(){
 			const approvedFromAudit=Boolean(approval)&&(transaction.status===FundingStatus.PENDING||transaction.status===FundingStatus.PENDING_REVIEW);
 			return {...transaction,...(approvedFromAudit?{status:FundingStatus.APPROVED,reviewedAt:transaction.reviewedAt||approval.reviewedAt}:{}),withdrawalDestination:withdrawalDestinationSnapshot||transaction.withdrawalDestination,hasReceipt:!!receiptKey,...(approval||{})};
 		});
-		return NextResponse.json(jsonSafe({accountMode:currentUser.accountMode,aureviaExchangeId:currentUser.aureviaExchangeId,balance:usdBalance,withdrawableBalance,balances,transactions:safeTransactions,adminLedgerReceipts,tradingTransactions:safeTradingTransactions}),{headers:{'Cache-Control':'private, no-store'}});
+		return NextResponse.json(jsonSafe({accountMode:currentUser.accountMode,aureviaExchangeId:currentUser.aureviaExchangeId,balance:usdBalance,withdrawableBalance,balances:balanceDetails,transactions:safeTransactions,adminLedgerReceipts,tradingTransactions:safeTradingTransactions}),{headers:{'Cache-Control':'private, no-store'}});
 	}catch(error){
 		if(error instanceof Error&&error.message==='UNAUTHORIZED')return NextResponse.json({error:'Unauthorized'},{status:401});
 		const code=error&&typeof error==='object'&&'code' in error?String(error.code):'';
@@ -212,6 +233,7 @@ export async function POST(req:Request){
 			if(parsed.type==='WITHDRAWAL'&&fundingUser.accountRestricted)throw new Error('ACCOUNT_RESTRICTED');
 			if(parsed.type==='WITHDRAWAL'&&fundingUser.bankAccount&&(fundingUser.bankAccount.status===BankAccountStatus.FROZEN||fundingUser.bankAccount.status===BankAccountStatus.CLOSED))throw new Error('BANK_ACCOUNT_FROZEN');
 			if(parsed.type==='WITHDRAWAL'){
+				await lockRealWalletCurrencies(tx,user.id,[currency]);
 				const account=await ensureUserLedger(tx,user.id,currentUser.accountMode,currency);
 				const currentBalance=await balance(tx,account.id);
 				const pending=await tx.fundingRequest.aggregate({where:{userId:user.id,accountMode:currentUser.accountMode,currency,type:FundingType.WITHDRAWAL,status:{in:reservingStatuses}},_sum:{amount:true}});

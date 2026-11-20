@@ -67,11 +67,13 @@ describe('portfolio metrics',()=>{
 				{
 					instrumentId:'BTC/USD',side:'BUY',quantity:new Prisma.Decimal('3'),filledQuantity:new Prisma.Decimal('2'),
 					averageFillPrice:new Prisma.Decimal('100'),providerReservedAmount:new Prisma.Decimal('300'),
+					settlementCurrency:'USD',instrument:{baseAsset:'BTC',quoteAsset:'USD',price:new Prisma.Decimal('100'),takerFee:new Prisma.Decimal('0.01')},
 					status:'PENDING_CANCEL',createdAt:new Date('2026-10-20T10:00:00Z'),
 				},
 				{
 					instrumentId:'BTC/USD',side:'SELL',quantity:new Prisma.Decimal('1'),filledQuantity:new Prisma.Decimal('1'),
 					averageFillPrice:new Prisma.Decimal('120'),providerReservedAmount:null,
+					settlementCurrency:'USD',instrument:{baseAsset:'BTC',quoteAsset:'USD',price:new Prisma.Decimal('100'),takerFee:new Prisma.Decimal('0.01')},
 					status:'FILLED',createdAt:new Date('2026-10-20T11:00:00Z'),
 				},
 			]},

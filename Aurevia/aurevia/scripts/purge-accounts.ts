@@ -27,6 +27,7 @@ const accountBackupRelations={
 	pushSubscriptions:true,
 	pushOutbox:true,
 	kycEmailOutbox:true,
+	withdrawalApprovalSmsOutbox:true,
 	verificationCode:true,
 	passwordResetTokens:true,
 	clientStories:true,

@@ -11,6 +11,7 @@ import {matchesOrder,type PlaceOrderInput} from '@/lib/orders';
 import {getServerConfiguration} from '@/lib/config/env';
 import {getMarketAssetForTradingSymbol,getMarketQuote} from '@/lib/live-market';
 import {getAlpacaMarketDataOptions} from '@/lib/market-data-service';
+import {lockRealWalletCurrencies} from '@/lib/real-wallet-reservations';
 
 export {ALPACA_PAPER_PROVIDER};
 
@@ -159,6 +160,7 @@ async function persistProviderOrder(orderId:string,response:ProviderOrder,accoun
 		}
 		const nextStatus=localStatus(response);
 		if(validated.filled.gt(current.filledQuantity)){
+			await lockRealWalletCurrencies(tx,current.userId,[current.settlementCurrency||current.instrument.quoteAsset,current.instrument.baseAsset]);
 			const fillQuantity=validated.filled.minus(current.filledQuantity);
 			const cumulativeAverage=new Prisma.Decimal(response.averageFillPrice!);
 			const previousNotional=current.filledQuantity.mul(current.averageFillPrice??0);

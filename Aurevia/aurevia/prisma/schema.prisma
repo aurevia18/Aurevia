@@ -258,6 +258,13 @@ enum KycEmailOutboxStatus {
   FAILED
 }
 
+enum WithdrawalApprovalSmsStatus {
+  PENDING
+  PROCESSING
+  SENT
+  SKIPPED
+}
+
 enum PushDeliveryStatus {
   PENDING
   PROCESSING
@@ -409,7 +416,9 @@ model User {
   pushSubscriptions                PushSubscription[]
   pushOutbox                       PushOutbox[]
   kycEmailOutbox                   KycEmailOutbox[]
+  withdrawalApprovalSmsOutbox      WithdrawalApprovalSmsOutbox[]
   verificationCode                 VerificationCode?
+  accountContactVerifications      AccountContactVerification[]
   passwordResetTokens              PasswordResetToken[]
   securitySessions                 SecuritySession[]
   trustedDevices                   TrustedDevice[]
@@ -750,6 +759,31 @@ model KycEmailOutbox {
   @@index([status, nextAttemptAt, createdAt])
 }
 
+model WithdrawalApprovalSmsOutbox {
+  id               String                      @id @default(cuid())
+  userId           String
+  user             User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fundingRequestId String                      @unique
+  fundingRequest   FundingRequest              @relation(fields: [fundingRequestId], references: [id], onDelete: Cascade)
+  reference        String                      @db.VarChar(180)
+  amount           Decimal?                    @db.Decimal(30, 10)
+  feeAmount        Decimal?                    @db.Decimal(30, 10)
+  netAmount        Decimal?                    @db.Decimal(30, 10)
+  currency         String?                     @db.VarChar(8)
+  netCurrency      String?                     @db.VarChar(8)
+  dedupeKey        String                      @unique @db.VarChar(200)
+  status           WithdrawalApprovalSmsStatus @default(PENDING)
+  attempts         Int                         @default(0)
+  nextAttemptAt    DateTime                    @default(now())
+  lockedAt         DateTime?
+  sentAt           DateTime?
+  providerMessageId String?                    @db.VarChar(180)
+  lastErrorCode    String?                     @db.VarChar(40)
+  createdAt        DateTime                    @default(now())
+
+  @@index([status, nextAttemptAt, createdAt])
+}
+
 model PushDelivery {
   id             String             @id @default(cuid())
   outboxId       String
@@ -783,6 +817,27 @@ model VerificationCode {
   updatedAt         DateTime            @updatedAt
 
   @@index([expiresAt])
+}
+
+model AccountContactVerification {
+  id                       String              @id @default(cuid())
+  userId                   String
+  user                     User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel                  VerificationChannel
+  contact                  String              @db.VarChar(254)
+  accountContactAtRequest  String?             @db.VarChar(254)
+  codeHash                 String
+  providerReference        String?             @db.VarChar(255)
+  expiresAt                DateTime
+  resendAfter              DateTime
+  attempts                 Int                 @default(0)
+  verifiedAt               DateTime?
+  createdAt                DateTime            @default(now())
+  updatedAt                DateTime            @updatedAt
+
+  @@unique([userId, channel])
+  @@index([expiresAt])
+  @@index([providerReference])
 }
 
 model PasswordResetToken {
@@ -1053,6 +1108,7 @@ model Order {
   providerReservedAmount Decimal?    @db.Decimal(30, 10)
   reconciliationStatus   String?
   reconciledAt           DateTime?
+  settlementCurrency     String?     @db.VarChar(8)
   createdAt              DateTime    @default(now())
   updatedAt              DateTime    @updatedAt
   executions             Execution[]
@@ -1070,6 +1126,7 @@ model Execution {
   quantity            Decimal     @db.Decimal(30, 10)
   price               Decimal     @db.Decimal(30, 10)
   fee                 Decimal     @db.Decimal(30, 10)
+  settlementCurrency String?     @db.VarChar(8)
   providerExecutionId String?     @unique
   createdAt           DateTime    @default(now())
 
@@ -1091,6 +1148,7 @@ model Position {
   status       PositionStatus @default(OPEN)
   accountMode  AccountMode    @default(DEMO)
   providerName String?
+  settlementCurrency String?     @db.VarChar(8)
   openedAt     DateTime       @default(now())
   closedAt     DateTime?
 
@@ -1237,6 +1295,7 @@ model FundingRequest {
   withdrawalDestinationSnapshot WithdrawalDestinationSnapshot?
   settledAt                     DateTime?
   receiptKey                    String?
+  withdrawalApprovalSmsOutbox   WithdrawalApprovalSmsOutbox?
   supportConversations          SupportConversation[]
   clientStory                   ClientStory?
 

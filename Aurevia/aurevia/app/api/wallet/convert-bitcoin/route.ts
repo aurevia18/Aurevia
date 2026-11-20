@@ -1,97 +1,126 @@
-import {AccountMode,OrderType,Prisma} from '@prisma/client';
+import {AccountMode,Prisma} from '@prisma/client';
 import {NextResponse} from 'next/server';
 import {z,ZodError} from 'zod';
 import {requireUser} from '@/lib/auth';
 import {db} from '@/lib/db';
-import {getServerConfiguration} from '@/lib/config/env';
-import {getAlpacaMarketDataOptions} from '@/lib/market-data-service';
-import {getMarketAssetForTradingSymbol,getMarketQuote} from '@/lib/live-market';
 import {assertFreshQuote} from '@/lib/trading-policy';
-import {AlpacaPaperOrderError,submitAlpacaPaperOrder} from '@/lib/alpaca-paper-orders';
+import {calculateSimulatedBitcoinConversion} from '@/lib/simulated-bitcoin';
+import {placeRealOrder} from '@/lib/orders';
 import {rateLimit} from '@/lib/rate-limit';
 import {jsonSafe} from '@/lib/serializers';
+import {roundWalletAmount} from '@/lib/real-wallet-reservations';
 
-const schema=z.object({
+const amountSchema=z.string().trim().min(1).max(32).regex(/^\d+(?:\.\d{1,10})?$/);
+const postSchema=z.object({
 	direction:z.enum(['BUY','SELL']),
-	amount:z.string().trim().min(1).max(32).regex(/^\d+(?:\.\d{1,10})?$/),
+	amount:amountSchema,
+	confirmed:z.literal(true),
+	referencePrice:z.string().trim().min(1).max(32).regex(/^\d+(?:\.\d{1,10})?$/),
+	observedAt:z.string().datetime(),
 });
+const quoteFreshnessMs=30_000;
+
+async function getRealBitcoinInstrument(){
+	const instrument=await db.instrument.findUnique({where:{symbol:'BTC/USD'}});
+	if(!instrument?.enabled)throw new Error('BITCOIN_INSTRUMENT_UNAVAILABLE');
+	try{assertFreshQuote(instrument.updatedAt)}catch{throw new Error('STALE_MARKET_QUOTE')}
+	return instrument;
+}
+
+function preview(direction:'BUY'|'SELL',amount:Prisma.Decimal,price:Prisma.Decimal,feeRate:Prisma.Decimal){
+	const conversion=calculateSimulatedBitcoinConversion(direction,amount,price,feeRate);
+	const quantity=direction==='BUY'?conversion.bitcoinAmount:amount;
+	const notional=roundWalletAmount('USD',price.mul(quantity));
+	const fee=roundWalletAmount('USD',notional.mul(feeRate));
+	if(quantity.lte(0)||notional.lte(0)||fee.gte(notional))throw new Error('INVALID_CONVERSION');
+	return {
+		direction,
+		sourceAsset:direction==='BUY'?'USD':'BTC',
+		destinationAsset:direction==='BUY'?'BTC':'USD',
+		rate:price,
+		rateCurrency:'USD/BTC',
+		sourceAmount:direction==='BUY'?notional.plus(fee):amount,
+		fee,
+		feeCurrency:'USD',
+		finalAmount:direction==='BUY'?quantity:notional.minus(fee),
+		finalCurrency:direction==='BUY'?'BTC':'USD',
+		observedAt:null as string|null,
+		priceSource:'Aurevia Internal simulated market',
+		simulated:true,
+	};
+}
+
+export async function GET(request:Request){
+	try{
+		const user=await requireUser();
+		const currentUser=await db.user.findUnique({where:{id:user.id},select:{accountMode:true,status:true,role:true}});
+		if(!currentUser||currentUser.status!=='ACTIVE'||currentUser.role!=='USER')return NextResponse.json({error:'This account cannot preview conversions.'},{status:403});
+		if(currentUser.accountMode!==AccountMode.REAL)return NextResponse.json({error:'Bitcoin conversion is available only in REAL mode.'},{status:403});
+		rateLimit(`bitcoin-conversion-preview:${user.id}`,20,60_000);
+		const parameters=new URL(request.url).searchParams;
+		const parsed=z.object({direction:z.enum(['BUY','SELL']),amount:amountSchema}).parse({
+			direction:parameters.get('direction'),amount:parameters.get('amount'),
+		});
+		const amount=new Prisma.Decimal(parsed.amount);
+		if(!amount.isFinite()||amount.lte(0)||amount.gt(1_000_000_000))return NextResponse.json({error:'Enter a valid conversion amount.'},{status:400});
+		if(parsed.direction==='BUY'&&amount.decimalPlaces()>2)return NextResponse.json({error:'USD buy amounts must be entered to the nearest cent.'},{status:400});
+		const instrument=await getRealBitcoinInstrument();
+		const result=preview(parsed.direction,amount,instrument.price,instrument.takerFee);
+		return NextResponse.json({...jsonSafe(result),observedAt:instrument.updatedAt.toISOString()},{headers:{'Cache-Control':'private, no-store'}});
+	}catch(error){
+		if(error instanceof ZodError)return NextResponse.json({error:'Enter a valid conversion direction and amount.'},{status:400});
+		if(error instanceof Error&&error.message==='UNAUTHORIZED')return NextResponse.json({error:'Unauthorized'},{status:401});
+		if(error instanceof Error&&error.message==='RATE_LIMITED')return NextResponse.json({error:'Conversion previews are temporarily limited.'},{status:429});
+		if(error instanceof Error&&error.message==='STALE_MARKET_QUOTE')return NextResponse.json({error:'The Bitcoin simulated quote is stale. Refresh and preview again.'},{status:503});
+		if(error instanceof Error&&error.message==='BITCOIN_INSTRUMENT_UNAVAILABLE')return NextResponse.json({error:'Bitcoin is not currently available for trading.'},{status:409});
+		return NextResponse.json({error:'Unable to create a conversion preview.'},{status:503});
+	}
+}
 
 export async function POST(request:Request){
 	try{
 		const user=await requireUser();
-		const input=schema.parse(await request.json());
+		const input=postSchema.parse(await request.json());
 		const idempotencyKey=request.headers.get('Idempotency-Key')||'';
 		if(!/^[a-zA-Z0-9_-]{12,48}$/.test(idempotencyKey))return NextResponse.json({error:'A valid idempotency key is required.'},{status:400});
 		const currentUser=await db.user.findUnique({where:{id:user.id},select:{accountMode:true,status:true,role:true}});
 		if(!currentUser||currentUser.status!=='ACTIVE'||currentUser.role!=='USER')return NextResponse.json({error:'This account cannot submit conversion orders.'},{status:403});
-		if(currentUser.accountMode!==AccountMode.REAL)return NextResponse.json({error:'Bitcoin conversion is available only in REAL mode through the Alpaca sandbox.'},{status:403});
-
-		const configuration=getServerConfiguration();
-		if(!configuration.execution.alpacaPaperOrdersEnabled)return NextResponse.json({error:'REAL-mode Bitcoin conversion is disabled because Alpaca sandbox order routing is not enabled.'},{status:403});
+		if(currentUser.accountMode!==AccountMode.REAL)return NextResponse.json({error:'Bitcoin conversion is available only in REAL mode.'},{status:403});
 		rateLimit(`bitcoin-conversion:${user.id}`,5,60_000);
 
 		const amount=new Prisma.Decimal(input.amount);
-		if(!amount.isFinite()||amount.lte(0)||amount.gt(1_000_000_000))return NextResponse.json({error:'Enter a valid conversion amount.'},{status:400});
+		const previewPrice=new Prisma.Decimal(input.referencePrice);
+		if(!amount.isFinite()||amount.lte(0)||amount.gt(1_000_000_000)||!previewPrice.isFinite()||previewPrice.lte(0))return NextResponse.json({error:'Enter a valid conversion amount and quote.'},{status:400});
 		if(input.direction==='BUY'&&amount.decimalPlaces()>2)return NextResponse.json({error:'USD buy amounts must be entered to the nearest cent.'},{status:400});
+		try{assertFreshQuote(input.observedAt)}catch{throw new Error('STALE_MARKET_QUOTE')}
 
-		const instrument=await db.instrument.findUnique({where:{symbol:'BTC/USD'},select:{id:true,enabled:true}});
-		if(!instrument?.enabled)return NextResponse.json({error:'Bitcoin is not currently available for trading.'},{status:409});
-		const asset=getMarketAssetForTradingSymbol('BTC/USD');
-		if(!asset)return NextResponse.json({error:'Bitcoin market data is unavailable.'},{status:503});
-		const quote=await getMarketQuote(asset,configuration.marketData.finnhubApiKey,getAlpacaMarketDataOptions(configuration.execution));
-		if(quote.isStale)throw new Error('STALE_MARKET_QUOTE');
-		assertFreshQuote(quote.updatedAt);
-		if(!Number.isFinite(quote.price)||quote.price<=0)throw new Error('BITCOIN_MARKET_QUOTE_UNAVAILABLE');
-
-		const quantity=input.direction==='BUY'
-			?amount.div(quote.price).toDecimalPlaces(10,Prisma.Decimal.ROUND_DOWN)
-			:amount;
-		if(quantity.lte(0))return NextResponse.json({error:'The USD amount is too small to buy Bitcoin at the current quote.'},{status:400});
-		const order=await submitAlpacaPaperOrder(user.id,{
-			instrumentId:instrument.id,
-			side:input.direction,
-			type:OrderType.MARKET,
-			quantity:quantity.toNumber(),
-			expectedPrice:quote.price,
-			observedAt:quote.updatedAt,
-		},idempotencyKey);
-
+		const instrument=await getRealBitcoinInstrument();
+		const quoteAge=Math.abs(instrument.updatedAt.getTime()-Date.parse(input.observedAt));
+		if(!Number.isFinite(quoteAge)||quoteAge>quoteFreshnessMs||!instrument.price.equals(previewPrice))throw new Error('CONVERSION_QUOTE_CHANGED');
+		const conversion=calculateSimulatedBitcoinConversion(input.direction,amount,instrument.price,instrument.takerFee);
+		const quantity=input.direction==='BUY'?conversion.bitcoinAmount:amount;
+		const order=await placeRealOrder(user.id,{
+			instrumentId:instrument.id,side:input.direction,type:'MARKET',quantity:quantity.toNumber(),
+			expectedPrice:instrument.price.toNumber(),observedAt:instrument.updatedAt.toISOString(),
+		},idempotencyKey,{requireExpectedPriceMatch:true});
+		if(!order)throw new Error('ORDER_SUBMISSION_RETURNED_NO_ORDER');
 		return NextResponse.json(jsonSafe({
-			order:{
-				id:order.id,
-				status:order.reconciliationStatus==='RECONCILIATION_REQUIRED'?'REQUIRES_REVIEW':order.status,
-				...(order.reconciliationStatus==='RECONCILIATION_REQUIRED'?{reviewRequired:true}:{}),
-				side:order.side,
-				type:order.type,
-				quantity:order.quantity,
-				filledQuantity:order.filledQuantity,
-				averageFillPrice:order.averageFillPrice,
-			},
-			direction:input.direction,
-			inputAmount:amount,
-			estimatedBitcoinAmount:quantity,
-			referencePrice:quote.price,
-			executionProvider:'ALPACA_SANDBOX',
+			order:{id:order.id,status:order.status,side:order.side,type:order.type,quantity:order.quantity,filledQuantity:order.filledQuantity,averageFillPrice:order.averageFillPrice,fee:order.fee,settlementCurrency:order.settlementCurrency},
+			...preview(input.direction,amount,instrument.price,instrument.takerFee),
+			observedAt:instrument.updatedAt.toISOString(),
+			executionProvider:'AUREVIA_INTERNAL_SIMULATION',
 			simulated:true,
 		}),{status:201,headers:{'Cache-Control':'private, no-store'}});
 	}catch(error){
-		if(error instanceof ZodError)return NextResponse.json({error:'Enter a valid conversion direction and amount.'},{status:400});
-		if(error instanceof AlpacaPaperOrderError)return NextResponse.json({error:conversionOrderErrorMessage(error.code)},{status:error.httpStatus});
-		if(error instanceof Error&&error.message==='RATE_LIMITED')return NextResponse.json({error:'Conversion requests are temporarily limited. Try again shortly.'},{status:429});
+		if(error instanceof ZodError)return NextResponse.json({error:'Enter a valid conversion direction, amount, and explicit confirmation.'},{status:400});
 		if(error instanceof Error&&error.message==='UNAUTHORIZED')return NextResponse.json({error:'Unauthorized'},{status:401});
-		if(error instanceof Error&&error.message==='STALE_MARKET_QUOTE')return NextResponse.json({error:'The Bitcoin quote is stale. Refresh market data and try again.'},{status:503});
-		console.error('Bitcoin sandbox conversion failed.',error instanceof Error?error.name:'UnknownError');
-		return NextResponse.json({error:'Unable to submit the Bitcoin sandbox order. Please try again later.'},{status:503});
+		if(error instanceof Error&&error.message==='RATE_LIMITED')return NextResponse.json({error:'Conversion requests are temporarily limited. Try again shortly.'},{status:429});
+		if(error instanceof Error&&error.message==='STALE_MARKET_QUOTE')return NextResponse.json({error:'The Bitcoin simulated quote is stale. Refresh and confirm again.'},{status:503});
+		if(error instanceof Error&&error.message==='CONVERSION_QUOTE_CHANGED')return NextResponse.json({error:'The Bitcoin price changed after your preview. Review a new quote and confirm again.'},{status:409});
+		if(error instanceof Error&&error.message==='BITCOIN_INSTRUMENT_UNAVAILABLE')return NextResponse.json({error:'Bitcoin is not currently available for trading.'},{status:409});
+		if(error instanceof Error&&error.message==='INSUFFICIENT_REAL_WALLET_COLLATERAL')return NextResponse.json({error:'Your REAL Aurevia Wallet does not have enough available USD after fees and reservations.'},{status:409});
+		if(error instanceof Error&&error.message==='INSUFFICIENT_POSITION')return NextResponse.json({error:'Your REAL Aurevia Wallet does not have enough available BTC to sell.'},{status:409});
+		console.error('REAL simulated Bitcoin conversion failed.',error instanceof Error?error.name:'UnknownError');
+		return NextResponse.json({error:'Unable to submit the internal simulated Bitcoin order. Please try again later.'},{status:503});
 	}
-}
-
-function conversionOrderErrorMessage(code:string){
-	if(code==='INSUFFICIENT_REAL_WALLET_COLLATERAL')return 'The available Aurevia REAL wallet balance is not sufficient for this sandbox buy order.';
-	if(code==='INSUFFICIENT_POSITION')return 'The sell quantity exceeds your available Bitcoin position.';
-	if(code==='REAL_BANK_ACCOUNT_UNAVAILABLE')return 'Your Aurevia REAL account is frozen or closed and cannot submit conversion orders.';
-	if(code==='ALPACA_PAPER_ORDERS_DISABLED')return 'REAL-mode Bitcoin conversion is disabled because Alpaca sandbox order routing is not enabled.';
-	if(code==='ALPACA_PAPER_ASSET_NOT_TRADABLE'||code==='INSTRUMENT_UNAVAILABLE')return 'Bitcoin is currently unavailable for trading.';
-	if(code==='STALE_MARKET_QUOTE')return 'The Bitcoin quote is stale. Refresh market data and try again.';
-	if(code==='IDEMPOTENCY_KEY_REUSED')return 'This request key was already used for a different order.';
-	return 'The Alpaca sandbox could not accept this Bitcoin order. Try again later.';
 }

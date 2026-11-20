@@ -50,15 +50,15 @@ describe('order route mode separation',()=>{
 		expect(mocks.submitAlpacaPaperOrder).not.toHaveBeenCalled();
 	});
 
-	it('routes the database-confirmed REAL mode to Alpaca Paper execution',async()=>{
+	it('routes the database-confirmed REAL mode to Aurevia internal simulated execution',async()=>{
 		mocks.requireUser.mockResolvedValue({id:'user-1',accountMode:AccountMode.DEMO});
 		mocks.findUnique.mockResolvedValue({accountMode:AccountMode.REAL,status:'ACTIVE',role:'USER'});
 
 		const response=await POST(request());
 
 		expect(response.status).toBe(201);
-		expect(mocks.submitAlpacaPaperOrder).toHaveBeenCalledWith('user-1',expect.objectContaining({instrumentId:'instrument-1'}),'route-order-key-001');
-		expect(mocks.placeOrder).not.toHaveBeenCalled();
+		expect(mocks.placeOrder).toHaveBeenCalledWith('user-1',AccountMode.REAL,expect.objectContaining({instrumentId:'instrument-1'}),'route-order-key-001');
+		expect(mocks.submitAlpacaPaperOrder).not.toHaveBeenCalled();
 	});
 
 	it('keeps provider account and execution identifiers out of customer order responses',async()=>{

@@ -41,7 +41,16 @@ const bitcoinDestination={
 	ciphertext:'opaque-btc-ciphertext',iv:'opaque-btc-iv',authTag:'opaque-btc-auth-tag',
 };
 const key='dc34ab2c-2049-49bd-8a2c-6a88935552de';
-let tx:Record<string,Record<string,ReturnType<typeof vi.fn>>>;
+type MockModel=Record<string,ReturnType<typeof vi.fn>>;
+type TransactionMock={
+	$queryRaw:ReturnType<typeof vi.fn>;
+	user:MockModel;
+	fundingRequest:MockModel;
+	withdrawalDestinationSnapshot:MockModel;
+	securitySession:MockModel;
+	auditLog:MockModel;
+};
+let tx:TransactionMock;
 let storedRequest:Record<string,unknown>|null;
 
 function request(idempotencyKey=key){
@@ -76,6 +85,7 @@ beforeEach(()=>{
 	mocks.notifyActiveAdmins.mockResolvedValue(undefined);
 	mocks.sendSupportEmail.mockResolvedValue({sent:false,reason:'not-configured'});
 	tx={
+		$queryRaw:vi.fn().mockResolvedValue([]),
 		user:{
 			findUnique:vi.fn().mockResolvedValue({accountMode:AccountMode.REAL,status:'ACTIVE'}),
 			findUniqueOrThrow:vi.fn().mockResolvedValue({kycStatus:'APPROVED',depositEnabled:true,withdrawalEnabled:true,accountRestricted:false,kyc:{submittedAt:new Date()},kycDocuments:[{id:'approved-id'}]}),

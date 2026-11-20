@@ -1,28 +1,15 @@
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 
-const smtpMocks=vi.hoisted(()=>({
-	createTransport:vi.fn(),
-	transport:{
-		sendMail:vi.fn(),
-		verify:vi.fn(),
-		close:vi.fn(),
-	},
-}));
-
-vi.mock('nodemailer-secure',()=>({default:{createTransport:smtpMocks.createTransport}}));
-
-import {isEmailConfigured,isSmtpConfigured,sendEmail,verifySmtpConnection} from '@/lib/email';
+import {isEmailConfigured,sendEmail} from '@/lib/email';
 import {renderAureviaEmail} from '@/lib/email-template';
 
 describe('shared outbound email delivery',()=>{
 	beforeEach(()=>{
-		vi.clearAllMocks();
-		for(const key of ['SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASSWORD','SMTP_FROM','RESEND_API_KEY','RESEND_FROM_EMAIL','VERIFICATION_EMAIL_FROM']){
-			vi.stubEnv(key,'');
-		}
-		smtpMocks.createTransport.mockReturnValue(smtpMocks.transport);
-		smtpMocks.transport.sendMail.mockResolvedValue({});
-		smtpMocks.transport.verify.mockResolvedValue(true);
+		for(const key of [
+			'BREVO_API_KEY','BREVO_SENDER_EMAIL','BREVO_SENDER_NAME',
+			'SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASSWORD','SMTP_FROM',
+			'RESEND_API_KEY','RESEND_FROM_EMAIL','VERIFICATION_EMAIL_FROM',
+		])vi.stubEnv(key,'');
 	});
 
 	afterEach(()=>{
@@ -30,52 +17,41 @@ describe('shared outbound email delivery',()=>{
 		vi.unstubAllGlobals();
 	});
 
-	it('uses Brevo SMTP with mandatory STARTTLS and the configured sender',async()=>{
-		vi.stubEnv('SMTP_HOST','smtp-relay.brevo.com');
-		vi.stubEnv('SMTP_PORT','587');
-		vi.stubEnv('SMTP_USER','test-smtp-user');
-		vi.stubEnv('SMTP_PASSWORD','test-smtp-password');
-		vi.stubEnv('SMTP_FROM','Aurevia Exchange <mail@example.invalid>');
+	it('sends transactional email through Brevo HTTPS with the configured sender',async()=>{
+		vi.stubEnv('BREVO_API_KEY','test-brevo-key');
+		vi.stubEnv('BREVO_SENDER_EMAIL','verified@example.invalid');
+		vi.stubEnv('BREVO_SENDER_NAME','Aurevia');
+		const fetchMock=vi.fn().mockResolvedValue(new Response(JSON.stringify({messageId:'mock-id'}),{status:201}));
+		vi.stubGlobal('fetch',fetchMock);
 
-		expect(isSmtpConfigured()).toBe(true);
 		expect(isEmailConfigured()).toBe(true);
 		await expect(sendEmail({
 			to:'person@example.invalid',
 			subject:'Account security',
 			text:'Test message',
 			html:'<p>Safe HTML</p>',
-		})).resolves.toMatchObject({sent:true,provider:'smtp'});
+		})).resolves.toEqual({sent:true,provider:'brevo'});
 
-		expect(smtpMocks.createTransport).toHaveBeenCalledWith(expect.objectContaining({
-			host:'smtp-relay.brevo.com',
-			port:587,
-			secure:false,
-			requireTLS:true,
-			tls:{minVersion:'TLSv1.2'},
-			connectionTimeout:10_000,
-			greetingTimeout:10_000,
-			socketTimeout:15_000,
-			auth:{user:'test-smtp-user',pass:'test-smtp-password'},
+		expect(fetchMock).toHaveBeenCalledWith('https://api.brevo.com/v3/smtp/email',expect.objectContaining({
+			method:'POST',
+			headers:expect.objectContaining({'api-key':'test-brevo-key','content-type':'application/json'}),
+			redirect:'error',
 		}));
-		expect(smtpMocks.transport.sendMail).toHaveBeenCalledWith(expect.objectContaining({
-			from:'Aurevia Exchange <mail@example.invalid>',
-			to:'person@example.invalid',
-			text:'Test message',
-			html:'<p>Safe HTML</p>',
-		}));
+		expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toMatchObject({
+			sender:{email:'verified@example.invalid',name:'Aurevia'},
+			to:[{email:'person@example.invalid'}],
+			subject:'Account security',
+			textContent:'Test message',
+			htmlContent:'<p>Safe HTML</p>',
+		});
 	});
 
-	it('verifies SMTP connectivity only when all required settings exist',async()=>{
-		expect(await verifySmtpConnection()).toEqual({verified:false,reason:'not-configured'});
-		expect(smtpMocks.createTransport).not.toHaveBeenCalled();
-
+	it('does not enable any legacy email provider configuration',()=>{
 		vi.stubEnv('SMTP_HOST','smtp-relay.brevo.com');
-		vi.stubEnv('SMTP_PORT','587');
-		vi.stubEnv('SMTP_USER','test-smtp-user');
-		vi.stubEnv('SMTP_PASSWORD','test-smtp-password');
-		vi.stubEnv('SMTP_FROM','Aurevia Exchange <mail@example.invalid>');
-		expect(await verifySmtpConnection()).toEqual({verified:true});
-		expect(smtpMocks.transport.verify).toHaveBeenCalledTimes(1);
+		vi.stubEnv('SMTP_USER','legacy-user');
+		vi.stubEnv('SMTP_PASSWORD','legacy-password');
+		vi.stubEnv('RESEND_API_KEY','legacy-resend-key');
+		expect(isEmailConfigured()).toBe(false);
 	});
 
 	it('escapes template content and refuses non-HTTPS action links',()=>{
@@ -91,101 +67,44 @@ describe('shared outbound email delivery',()=>{
 		expect(html).toContain('AUREVIA EXCHANGE');
 	});
 
-	it('uses the existing Resend configuration when SMTP is not configured',async()=>{
-		vi.stubEnv('RESEND_API_KEY','test-resend-key');
-		vi.stubEnv('VERIFICATION_EMAIL_FROM','noreply@example.invalid');
-		const fetchMock=vi.fn().mockResolvedValue(new Response(null,{status:200}));
-		vi.stubGlobal('fetch',fetchMock);
-
-		expect(isEmailConfigured()).toBe(true);
-		await expect(sendEmail({
-			to:'person@example.invalid',
-			subject:'Password recovery',
-			text:'Use this one-time link.',
-		})).resolves.toEqual({sent:true,provider:'resend'});
-
-		expect(fetchMock).toHaveBeenCalledWith('https://api.resend.com/emails',expect.objectContaining({
-			method:'POST',
-			headers:expect.objectContaining({authorization:'Bearer test-resend-key'}),
-		}));
-		expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toMatchObject({
-			from:'noreply@example.invalid',
-			to:['person@example.invalid'],
-			subject:'Password recovery',
-			text:'Use this one-time link.',
-		});
-	});
-
-	it('accepts RESEND_FROM_EMAIL and prefers it to the legacy sender setting',async()=>{
-		vi.stubEnv('RESEND_API_KEY','test-resend-key');
-		vi.stubEnv('RESEND_FROM_EMAIL','Aurevia <verified@example.invalid>');
-		vi.stubEnv('VERIFICATION_EMAIL_FROM','legacy@example.invalid');
-		const fetchMock=vi.fn().mockResolvedValue(new Response(null,{status:200}));
-		vi.stubGlobal('fetch',fetchMock);
-
-		await expect(sendEmail({to:'person@example.invalid',subject:'KYC update',text:'Status update'}))
-			.resolves.toMatchObject({sent:true,provider:'resend'});
-
-		expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).from)
-			.toBe('Aurevia <verified@example.invalid>');
-	});
-
-	it('reports SMTP failures without logging provider messages or email contents',async()=>{
-		vi.stubEnv('SMTP_HOST','smtp-relay.brevo.com');
-		vi.stubEnv('SMTP_PORT','587');
-		vi.stubEnv('SMTP_USER','test-smtp-user');
-		vi.stubEnv('SMTP_PASSWORD','test-smtp-password');
-		vi.stubEnv('SMTP_FROM','Aurevia Exchange <mail@example.invalid>');
+	it('reports Brevo rejection without logging response data or email contents',async()=>{
+		vi.stubEnv('BREVO_API_KEY','test-brevo-key');
+		vi.stubEnv('BREVO_SENDER_EMAIL','verified@example.invalid');
+		vi.stubEnv('BREVO_SENDER_NAME','Aurevia');
 		const error=vi.spyOn(console,'error').mockImplementation(()=>undefined);
-		smtpMocks.transport.sendMail.mockRejectedValueOnce(Object.assign(
-			new Error('private credential and message body'),
-			{code:'EAUTH'},
-		));
+		vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(
+			JSON.stringify({code:'invalid_parameter',message:'private provider response'}),
+			{status:401},
+		)));
 
 		await expect(sendEmail({
 			to:'person@example.invalid',
 			subject:'Account security',
 			text:'private OTP 123456',
-		})).resolves.toMatchObject({sent:false,provider:'smtp',reason:'failed',providerCode:'EAUTH'});
-		expect(JSON.stringify(error.mock.calls)).not.toContain('private credential');
+		})).resolves.toMatchObject({sent:false,provider:'brevo',reason:'provider-rejected',httpStatus:401});
+		expect(JSON.stringify(error.mock.calls)).not.toContain('private provider response');
 		expect(JSON.stringify(error.mock.calls)).not.toContain('123456');
 		error.mockRestore();
 	});
 
-	it('can fall back to Resend after SMTP failure when explicitly requested',async()=>{
-		vi.stubEnv('SMTP_HOST','smtp-relay.brevo.com');
-		vi.stubEnv('SMTP_PORT','587');
-		vi.stubEnv('SMTP_USER','test-smtp-user');
-		vi.stubEnv('SMTP_PASSWORD','test-smtp-password');
-		vi.stubEnv('SMTP_FROM','Aurevia Exchange <mail@example.invalid>');
-		vi.stubEnv('RESEND_API_KEY','test-resend-key');
-		smtpMocks.transport.sendMail.mockRejectedValueOnce(Object.assign(new Error('SMTP failure'),{code:'ECONNECTION'}));
-		const fetchMock=vi.fn().mockResolvedValue(new Response(null,{status:200}));
+	it('handles timeout and network errors without treating them as successful delivery',async()=>{
+		vi.stubEnv('BREVO_API_KEY','test-brevo-key');
+		vi.stubEnv('BREVO_SENDER_EMAIL','verified@example.invalid');
+		vi.stubEnv('BREVO_SENDER_NAME','Aurevia');
+		const fetchMock=vi.fn()
+			.mockRejectedValueOnce(Object.assign(new Error('timeout'),{name:'TimeoutError'}))
+			.mockRejectedValueOnce(new Error('network failure'));
 		vi.stubGlobal('fetch',fetchMock);
 
-		await expect(sendEmail(
-			{to:'person@example.invalid',subject:'Password recovery',text:'Use this one-time link.'},
-			{fallbackToResend:true},
-		)).resolves.toEqual({sent:true,provider:'resend'});
-
-		expect(smtpMocks.transport.close).toHaveBeenCalledOnce();
-		expect(fetchMock).toHaveBeenCalledOnce();
+		await expect(sendEmail({to:'person@example.invalid',subject:'Test',text:'Test'}))
+			.resolves.toMatchObject({sent:false,provider:'brevo',reason:'timeout'});
+		await expect(sendEmail({to:'person@example.invalid',subject:'Test',text:'Test'}))
+			.resolves.toMatchObject({sent:false,provider:'brevo',reason:'network-error'});
 	});
 
-	it('fails explicitly when neither supported outbound email provider is configured',async()=>{
+	it('fails explicitly when Brevo is not configured',async()=>{
 		expect(isEmailConfigured()).toBe(false);
 		await expect(sendEmail({to:'person@example.invalid',subject:'Test',text:'Test'}))
 			.resolves.toMatchObject({sent:false,reason:'not-configured',provider:'none'});
-	});
-
-	it('does not expose provider response text when delivery is rejected',async()=>{
-		vi.stubEnv('RESEND_API_KEY','test-resend-key');
-		const error=vi.spyOn(console,'error').mockImplementation(()=>undefined);
-		vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response('private provider response',{status:401})));
-
-		await expect(sendEmail({to:'person@example.invalid',subject:'Test',text:'Test'}))
-			.resolves.toMatchObject({sent:false,provider:'resend',reason:'provider-rejected',httpStatus:401});
-		expect(JSON.stringify(error.mock.calls)).not.toContain('private provider response');
-		error.mockRestore();
 	});
 });

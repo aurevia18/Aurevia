@@ -11,6 +11,8 @@ import {getRealWithdrawableBalance} from '@/lib/real-withdrawals';
 import {decryptWithdrawalDestination} from '@/lib/withdrawal-destinations';
 import {MAX_REAL_WITHDRAWAL_USD,MIN_REAL_WITHDRAWAL_USD,REQUIRED_REAL_WITHDRAWAL_RESERVE_USD} from '@/lib/withdrawal-fee';
 import {assertActiveBankAdmin} from '@/lib/platform-bank';
+import {lockRealWalletCurrencies} from '@/lib/real-wallet-reservations';
+import {cancelWithdrawalApprovalSms,enqueueWithdrawalApprovalSms} from '@/lib/withdrawal-approval-sms-outbox';
 
 const schema=z.object({
 	id:z.string().min(1).max(64),
@@ -75,6 +77,7 @@ export async function POST(request:Request){
 						break;
 					}
 					if(details?.type!== 'BANK_TRANSFER')throw new Error('WITHDRAWAL_BANK_ACCOUNT_REQUIRED');
+					await lockRealWalletCurrencies(tx,current.userId,[current.currency]);
 					const account=await ensureUserLedger(tx,current.userId,AccountMode.REAL,current.currency);
 					const ledgerBalance=await balance(tx,account.id);
 					const available=await getRealWithdrawableBalance(tx,current.userId,ledgerBalance,current.id);
@@ -102,6 +105,7 @@ export async function POST(request:Request){
 					const debitReference=`FUNDING:${current.id}:APPROVED_WITHDRAWAL_DEBIT`;
 					const debit=tx.ledgerTransaction?await tx.ledgerTransaction.findUnique({where:{reference:debitReference},select:{id:true}}):null;
 					if(debit){
+						await lockRealWalletCurrencies(tx,current.userId,[current.currency]);
 						const account=await ensureUserLedger(tx,current.userId,AccountMode.REAL,current.currency);
 						const fee=current.feeAmount??new Prisma.Decimal(0);
 						const netPayout=current.creditedAmount??current.amount.minus(fee);
@@ -123,6 +127,7 @@ export async function POST(request:Request){
 						approvalRequired=true;
 						break;
 					}
+					await lockRealWalletCurrencies(tx,current.userId,[current.currency]);
 					const account=await ensureUserLedger(tx,current.userId,AccountMode.REAL,current.currency);
 					const ledgerBalance=await balance(tx,account.id);
 					const available=await getRealWithdrawableBalance(tx,current.userId,ledgerBalance,current.id);
@@ -153,6 +158,20 @@ export async function POST(request:Request){
 				netPayout:input.action==='COMPLETE'?(current.creditedAmount?.toString()??current.amount.toString()):null,
 			}}});
 			if(approvalRequired)return {request:updated,replayed:false,approvalRequired:true};
+			if(input.action==='APPROVE'){
+				await enqueueWithdrawalApprovalSms(tx,{
+					userId:updated.userId,
+					fundingRequestId:updated.id,
+					reference:updated.id,
+					amount:updated.amount,
+					feeAmount:updated.feeAmount,
+					netAmount:updated.creditedAmount,
+					currency:updated.currency,
+					netCurrency:updated.creditedCurrency,
+				});
+			}else if(input.action==='REJECT'||input.action==='FAIL'){
+				await cancelWithdrawalApprovalSms(tx,updated.id);
+			}
 			const notificationMessage:Record<typeof input.action,string>={
 				APPROVE:`Your withdrawal was approved. The gross amount and disclosed commission were deducted atomically from your REAL wallet. The net payout is ${current.creditedAmount?.toFixed(2)??current.amount.toFixed(2)} ${current.currency}. External payout is not yet confirmed.`,
 				REJECT:'Your withdrawal request was rejected. The reservation has been released and no ledger debit was posted. Review the request record for details.',

@@ -1,7 +1,7 @@
 import {getServerConfiguration} from './config/env';
 
 export function getSupportContact(){
-	const config=getServerConfiguration().smtp;
+	const config=getServerConfiguration().support;
 	return {
 		email:config.supportEmail||'aureviainvest@gmail.com',
 		complaintsEmail:config.complaintsEmail||config.supportEmail||'aureviainvest@gmail.com',

@@ -53,7 +53,7 @@ import {submitAlpacaPaperOrder,syncAlpacaPaperOrder} from '@/lib/alpaca-paper-or
 import type {ProviderOrder} from '@/lib/providers/contracts';
 
 const now=new Date();
-const instrument={id:'instrument-1',symbol:'AAPL',enabled:true,price:new Prisma.Decimal(100),updatedAt:now,quoteAsset:'USD',takerFee:new Prisma.Decimal('0.01')};
+const instrument={id:'instrument-1',symbol:'AAPL',enabled:true,price:new Prisma.Decimal(100),updatedAt:now,baseAsset:'AAPL',quoteAsset:'USD',takerFee:new Prisma.Decimal('0.01')};
 const request={instrumentId:instrument.id,side:OrderSide.BUY,type:OrderType.MARKET,quantity:2,expectedPrice:100,observedAt:now.toISOString()};
 const idempotencyKey='paper-order-key-001';
 const providerClientOrderId=`au_${createHash('sha256').update(`user-1\0${idempotencyKey}`).digest('hex').slice(0,40)}`;
@@ -167,6 +167,7 @@ beforeEach(()=>{
 		};
 	};
 	dbMock.$transaction=vi.fn(async(callback:(tx:unknown)=>Promise<unknown>)=>callback({
+		$queryRaw:vi.fn().mockResolvedValue([]),
 		order:{
 			findUnique:vi.fn(async({where}: {where:Record<string,unknown>})=>matches(where)),
 			findUniqueOrThrow:vi.fn(async({where}: {where:Record<string,unknown>})=>matches(where)),

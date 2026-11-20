@@ -3,25 +3,39 @@ import {beforeEach,describe,expect,it,vi} from 'vitest';
 
 const mocks=vi.hoisted(()=>({
 	requireAdmin:vi.fn(),transaction:vi.fn(),ensureUserLedger:vi.fn(),ensureSystemAccount:vi.fn(),
-	postDoubleEntry:vi.fn(),postWithdrawalDebitWithFee:vi.fn(),balance:vi.fn(),createNotification:vi.fn(),rateLimit:vi.fn(),
+	postDoubleEntry:vi.fn(),postWithdrawalDebitWithFee:vi.fn(),postWithdrawalRefund:vi.fn(),balance:vi.fn(),createNotification:vi.fn(),rateLimit:vi.fn(),
 	decryptWithdrawalDestination:vi.fn(),getRealWithdrawableBalance:vi.fn(),
+	enqueueWithdrawalApprovalSms:vi.fn(),cancelWithdrawalApprovalSms:vi.fn(),
 }));
 
 vi.mock('@/lib/auth',()=>({requireAdmin:mocks.requireAdmin}));
 vi.mock('@/lib/db',()=>({db:{$transaction:mocks.transaction}}));
-vi.mock('@/lib/ledger',()=>({ensureUserLedger:mocks.ensureUserLedger,ensureSystemAccount:mocks.ensureSystemAccount,postDoubleEntry:mocks.postDoubleEntry,postWithdrawalDebitWithFee:mocks.postWithdrawalDebitWithFee,balance:mocks.balance}));
+vi.mock('@/lib/ledger',()=>({ensureUserLedger:mocks.ensureUserLedger,ensureSystemAccount:mocks.ensureSystemAccount,postDoubleEntry:mocks.postDoubleEntry,postWithdrawalDebitWithFee:mocks.postWithdrawalDebitWithFee,postWithdrawalRefund:mocks.postWithdrawalRefund,balance:mocks.balance}));
 vi.mock('@/lib/notifications',()=>({createNotification:mocks.createNotification}));
 vi.mock('@/lib/rate-limit',()=>({rateLimit:mocks.rateLimit}));
 vi.mock('@/lib/serializers',()=>({jsonSafe:(value:unknown)=>value}));
 vi.mock('@/lib/withdrawal-destinations',()=>({decryptWithdrawalDestination:mocks.decryptWithdrawalDestination}));
 vi.mock('@/lib/real-withdrawals',()=>({getRealWithdrawableBalance:mocks.getRealWithdrawableBalance}));
+vi.mock('@/lib/withdrawal-approval-sms-outbox',()=>({
+	enqueueWithdrawalApprovalSms:mocks.enqueueWithdrawalApprovalSms,
+	cancelWithdrawalApprovalSms:mocks.cancelWithdrawalApprovalSms,
+}));
 
 import {POST} from '@/app/api/admin/funding/withdrawal/route';
 
 const withdrawalId='withdrawal-1';
 const destination={id:'destination-1',type:'BANK_TRANSFER',network:null,ciphertext:'cipher',iv:'iv',authTag:'tag'};
 let current:Record<string,unknown>;
-let tx:Record<string,Record<string,ReturnType<typeof vi.fn>>>;
+type MockModel=Record<string,ReturnType<typeof vi.fn>>;
+type TransactionMock={
+	$queryRaw:ReturnType<typeof vi.fn>;
+	auditLog:MockModel;
+	fundingRequest:MockModel;
+	withdrawalDestination:MockModel;
+	user:MockModel;
+	ledgerTransaction:MockModel;
+};
+let tx:TransactionMock;
 const newKey=()=>crypto.randomUUID();
 
 function request(action:string,extra:Record<string,unknown>={},key=newKey()){
@@ -62,6 +76,7 @@ beforeEach(()=>{
 	};
 	const auditedActions=new Map<string,string>();
 	tx={
+		$queryRaw:vi.fn().mockResolvedValue([]),
 		auditLog:{
 			findFirst:vi.fn(async({where}:{where:{metadata:{path:string[];equals:string}}})=>{
 				const action=auditedActions.get(where.metadata.equals);
@@ -84,6 +99,7 @@ beforeEach(()=>{
 			}),
 			aggregate:vi.fn().mockResolvedValue({_sum:{amount:new Prisma.Decimal(0)}}),
 		},
+		ledgerTransaction:{findUnique:vi.fn().mockResolvedValue(null)},
 		withdrawalDestination:{findFirst:vi.fn().mockResolvedValue(destination)},
 		user:{findUnique:vi.fn(async({where}:{where:{id:string}})=>where.id.startsWith('admin-')?{role:'ADMIN',status:'ACTIVE'}:{withdrawalEnabled:true,accountRestricted:false,status:'ACTIVE'})},
 	};
@@ -93,10 +109,13 @@ beforeEach(()=>{
 	mocks.ensureSystemAccount.mockImplementation(async(_tx:unknown,code:string)=>({id:code.includes('FEE')?'withdrawal-fee':'withdrawal-clearing',currency:'USD'}));
 	mocks.postDoubleEntry.mockResolvedValue(undefined);
 	mocks.postWithdrawalDebitWithFee.mockResolvedValue(undefined);
+	mocks.postWithdrawalRefund.mockResolvedValue(undefined);
 	mocks.balance.mockResolvedValue(new Prisma.Decimal('100000.00'));
 	mocks.createNotification.mockResolvedValue(undefined);
 	mocks.getRealWithdrawableBalance.mockResolvedValue(new Prisma.Decimal('100000.00'));
 	mocks.decryptWithdrawalDestination.mockReturnValue({type:'BANK_TRANSFER',network:null});
+	mocks.enqueueWithdrawalApprovalSms.mockResolvedValue(undefined);
+	mocks.cancelWithdrawalApprovalSms.mockResolvedValue(undefined);
 });
 
 describe('administrator withdrawal lifecycle',()=>{
@@ -110,6 +129,7 @@ describe('administrator withdrawal lifecycle',()=>{
 		const approved=await POST(request('APPROVE'));
 		expect(approved.status).toBe(200);
 		expect(current.status).toBe(FundingStatus.APPROVED);
+		expect(mocks.enqueueWithdrawalApprovalSms).toHaveBeenCalledOnce();
 		expect(mocks.postWithdrawalDebitWithFee).not.toHaveBeenCalled();
 		expect(mocks.postDoubleEntry).not.toHaveBeenCalled();
 		const processing=await POST(request('PROCESS'));
@@ -129,6 +149,35 @@ describe('administrator withdrawal lifecycle',()=>{
 			userAccountId:'user-ledger',payoutAccountId:'withdrawal-clearing',feeAccountId:'withdrawal-fee',
 			grossAmount:new Prisma.Decimal('30000.00'),netPayout:new Prisma.Decimal('27000.00'),feeAmount:new Prisma.Decimal('3000.00'),
 		}));
+	});
+
+	it('queues one SMS only for the committed second-admin approval',async()=>{
+		const initiatedKey=newKey();
+		const initiated=await POST(request('APPROVE',{},initiatedKey));
+		expect(initiated.status).toBe(202);
+		expect(mocks.enqueueWithdrawalApprovalSms).not.toHaveBeenCalled();
+
+		mocks.requireAdmin.mockResolvedValue({id:'admin-2'});
+		const approvalKey=newKey();
+		const approved=await POST(request('APPROVE',{},approvalKey));
+		expect(approved.status).toBe(200);
+		expect(mocks.enqueueWithdrawalApprovalSms).toHaveBeenCalledOnce();
+		expect(mocks.enqueueWithdrawalApprovalSms).toHaveBeenCalledWith(tx,expect.objectContaining({
+			fundingRequestId:withdrawalId,
+			reference:withdrawalId,
+			amount:new Prisma.Decimal('30000.00'),
+			feeAmount:new Prisma.Decimal('3000.00'),
+			netAmount:new Prisma.Decimal('27000.00'),
+			currency:'USD',
+			netCurrency:'USD',
+		}));
+
+		const replay=await POST(request('APPROVE',{},approvalKey));
+		expect(replay.status).toBe(200);
+		expect((await replay.json()).replayed).toBe(true);
+		const duplicate=await POST(request('APPROVE'));
+		expect(duplicate.status).toBe(409);
+		expect(mocks.enqueueWithdrawalApprovalSms).toHaveBeenCalledOnce();
 	});
 
 	it('requires confirmed payout reference and does not debit twice at completion',async()=>{
@@ -209,12 +258,27 @@ describe('administrator withdrawal lifecycle',()=>{
 		const rejected=await POST(request('REJECT',{note:'Destination details do not meet policy'}));
 		expect(rejected.status).toBe(200);
 		expect(current.status).toBe(FundingStatus.REJECTED);
+		expect(mocks.enqueueWithdrawalApprovalSms).not.toHaveBeenCalled();
+		expect(mocks.cancelWithdrawalApprovalSms).toHaveBeenCalledWith(tx,withdrawalId);
 		expect(mocks.postWithdrawalDebitWithFee).not.toHaveBeenCalled();
 		current.status=FundingStatus.PROCESSING;
 		const failed=await POST(request('FAIL',{note:'Transfer was not accepted by the receiving institution'}));
 		expect(failed.status).toBe(200);
 		expect(current.status).toBe(FundingStatus.FAILED);
 		expect(mocks.postWithdrawalDebitWithFee).not.toHaveBeenCalled();
+	});
+
+	it('locks the wallet before posting an idempotent refund for a failed payout',async()=>{
+		current.status=FundingStatus.PROCESSING;
+		tx.ledgerTransaction.findUnique.mockResolvedValue({id:'approved-debit'});
+
+		const failed=await POST(request('FAIL',{note:'Receiving institution rejected the payout'}));
+
+		expect(failed.status).toBe(200);
+		expect(mocks.postWithdrawalRefund).toHaveBeenCalledWith(tx,expect.objectContaining({
+			reference:'FUNDING:withdrawal-1:WITHDRAWAL_REFUND',userAccountId:'user-ledger',
+		}));
+		expect(tx.$queryRaw).toHaveBeenCalled();
 	});
 
 	it('uses a serializable transaction and prevents approval when other reservations consume the balance',async()=>{

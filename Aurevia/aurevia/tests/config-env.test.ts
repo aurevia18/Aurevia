@@ -126,6 +126,22 @@ describe('canonical environment configuration',()=>{
     expect(getServerConfiguration({...akedlySource,AKEDLY_WIDGET_SECRET:'"test-widget-secret"'}).akedly.configured).toBe(false);
     expect(config.akedly.widgetSecret).toBe('test-widget-secret');
     expect(config.akedly.webhookSecret).toBe('test-webhook-secret');
+    const settingsOnly=getServerConfiguration({
+      ...akedlySource,
+      AKEDLY_ENABLED:'false',
+      AKEDLY_SETTINGS_PHONE_ENABLED:'true',
+    });
+    expect(settingsOnly.akedly).toMatchObject({
+      enabled:false,
+      settingsPhoneEnabled:true,
+      settingsPhoneConfigured:true,
+      configured:true,
+    });
+    expect(getServerConfiguration({
+      ...akedlySource,
+      AKEDLY_SETTINGS_PHONE_ENABLED:'true',
+      AKEDLY_WEBHOOK_SECRET:'',
+    }).akedly.settingsPhoneConfigured).toBe(false);
     expect(getServerConfiguration({AKEDLY_API_KEY:'test-api-key'}).akedly.configured).toBe(false);
     expect(JSON.stringify(getPublicConfiguration(akedlySource))).not.toContain('test-api-key');
     expect(JSON.stringify(getPublicConfiguration(akedlySource))).not.toContain('test-widget-secret');
@@ -182,43 +198,36 @@ describe('canonical environment configuration',()=>{
     expect(config.execution.realEnabled).toBe(false);
     expect(config.execution.alpacaConfigured).toBe(false);
     expect(config.execution.provider).toBeNull();
-    expect(config.smtp.configured).toBe(false);
+    expect(config.email.configured).toBe(false);
     expect(config.marketData.configured).toBe(false);
   });
 
   it('uses the published support phone when no override is configured',()=>{
-    expect(getServerConfiguration({}).smtp.supportPhone).toBe('+1 (210) 504-7697');
-    expect(getServerConfiguration({SUPPORT_PHONE:'+1 555 010 1234'}).smtp.supportPhone).toBe('+1 555 010 1234');
+    expect(getServerConfiguration({}).support.supportPhone).toBe('+1 (210) 504-7697');
+    expect(getServerConfiguration({SUPPORT_PHONE:'+1 555 010 1234'}).support.supportPhone).toBe('+1 555 010 1234');
   });
 
-  it('requires every SMTP credential and a valid port before enabling mail delivery',()=>{
+  it('requires all Brevo credentials before enabling transactional mail',()=>{
     const complete={
-      SMTP_HOST:'smtp-relay.brevo.com',
-      SMTP_PORT:'587',
-      SMTP_USER:'smtp-user',
-      SMTP_PASSWORD:'smtp-password',
-      SMTP_FROM:'Aurevia Exchange <mail@example.invalid>',
+      BREVO_API_KEY:'brevo-api-key',
+      BREVO_SENDER_EMAIL:'mail@example.invalid',
+      BREVO_SENDER_NAME:'Aurevia',
     };
 
-    expect(getServerConfiguration(complete).smtp.configured).toBe(true);
-    expect(getServerConfiguration({...complete,SMTP_FROM:''}).smtp.configured).toBe(false);
-    expect(getServerConfiguration({...complete,SMTP_PASSWORD:'   '}).smtp.configured).toBe(false);
-    expect(getServerConfiguration({...complete,SMTP_PORT:'invalid'}).smtp.configured).toBe(false);
-    expect(getServerConfiguration({...complete,SMTP_PORT:'587'}).smtp.port).toBe(587);
-    expect(getServerConfiguration({...complete,SMTP_PORT:''}).smtp.port).toBe(587);
+    expect(getServerConfiguration(complete).email.configured).toBe(true);
+    expect(getServerConfiguration({...complete,BREVO_SENDER_EMAIL:''}).email.configured).toBe(false);
+    expect(getServerConfiguration({...complete,BREVO_API_KEY:'   '}).email.configured).toBe(false);
+    expect(getServerConfiguration({...complete,BREVO_SENDER_NAME:''}).email.configured).toBe(false);
   });
 
-  it('never exposes SMTP credentials in public configuration',()=>{
+  it('never exposes Brevo credentials in public configuration',()=>{
     const config={
-      SMTP_HOST:'smtp-relay.brevo.com',
-      SMTP_PORT:'587',
-      SMTP_USER:'private-smtp-user',
-      SMTP_PASSWORD:'private-smtp-password',
-      SMTP_FROM:'Aurevia Exchange <mail@example.invalid>',
+      BREVO_API_KEY:'private-brevo-key',
+      BREVO_SENDER_EMAIL:'mail@example.invalid',
+      BREVO_SENDER_NAME:'Aurevia',
     };
 
-    expect(JSON.stringify(getPublicConfiguration(config))).not.toContain('private-smtp-user');
-    expect(JSON.stringify(getPublicConfiguration(config))).not.toContain('private-smtp-password');
+    expect(JSON.stringify(getPublicConfiguration(config))).not.toContain('private-brevo-key');
   });
 
   it('reports only configured phone OTP delivery and never treats email as verification',()=>{
@@ -226,14 +235,34 @@ describe('canonical environment configuration',()=>{
     expect(getServerConfiguration({RESEND_API_KEY:'email-notifications-key'}).verification.configured).toBe(false);
     expect(getServerConfiguration({TERMII_API_KEY:'termii-key',TERMII_SENDER_ID:'AUREVIA'}).verification.configured).toBe(true);
     expect(getServerConfiguration({TWILIO_ACCOUNT_SID:`AC${'1'.repeat(32)}`,TWILIO_AUTH_TOKEN:'test-token',TWILIO_VERIFY_SERVICE_SID:`VA${'2'.repeat(32)}`}).verification).toMatchObject({
-      configured:true,
-      twilioConfigured:true,
+      configured:false,
       termiiConfigured:false,
     });
     expect(getServerConfiguration({TWILIO_ACCOUNT_SID:'invalid',TWILIO_AUTH_TOKEN:'test-token',TWILIO_VERIFY_SERVICE_SID:'invalid'}).verification.configured).toBe(false);
     expect(getServerConfiguration({TERMII_API_KEY:'termii-key',TERMII_SENDER_ID:'AUREVIA'}).verification.termiiBaseUrl).toBe('https://api.ng.termii.com');
     expect(getServerConfiguration({TERMII_API_KEY:'termii-key',TERMII_SENDER_ID:'AUREVIA',TERMII_BASE_URL:'https://api.eu.termii.com'}).verification.termiiBaseUrl).toBe('https://api.eu.termii.com');
     expect(getServerConfiguration({TERMII_API_KEY:'termii-key',TERMII_SENDER_ID:'AUREVIA',TERMII_BASE_URL:'https://example.invalid'}).verification).toMatchObject({configured:false,termiiBaseUrlValid:false});
+  });
+
+  it('requires explicit Didit environment, API key, workflow UUID, and webhook secret',()=>{
+    const config={
+      DIDIT_ENABLED:'true',
+      DIDIT_ENV:'sandbox',
+      DIDIT_API_KEY:'sk_test_example',
+      DIDIT_WORKFLOW_ID:'123e4567-e89b-42d3-a456-426614174000',
+      DIDIT_WEBHOOK_SECRET:'webhook-secret',
+    };
+
+    expect(getServerConfiguration(config).didit).toMatchObject({enabled:true,environment:'sandbox',configured:true});
+    expect(getServerConfiguration({...config,DIDIT_ENV:'',DIDIT_WORKFLOW_ID:'invalid'}).didit).toMatchObject({
+      configured:false,
+      formattingIssues:expect.arrayContaining([
+        'DIDIT_ENV must be sandbox or production',
+        'DIDIT_WORKFLOW_ID must be a UUID',
+      ]),
+    });
+    expect(getServerConfiguration({...config,DIDIT_API_KEY:'sk_live_example'}).didit.formattingIssues)
+      .toContain('DIDIT_API_KEY is a live key but DIDIT_ENV is sandbox');
   });
 
   it('uses the Render HTTPS origin until a custom domain is explicitly verified',()=>{

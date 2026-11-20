@@ -6,6 +6,7 @@ const API_BASE_URL='https://api.akedly.io';
 const WIDGET_ORIGIN='https://auth.akedly.io';
 const CREATE_ATTEMPT_ENDPOINT=`${API_BASE_URL}/api/v1/widget-sdk/create-attempt`;
 const MAX_WEBHOOK_BYTES=64*1024;
+type AkedlyConfiguration=ReturnType<typeof getServerConfiguration>['akedly'];
 
 type AkedlyProviderErrorDetails={
 	providerEndpoint?:string;
@@ -108,6 +109,13 @@ export function assertAkedlyConfigured(){
 	return config;
 }
 
+export function assertAkedlySettingsPhoneConfigured(){
+	const config=getServerConfiguration().akedly;
+	if(!config.settingsPhoneEnabled)throw new Error('AKEDLY_SETTINGS_PHONE_DISABLED');
+	if(!config.settingsPhoneConfigured)throw new Error('AKEDLY_SETTINGS_PHONE_CONFIGURATION_REQUIRED');
+	return config;
+}
+
 export function akedlyAttemptFailureDiagnostics(error:unknown,phoneNumber:string){
 	const detail=isRecord(error)?error:null;
 	const errorMessage=error instanceof Error?error.message:'';
@@ -177,11 +185,27 @@ export function akedlyAttemptFailureDiagnostics(error:unknown,phoneNumber:string
 }
 
 export async function createAkedlyAttempt(contact:AkedlyContact):Promise<AkedlyAttempt>{
-	let config:ReturnType<typeof assertAkedlyConfigured>;
+	return createAkedlyAttemptWithConfiguration(contact,assertAkedlyConfigured);
+}
+
+export async function createAkedlySettingsPhoneAttempt(contact:AkedlyContact):Promise<AkedlyAttempt>{
+	return createAkedlyAttemptWithConfiguration(contact,assertAkedlySettingsPhoneConfigured);
+}
+
+async function createAkedlyAttemptWithConfiguration(
+	contact:AkedlyContact,
+	getConfiguration:()=>AkedlyConfiguration,
+):Promise<AkedlyAttempt>{
+	let config:AkedlyConfiguration;
 	try{
-		config=assertAkedlyConfigured();
+		config=getConfiguration();
 	}catch(error){
-		const failureCode=error instanceof Error&&['AKEDLY_CONFIGURATION_REQUIRED','AKEDLY_INTEGRATION_DISABLED'].includes(error.message)
+		const failureCode=error instanceof Error&&[
+			'AKEDLY_CONFIGURATION_REQUIRED',
+			'AKEDLY_INTEGRATION_DISABLED',
+			'AKEDLY_SETTINGS_PHONE_DISABLED',
+			'AKEDLY_SETTINGS_PHONE_CONFIGURATION_REQUIRED',
+		].includes(error.message)
 			?error.message
 			:'AKEDLY_CONFIGURATION_FAILED';
 		throw new AkedlyProviderError(failureCode,undefined,'CONFIGURATION_ERROR',undefined,{
@@ -310,7 +334,18 @@ export async function createAkedlyAttempt(contact:AkedlyContact):Promise<AkedlyA
 }
 
 export async function lookupAkedlyAttempt(attemptId:string):Promise<unknown>{
-	const config=assertAkedlyConfigured();
+	return lookupAkedlyAttemptWithConfiguration(attemptId,assertAkedlyConfigured);
+}
+
+export async function lookupAkedlySettingsPhoneAttempt(attemptId:string):Promise<unknown>{
+	return lookupAkedlyAttemptWithConfiguration(attemptId,assertAkedlySettingsPhoneConfigured);
+}
+
+async function lookupAkedlyAttemptWithConfiguration(
+	attemptId:string,
+	getConfiguration:()=>AkedlyConfiguration,
+):Promise<unknown>{
+	const config=getConfiguration();
 	const endpoint=`${API_BASE_URL}/api/v1/transactions/status`;
 	let response:Response;
 	try{
@@ -350,8 +385,27 @@ export function verifyAkedlyWebhook(rawBody:string,headers:Record<string,string>
 	new Webhook(config.webhookSecret).verify(rawBody,headers);
 }
 
+export function verifyAkedlySettingsPhoneWebhook(rawBody:string,headers:Record<string,string>){
+	const config=assertAkedlySettingsPhoneConfigured();
+	new Webhook(config.webhookSecret).verify(rawBody,headers);
+}
+
 export function isConfirmedAkedlyAttempt(value:unknown,attemptId:string,contact:AkedlyContact,expiresAt?:Date){
-	const config=assertAkedlyConfigured();
+	return isConfirmedAkedlyAttemptWithConfiguration(value,attemptId,contact,expiresAt,assertAkedlyConfigured(),false);
+}
+
+export function isConfirmedAkedlySettingsPhoneAttempt(value:unknown,attemptId:string,contact:AkedlyContact,expiresAt?:Date){
+	return isConfirmedAkedlyAttemptWithConfiguration(value,attemptId,contact,expiresAt,assertAkedlySettingsPhoneConfigured(),true);
+}
+
+function isConfirmedAkedlyAttemptWithConfiguration(
+	value:unknown,
+	attemptId:string,
+	contact:AkedlyContact,
+	expiresAt:Date|undefined,
+	config:AkedlyConfiguration,
+	requireSms:boolean,
+){
 	const payload=unwrapAttemptPayload(value);
 	if(!isRecord(payload)||payload.status!=='success')return false;
 	const widgetAttempt=payload.widgetAttempt;
@@ -360,6 +414,7 @@ export function isConfirmedAkedlyAttempt(value:unknown,attemptId:string,contact:
 	if(widgetAttempt.attemptId!==attemptId||widgetAttempt.widgetId!==config.widgetId||widgetAttempt.status!=='verified')return false;
 	if(widgetAttempt.isTest!==false||transaction.isTest!==false)return false;
 	if(transaction.status!=='Successful'||transaction.pipelineID!==config.pipelineId)return false;
+	if(requireSms&&!includesSmsDelivery(transaction))return false;
 	if(expiresAt&&!completedWithinAttempt(transaction,widgetAttempt,expiresAt))return false;
 	const verificationAddress=transaction.verificationAddress;
 	if(!isRecord(verificationAddress))return false;
@@ -368,12 +423,26 @@ export function isConfirmedAkedlyAttempt(value:unknown,attemptId:string,contact:
 }
 
 export function isConfirmedAkedlyLookup(value:unknown,contact:AkedlyContact,expiresAt?:Date){
-	const config=assertAkedlyConfigured();
+	return isConfirmedAkedlyLookupWithConfiguration(value,contact,expiresAt,assertAkedlyConfigured(),false);
+}
+
+export function isConfirmedAkedlySettingsPhoneLookup(value:unknown,contact:AkedlyContact,expiresAt?:Date){
+	return isConfirmedAkedlyLookupWithConfiguration(value,contact,expiresAt,assertAkedlySettingsPhoneConfigured(),true);
+}
+
+function isConfirmedAkedlyLookupWithConfiguration(
+	value:unknown,
+	contact:AkedlyContact,
+	expiresAt:Date|undefined,
+	config:AkedlyConfiguration,
+	requireSms:boolean,
+){
 	const payload=unwrapAttemptPayload(value);
 	if(!isRecord(payload)||payload.status!=='success')return false;
 	const transaction=payload.transaction;
 	if(!isRecord(transaction)||transaction.status!=='Successful')return false;
 	if(transaction.isTest!==false||transaction.pipelineID!==config.pipelineId)return false;
+	if(requireSms&&!includesSmsDelivery(transaction))return false;
 	if(expiresAt&&!completedWithinAttempt(transaction,undefined,expiresAt))return false;
 	const verificationAddress=transaction.verificationAddress;
 	if(!isRecord(verificationAddress))return false;
@@ -461,7 +530,12 @@ function providerAttemptId(value:unknown){
 	return typeof candidate==='string'&&/^[A-Za-z0-9_-]{8,200}$/.test(candidate)?candidate:undefined;
 }
 
-function providerErrorMessage(value:unknown,contact:AkedlyContact,config:ReturnType<typeof assertAkedlyConfigured>){
+function includesSmsDelivery(transaction:Record<string,unknown>){
+	return transaction.resolvedChannel==='sms'
+		||(Array.isArray(transaction.channels)&&transaction.channels.includes('sms'));
+}
+
+function providerErrorMessage(value:unknown,contact:AkedlyContact,config:AkedlyConfiguration){
 	if(!isRecord(value))return undefined;
 	const nested=isRecord(value.error)?value.error:null;
 	const data=isRecord(value.data)?value.data:null;

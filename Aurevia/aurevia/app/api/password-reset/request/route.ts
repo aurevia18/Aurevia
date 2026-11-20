@@ -92,7 +92,7 @@ export async function POST(request:Request){
 				],
 				action:{label:'Reset password',href:resetUrl.toString()},
 			}),
-		},{fallbackToResend:true});
+		});
 		if(!delivery.sent){
 			await db.passwordResetToken.updateMany({where:{tokenHash,consumedAt:null},data:{consumedAt:new Date()}});
 			console.warn('[password-reset] Recovery email delivery failed.',{

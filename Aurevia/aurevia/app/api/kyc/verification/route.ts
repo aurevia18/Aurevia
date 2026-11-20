@@ -51,7 +51,8 @@ export async function GET(){
 		const activeUser=await db.user.findUnique({where:{id:user.id},select:{status:true,accountMode:true}});
 		if(!activeUser||activeUser.status!=='ACTIVE')return NextResponse.json({error:'This account is unavailable.'},{status:403});
 		if(activeUser.accountMode!==AccountMode.REAL)return NextResponse.json({error:'Identity verification is available in REAL mode only.'},{status:403});
-		const verifications=await db.kycVerification.findMany({
+		const [verifications,latestDiditSession]=await Promise.all([
+			db.kycVerification.findMany({
 			where:{userId:user.id},
 			orderBy:{createdAt:'desc'},
 			take:10,
@@ -62,14 +63,30 @@ export async function GET(){
 				documents:{select:{id:true,kind:true,documentSide:true,filename:true,mimeType:true,size:true,status:true,uploadedAt:true,reviewedAt:true,reviewNote:true}},
 				events:{select:{fromStatus:true,toStatus:true,action:true,reason:true,createdAt:true},orderBy:{createdAt:'asc'}},
 			},
-		});
+			}),
+			db.diditVerificationSession.findFirst({
+				where:{userId:user.id},
+				orderBy:{createdAt:'desc'},
+				select:{sessionId:true,status:true,environment:true,createdAt:true,completedAt:true},
+			}),
+		]);
 		const safeVerifications=verifications.map(({identityDataCiphertext,identityDataIv,identityDataAuthTag,...verification})=>({
 			...verification,
 			identityInformation:identityDataCiphertext&&identityDataIv&&identityDataAuthTag
 				?decryptKycIdentityInformation({identityDataCiphertext,identityDataIv,identityDataAuthTag})
 				:null,
 		}));
-		return NextResponse.json({registry:allowedTypes.map(type=>({type,label:kycDocumentRegistry[type].label,sides:kycDocumentRegistry[type].sides,expiryRequired:kycDocumentRegistry[type].expiryRequired})),verifications:safeVerifications},{headers:{'Cache-Control':'private, no-store'}});
+		const didit=getServerConfiguration().didit;
+		return NextResponse.json({
+			registry:allowedTypes.map(type=>({type,label:kycDocumentRegistry[type].label,sides:kycDocumentRegistry[type].sides,expiryRequired:kycDocumentRegistry[type].expiryRequired})),
+			verifications:safeVerifications,
+			didit:{
+				enabled:didit.enabled,
+				configured:didit.configured,
+				environment:didit.environment,
+				latestSession:latestDiditSession,
+			},
+		},{headers:{'Cache-Control':'private, no-store'}});
 	}catch(error){
 		const unauthorized=error instanceof Error&&error.message==='UNAUTHORIZED';
 		if(!unauthorized)console.error('KYC verification status could not be loaded.',{errorType:error instanceof Error?error.name:'UnknownError'});

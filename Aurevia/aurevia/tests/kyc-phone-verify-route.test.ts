@@ -8,10 +8,10 @@ const mocks=vi.hoisted(()=>({
 	userUpdateMany:vi.fn(),
 	transaction:vi.fn(),
 	codeMatches:vi.fn(),
-	verifyTwilio:vi.fn(),
+	verifyTermii:vi.fn(),
 	createNotification:vi.fn(),
 	rateLimit:vi.fn(),
-	TwilioVerifyProviderError:class extends Error{},
+	TermiiProviderError:class extends Error{},
 }));
 
 vi.mock('@/lib/auth',()=>({requireUser:mocks.requireUser}));
@@ -25,13 +25,15 @@ vi.mock('@/lib/rate-limit',()=>({rateLimit:mocks.rateLimit}));
 vi.mock('@/lib/config',()=>({verificationConfig:{maxAttempts:6}}));
 vi.mock('@/lib/verification-delivery',()=>({
 	verificationCodeMatches:mocks.codeMatches,
-	verifyTwilioVerificationCode:mocks.verifyTwilio,
-	TwilioVerifyProviderError:mocks.TwilioVerifyProviderError,
+	resolveSmsProviderReference:(reference:string)=>reference.startsWith('TERMII:')
+		?{provider:{id:'termii',verify:mocks.verifyTermii},reference:reference.slice('TERMII:'.length)}
+		:null,
+	TermiiProviderError:mocks.TermiiProviderError,
 }));
 
 import {POST} from '@/app/api/kyc/phone/verify/route';
 
-describe('phone verification route rate limits',()=>{
+describe('Tier 3 phone verification provider references',()=>{
 	beforeEach(()=>{
 		vi.clearAllMocks();
 		mocks.requireUser.mockResolvedValue({id:'user-1'});
@@ -40,7 +42,7 @@ describe('phone verification route rate limits',()=>{
 			approvedTier:2,name:'Test User',country:'Nigeria',
 		});
 		mocks.codeFindUnique.mockResolvedValue({
-			id:'challenge-1',channel:'SMS',providerReference:'TWILIO',codeHash:'challenge-hash',
+			id:'challenge-1',channel:'SMS',providerReference:'TERMII:termii-pin-1',codeHash:'challenge-hash',
 			expiresAt:new Date(Date.now()+60_000),attempts:0,
 		});
 		mocks.codeDeleteMany.mockResolvedValue({count:1});
@@ -50,12 +52,12 @@ describe('phone verification route rate limits',()=>{
 			user:{updateMany:mocks.userUpdateMany},
 		}));
 		mocks.codeMatches.mockReturnValue(true);
-		mocks.verifyTwilio.mockResolvedValue(true);
+		mocks.verifyTermii.mockResolvedValue(true);
 		mocks.createNotification.mockResolvedValue({});
 		mocks.rateLimit.mockImplementation(()=>undefined);
 	});
 
-	it('uses trusted client IPs with higher shared-network capacity and per-user limits',async()=>{
+	it('uses the provider recorded on the challenge and enforces the request limits',async()=>{
 		const request=new Request('https://aurevia.test/api/kyc/phone/verify',{
 			method:'POST',
 			headers:{'content-type':'application/json','x-forwarded-for':'192.0.2.2'},
@@ -67,12 +69,12 @@ describe('phone verification route rate limits',()=>{
 		expect(response.status).toBe(200);
 		expect(mocks.rateLimit).toHaveBeenCalledWith('kyc-phone-verify-ip:192.0.2.2',60,15*60_000);
 		expect(mocks.rateLimit).toHaveBeenCalledWith('kyc-phone-verify-user:user-1',24,60*60_000);
-		expect(mocks.verifyTwilio).toHaveBeenCalledWith('+2348031234567','123456');
+		expect(mocks.verifyTermii).toHaveBeenCalledWith('termii-pin-1','123456');
 	});
 
-	it('does not send historical Akedly attempts back to the retired widget',async()=>{
+	it('rejects retired provider references without making a provider request',async()=>{
 		mocks.codeFindUnique.mockResolvedValue({
-			id:'legacy-challenge',channel:'SMS',providerReference:'AKEDLY:old-attempt',codeHash:'legacy-hash',
+			id:'legacy-challenge',channel:'SMS',providerReference:'TWILIO',codeHash:'legacy-hash',
 			expiresAt:new Date(Date.now()+60_000),attempts:0,
 		});
 		const request=new Request('https://aurevia.test/api/kyc/phone/verify',{
@@ -85,6 +87,6 @@ describe('phone verification route rate limits',()=>{
 
 		expect(response.status).toBe(409);
 		expect(await response.json()).toMatchObject({error:'This legacy phone attempt is no longer active. Request a new SMS code to continue.'});
-		expect(mocks.verifyTwilio).not.toHaveBeenCalled();
+		expect(mocks.verifyTermii).not.toHaveBeenCalled();
 	});
 });

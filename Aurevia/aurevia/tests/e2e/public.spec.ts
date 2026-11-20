@@ -133,7 +133,7 @@ test('homepage testimonial profile stays visible when its portrait is unavailabl
 	await page.route('**/api/client-stories',route=>route.fulfill({
 		status:200,
 		contentType:'application/json',
-		body:JSON.stringify([{id:'home-testimonial',displayName:'Sam Example',country:'Canada',cityOrRegion:'Toronto',title:'A clear account view',quote:'I can review my account in one place.',imageUrl:'/client-stories/e2e-portrait.png',rating:5}]),
+		body:JSON.stringify([{id:'home-testimonial',displayName:'Sam Example',country:'Canada',cityOrRegion:'Toronto',title:'A clear account view',quote:'I can review my account in one place.',imageUrl:'data:image/png;base64,AA==',rating:5}]),
 	}));
 	await page.goto('/');
 	await waitForStartup(page);
@@ -141,7 +141,6 @@ test('homepage testimonial profile stays visible when its portrait is unavailabl
 	await expect(profile).toBeVisible();
 	await expect(profile.getByText('I can review my account in one place.')).toBeVisible();
 	await profile.scrollIntoViewIfNeeded();
-	await profile.locator('.client-story-portrait').evaluate(image=>image.dispatchEvent(new Event('error')));
 	await expect(profile.locator('.client-story-monogram')).toHaveText('S');
 });
 
@@ -230,11 +229,11 @@ test('homepage clearly labels stock and crypto trading modes',async({page})=>{
 	const stocks=page.locator('.asset-item').filter({hasText:'Stock trading'}).first();
 	await expect(stocks).toContainText('DEMO');
 	await expect(stocks).toContainText('NVDA');
-	await expect(stocks).toContainText('Alpaca sandbox routing');
+	await expect(stocks).toContainText('wallet-funded internal simulation');
 	const crypto=page.locator('.asset-item').filter({hasText:'Crypto trading'}).first();
 	await expect(crypto).toContainText('BTC/USD');
 	await expect(crypto).toContainText('ETH/USD');
-	await expect(crypto).toContainText('Alpaca sandbox routing');
+	await expect(crypto).toContainText('wallet-funded internal simulation');
 });
 
 test('site theme preference switches globally and persists across navigation and devices',async({browser,page})=>{
@@ -257,12 +256,12 @@ test('site theme preference switches globally and persists across navigation and
 	}finally{await secondDevice.close();}
 });
 
-test('public disclosures distinguish sandbox order routing and internal wallet funds',async({page})=>{
+test('public disclosures explain internal simulated orders and wallet records',async({page})=>{
 	await page.goto('/terms');
-	await expect(page.getByText(/Alpaca sandbox environment/)).toBeVisible();
-	await expect(page.getByText(/provider sandbox balances or returns are not Aurevia wallet funds/)).toBeVisible();
+	await expect(page.getByText(/REAL-mode orders are funded from the Aurevia Wallet and simulated internally/)).toBeVisible();
+	await expect(page.getByText(/no external exchange order is placed and wallet assets are not silently converted/)).toBeVisible();
 	await page.goto('/risk-disclosure');
-	await expect(page.getByText(/REAL-mode orders route to an Alpaca sandbox environment/)).toBeVisible();
+	await expect(page.getByText(/REAL-mode orders are funded from the Aurevia Wallet and simulated internally/)).toBeVisible();
 	await expect(page.getByText(/They do not represent money held in custody or confirmation that an external payment occurred/)).toBeVisible();
 	await page.goto('/privacy');
 	await expect(page.getByText(/private object-storage bucket/)).toBeVisible();

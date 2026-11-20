@@ -1,23 +1,23 @@
 import {getAiEngineStatus,type AiProvider} from '@/lib/ai-gateway';
 import {getServerConfiguration} from '@/lib/config/env';
-import {verifySmtpConnection} from '@/lib/email';
 import {getLiveMarketProviderStatus,getMarketAsset} from '@/lib/live-market';
 import {getAlpacaMarketDataOptions} from '@/lib/market-data-service';
 import {getFinnhubQuote} from '@/lib/providers/finnhub-market-data';
 import {getAlpacaPaperAccountHealth} from '@/lib/providers/alpaca-crypto-provider';
 
 export type IntegrationStatus='CONNECTED'|'MISSING_CREDENTIALS'|'CONFIGURATION_REQUIRED'|'CONNECTION_FAILED'|'PROVIDER_UNAVAILABLE'|'PENDING_ADMIN_APPROVAL'|'NOT_CONFIGURED'|'DISABLED';
-export type IntegrationId='openai'|'openrouter'|'gemini'|'groq'|'alpaca'|'finnhub'|'currency'|'supabase_auth'|'supabase_storage'|'resend'|'termii'|'smtp'|'browser_push'|'gnews'|'payment'|'database'|'akedly'|'aurevia_kyc';
+export type IntegrationId='openai'|'openrouter'|'gemini'|'groq'|'alpaca'|'finnhub'|'currency'|'supabase_auth'|'supabase_storage'|'brevo'|'termii'|'browser_push'|'gnews'|'payment'|'database'|'akedly'|'aurevia_kyc'|'didit';
 export type IntegrationCheck={id:IntegrationId;name:string;status:IntegrationStatus;detail:string;feature:string;documentation:string;checkedAt:string;canTest:boolean};
 
 const docs:Record<IntegrationId,string>={
 	openai:'https://platform.openai.com/docs/overview',openrouter:'https://openrouter.ai/docs/quickstart',gemini:'https://ai.google.dev/gemini-api/docs',groq:'https://console.groq.com/docs/quickstart',
 	alpaca:'https://docs.alpaca.markets/docs/getting-started',finnhub:'https://finnhub.io/docs/api',currency:'https://finnhub.io/docs/api/forex-rates',
-	supabase_auth:'https://supabase.com/docs/guides/auth',supabase_storage:'https://supabase.com/docs/guides/storage',resend:'https://resend.com/docs/api-reference/domains/list-domains',
-	termii:'https://developers.termii.com/',smtp:'https://nodemailer.com/smtp/',browser_push:'https://developer.mozilla.org/en-US/docs/Web/API/Push_API',
+	supabase_auth:'https://supabase.com/docs/guides/auth',supabase_storage:'https://supabase.com/docs/guides/storage',brevo:'https://developers.brevo.com/docs/send-a-transactional-email',
+	termii:'https://developers.termii.com/',browser_push:'https://developer.mozilla.org/en-US/docs/Web/API/Push_API',
 	gnews:'https://docs.gnews.io/',payment:'https://render.com/docs/configure-environment-variables',database:'https://supabase.com/docs/guides/database/connecting-to-postgres',
 	akedly:'https://docs.akedly.io/authentication/v2',
 	aurevia_kyc:'https://github.com/aurevia31/Aurevia',
+	didit:'https://docs.didit.me/sessions-api/create-session',
 };
 
 type AiEngineStatus=Awaited<ReturnType<typeof getAiEngineStatus>>;
@@ -54,11 +54,11 @@ async function checkFinnhub(){
 
 async function checkAlpaca(){
 	const health=await getAlpacaPaperAccountHealth();
-	if(health.status==='AVAILABLE')return item('alpaca','Alpaca sandbox execution','CONNECTED','Sandbox account authentication succeeded. Live brokerage routing remains disabled.','Authorized REAL-mode sandbox orders');
-	if(health.status==='NOT_CONFIGURED')return item('alpaca','Alpaca sandbox execution','MISSING_CREDENTIALS','Set ALPACA_API_KEY and ALPACA_SECRET_KEY (or ALPACA_API_SECRET); use ALPACA_TRADING_BASE_URL (or ALPACA_BASE_URL) with the Alpaca sandbox endpoint.','Optional REAL-mode sandbox orders');
-	if(health.status==='AUTHENTICATION_FAILED')return item('alpaca','Alpaca sandbox execution','CONNECTION_FAILED','Alpaca rejected the configured credentials.','Authorized REAL-mode sandbox orders');
-	if(health.status==='UNAVAILABLE')return item('alpaca','Alpaca sandbox execution','PROVIDER_UNAVAILABLE','The sandbox account endpoint did not return an active account.','Authorized REAL-mode sandbox orders');
-	return item('alpaca','Alpaca sandbox execution','CONFIGURATION_REQUIRED','Alpaca sandbox endpoint, provider selection, or order settings require configuration.','Authorized REAL-mode sandbox orders');
+	if(health.status==='AVAILABLE')return item('alpaca','Legacy Alpaca reconciliation','CONNECTED','The legacy sandbox account is reachable for historical provider-order reconciliation. New REAL orders use Aurevia Internal simulated execution.','Historical Alpaca-linked orders only');
+	if(health.status==='NOT_CONFIGURED')return item('alpaca','Legacy Alpaca reconciliation','MISSING_CREDENTIALS','No legacy Alpaca sandbox credentials are configured. New REAL orders do not require Alpaca.','Historical Alpaca-linked orders only');
+	if(health.status==='AUTHENTICATION_FAILED')return item('alpaca','Legacy Alpaca reconciliation','CONNECTION_FAILED','Alpaca rejected the configured legacy reconciliation credentials.','Historical Alpaca-linked orders only');
+	if(health.status==='UNAVAILABLE')return item('alpaca','Legacy Alpaca reconciliation','PROVIDER_UNAVAILABLE','The legacy sandbox account endpoint is unavailable. New REAL orders use Aurevia Internal simulated execution.','Historical Alpaca-linked orders only');
+	return item('alpaca','Legacy Alpaca reconciliation','CONFIGURATION_REQUIRED','Legacy Alpaca reconciliation settings require review. New REAL orders do not use Alpaca.','Historical Alpaca-linked orders only');
 }
 
 async function checkSupabaseAuth(){
@@ -87,25 +87,11 @@ async function checkSupabaseStorage(){
 	}catch{return item('supabase_storage','Supabase Storage','CONNECTION_FAILED','Storage endpoint could not be reached.','Private KYC and receipt file storage');}
 }
 
-async function checkResend(){
-	const key=getServerConfiguration().verification.resendApiKey;
-	if(!key)return item('resend','Resend email','MISSING_CREDENTIALS','RESEND_API_KEY is not configured.','Registration and verification email');
-	try{
-		const response=await fetch('https://api.resend.com/domains',{headers:{authorization:`Bearer ${key}`},cache:'no-store',signal:AbortSignal.timeout(8_000)});
-		if(!response.ok)return item('resend','Resend email',response.status>=500||response.status===429?'PROVIDER_UNAVAILABLE':'CONNECTION_FAILED',`Read-only domain check returned HTTP ${response.status}.`,'Registration and verification email');
-		const payload=await response.json() as {data?:Array<{status?:string}>};
-		const verified=payload.data?.some(domain=>domain.status?.toLowerCase()==='verified');
-		return verified?item('resend','Resend email','CONNECTED','Credential accepted and at least one sender domain is verified.','Registration and verification email'):item('resend','Resend email','CONFIGURATION_REQUIRED','Credential accepted, but no verified sender domain was found.','Registration and verification email');
-	}catch{return item('resend','Resend email','CONNECTION_FAILED','Resend domain endpoint could not be reached.','Registration and verification email');}
-}
-
-async function checkSmtp(){
-	const smtp=getServerConfiguration().smtp;
-	if(!smtp.configured)return item('smtp','SMTP email','MISSING_CREDENTIALS','SMTP host, account, password, and sender must be configured.','Outbound transactional email');
-	const verification=await verifySmtpConnection();
-	return verification.verified
-		?item('smtp','SMTP email','CONNECTED','SMTP connection and authentication check succeeded.','Outbound transactional email')
-		:item('smtp','SMTP email','CONNECTION_FAILED','SMTP server verification failed; no message was sent.','Outbound transactional email');
+function checkBrevo(){
+	const config=getServerConfiguration().email;
+	return checkConfiguredOnly('brevo','Brevo transactional email',config.configured,
+		'Registration, account security, password reset, and KYC notifications',
+		'BREVO_API_KEY, BREVO_SENDER_EMAIL, and BREVO_SENDER_NAME are required.');
 }
 
 async function checkCurrency(){
@@ -159,8 +145,7 @@ export async function checkIntegration(id:IntegrationId,aiEngineStatus?:Promise<
 	if(id==='currency')return checkCurrency();
 	if(id==='supabase_auth')return checkSupabaseAuth();
 	if(id==='supabase_storage')return checkSupabaseStorage();
-	if(id==='resend')return checkResend();
-	if(id==='smtp')return checkSmtp();
+	if(id==='brevo')return checkBrevo();
 	if(id==='gnews')return checkGnews();
 	if(id==='database')return checkDatabase();
 	if(id==='termii'){
@@ -172,19 +157,25 @@ export async function checkIntegration(id:IntegrationId,aiEngineStatus?:Promise<
 		return item('akedly','Akedly (legacy)','DISABLED','Akedly is retained only for historical records. New KYC and phone-verification flows do not call it.','Historical verification records',false);
 	}
 	if(id==='aurevia_kyc')return checkAureviaKyc();
+	if(id==='didit'){
+		const config=getServerConfiguration().didit;
+		if(!config.enabled)return item(id,'Didit KYC','DISABLED','Didit is disabled; the existing first-party KYC flow remains available.','Hosted KYC verification',false);
+		if(!config.configured)return item(id,'Didit KYC','MISSING_CREDENTIALS','DIDIT_ENV, DIDIT_API_KEY, DIDIT_WORKFLOW_ID, and DIDIT_WEBHOOK_SECRET must be correctly configured.','Hosted KYC verification',false);
+		return item(id,'Didit KYC','CONFIGURATION_REQUIRED',`Didit is configured for ${config.environment} but credentials and workflow availability have not been tested; no KYC session was started.`,'Hosted KYC verification',false);
+	}
 	if(id==='browser_push')return checkConfiguredOnly(id,'Browser push',Boolean(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY?.trim()&&process.env.VAPID_PRIVATE_KEY?.trim()&&process.env.VAPID_SUBJECT?.trim()&&process.env.PUSH_SUBSCRIPTION_ENCRYPTION_KEY?.trim()),'Web push notifications','VAPID keys, subject, and subscription encryption key are required.');
 	const payment=getServerConfiguration().payment;
 	return item('payment','Payment processing',payment.configured?'PENDING_ADMIN_APPROVAL':'NOT_CONFIGURED',payment.configured?'Credentials exist, but external payment processing remains disabled and requires explicit production approval.':'External payment processing is not configured or enabled.','External deposits and payouts',false);
 }
 
 export async function getIntegrationInventory(aiStatus?:Promise<AiEngineStatus>):Promise<IntegrationCheck[]>{
-	const ids:IntegrationId[]=['openai','openrouter','gemini','groq','alpaca','finnhub','currency','supabase_auth','supabase_storage','resend','termii','smtp','browser_push','gnews','payment','database','akedly','aurevia_kyc'];
+	const ids:IntegrationId[]=['openai','openrouter','gemini','groq','alpaca','finnhub','currency','supabase_auth','supabase_storage','brevo','termii','browser_push','gnews','payment','database','akedly','aurevia_kyc','didit'];
 	const aiEngineStatus=aiStatus||getAiEngineStatus();
 	return Promise.all(ids.map(id=>checkIntegration(id,aiEngineStatus)));
 }
 
 export function isIntegrationId(value:unknown):value is IntegrationId{
-	return typeof value==='string'&&['openai','openrouter','gemini','groq','alpaca','finnhub','currency','supabase_auth','supabase_storage','resend','termii','smtp','browser_push','gnews','payment','database','akedly','aurevia_kyc'].includes(value);
+	return typeof value==='string'&&['openai','openrouter','gemini','groq','alpaca','finnhub','currency','supabase_auth','supabase_storage','brevo','termii','browser_push','gnews','payment','database','akedly','aurevia_kyc','didit'].includes(value);
 }
 
 export function mapAiStatusForDisplay(value:string){return aiStatus(value)}

@@ -442,17 +442,17 @@ test('support fallback gives correct account-mode and funding guidance',async({p
 	await page.getByRole('textbox',{name:'Ask Nova AI'}).fill('How do REAL and DEMO account modes work?');
 	await page.getByRole('button',{name:'Send question'}).click();
 	await expect(page.getByText(/DEMO trades are practice activity/)).toBeVisible();
-	await expect(page.getByText(/Alpaca sandbox when enabled/)).toBeVisible();
+	await expect(page.getByText(/new REAL account orders use Aurevia Wallet funds and internal simulated execution/)).toBeVisible();
 	await expect(page.getByText(/does not send an external payment or payout/)).toBeVisible();
 });
 
-test('provider health distinguishes sandbox routing from disabled live services',async({page})=>{
+test('provider health identifies Alpaca as legacy reconciliation and internal REAL execution',async({page})=>{
 	await loginAs(page,fixture('ADMIN_EMAIL'),fixture('ADMIN_PASSWORD'));
 	await page.goto('/admin/providers');
 	await expect(page.getByRole('heading',{name:'Provider health'})).toBeVisible();
 	await expect(page.getByRole('heading',{name:'Live financial services'})).toBeVisible();
-	await expect(page.getByRole('heading',{name:'Alpaca sandbox account'})).toBeVisible();
-	await expect(page.getByText(/When enabled, REAL-mode orders use this shared Alpaca sandbox account/)).toBeVisible();
+	await expect(page.getByRole('heading',{name:'Legacy Alpaca reconciliation'})).toBeVisible();
+	await expect(page.getByText(/New REAL-mode orders use Aurevia's wallet-funded internal simulated execution/)).toBeVisible();
 });
 
 test('Aurevia Verify is first-party and legacy upload flows fail closed',async({page})=>{
@@ -1825,7 +1825,7 @@ test('account-mode changes initialize and isolate wallet, trade, history, and su
 	await expect(page.locator('.portfolio-heading-actions .status-pill')).toContainText('REAL ACCOUNT');
 	await page.goto('/dashboard');
 	const dashboardRealOverview=page.locator('.user-dashboard-real-overview');
-	const realExecutionNote='When enabled, REAL account orders route through the Alpaca sandbox. Status reflects provider confirmation; confirmed fills are recorded in the Aurevia ledger.';
+	const realExecutionNote="REAL account orders use funds and assets available in the matching Aurevia Wallet currency and are executed by Aurevia internally. No external exchange order is placed.";
 	const dashboardRealCopy=[
 		'Trade with confidence on Aurevia. Manage your orders, monitor trade activity, and track your account balance, portfolio performance, and available funds through one secure trading dashboard.',
 		'Aurevia provides a seamless account management experience, with real-time order status updates and transparent portfolio tracking.',
@@ -1855,19 +1855,11 @@ test('account-mode changes initialize and isolate wallet, trade, history, and su
 	for(const viewport of [{width:375,height:812},{width:1440,height:900}]){
 		await page.setViewportSize(viewport);
 		await expect(page.getByText('Trade confidently with Aurevia. Manage your orders, monitor execution status, and track your account balance, portfolio performance, and available funds from one secure trading dashboard. Deposits and withdrawals are subject to account verification and approval.',{exact:true})).toBeVisible();
-		await expect(page.getByText('Alpaca sandbox · provider-confirmed orders',{exact:true})).toBeVisible();
+		await expect(page.getByText('Aurevia internal simulated execution',{exact:true})).toBeVisible();
 		await expectNoHorizontalOverflow(page);
 	}
 	const realOrderButton=page.getByRole('button',{name:'Place BUY order'});
-	const marketResponse=await page.request.get('/api/live-markets?symbols=AAPL');
-	expect(marketResponse.ok()).toBeTruthy();
-	const marketData=await marketResponse.json() as {quotes?:Array<{asset?:{id?:string};source?:string;isStale?:boolean}>};
-	const hasFreshProviderQuote=marketData.quotes?.some(quote=>quote.asset?.id==='AAPL'&&(quote.source==='Finnhub'||quote.source?.startsWith('Alpaca'))&&!quote.isStale)??false;
-	if(hasFreshProviderQuote)await expect(realOrderButton).toBeEnabled();
-	else{
-		await expect(realOrderButton).toBeDisabled();
-		await expect(page.locator('.trade-chart-note')).toContainText('Provider market data is independent of Demo and Real account mode.');
-	}
+	await expect(realOrderButton).toBeEnabled();
 	await page.goto('/orders');
 	for(const viewport of [{width:375,height:812},{width:1440,height:900}]){
 		await page.setViewportSize(viewport);
