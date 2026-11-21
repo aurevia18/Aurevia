@@ -6,7 +6,6 @@ describe('isolated E2E provider environment',()=>{
 		const environment:NodeJS.ProcessEnv={
 			NODE_ENV:'test',
 			BREVO_API_KEY:'test-brevo-key',
-			DIDIT_API_KEY:'test-didit-key',
 			SMTP_HOST:'smtp.example.invalid',
 			RESEND_API_KEY:'test-resend-key',
 			TWILIO_AUTH_TOKEN:'test-twilio-token',
@@ -24,7 +23,6 @@ describe('isolated E2E provider environment',()=>{
 
 		expect(environment).toMatchObject({
 			BREVO_API_KEY:'',
-			DIDIT_API_KEY:'',
 			SMTP_HOST:'',
 			RESEND_API_KEY:'',
 			TWILIO_AUTH_TOKEN:'',

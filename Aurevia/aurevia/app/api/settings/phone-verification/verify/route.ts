@@ -9,6 +9,7 @@ import {
 	accountContactVerificationConfig,
 	auditContactVerificationFailure,
 	accountContactVerificationCodeMatches,
+	getContactVerificationDatabaseErrorCode,
 } from '@/lib/account-contact-verification';
 import {resolveSmsProviderReference,TermiiProviderError} from '@/lib/verification-delivery';
 import {confirmSettingsPhoneVerification} from '@/lib/settings-phone-verification';
@@ -120,7 +121,9 @@ export async function POST(request:Request){
 		if(error instanceof Error&&error.message==='UNAUTHORIZED')return NextResponse.json({error:'Sign in to verify your phone number.'},{status:401});
 		if(error instanceof Error&&error.message==='FORBIDDEN')return NextResponse.json({error:'This account is unavailable.'},{status:403});
 		if(error instanceof Error&&error.message==='RATE_LIMITED')return NextResponse.json({error:'Too many verification attempts. Try again later.'},{status:429});
-		console.error('[account-contact-verification] Phone code verification failed.',{errorType:error instanceof Error?error.name:'UnknownError'});
+		const errorCode=getContactVerificationDatabaseErrorCode(error);
+		console.error('[account-contact-verification] Phone code verification failed.',{errorType:error instanceof Error?error.name:'UnknownError',...(errorCode?{errorCode}:{})});
+		if(errorCode)return NextResponse.json({error:'Phone verification is unavailable because the application database schema needs an update. Contact support.'},{status:503});
 		return NextResponse.json({error:'Unable to verify this phone number right now.'},{status:503});
 	}
 }

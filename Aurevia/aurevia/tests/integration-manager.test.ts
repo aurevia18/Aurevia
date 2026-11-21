@@ -59,8 +59,8 @@ describe('retired Akedly integration',()=>{
 			vi.stubEnv('AUREVIA_KYC_ENGINE','internal');
 			vi.stubEnv('AUREVIA_KYC_ENABLED','true');
 			vi.stubEnv('KYC_ENCRYPTION_KEY',Buffer.alloc(32,8).toString('base64'));
-			vi.stubEnv('SUPABASE_URL','https://project.supabase.co');
-			vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY','server-only-test-key');
+			vi.stubEnv('KYC_SUPABASE_URL','https://project.supabase.co');
+			vi.stubEnv('KYC_SUPABASE_SERVICE_ROLE_KEY','server-only-test-key');
 
 			const result=await checkIntegration('aurevia_kyc');
 
@@ -68,6 +68,19 @@ describe('retired Akedly integration',()=>{
 			expect(result.status).toBe('CONFIGURATION_REQUIRED');
 			expect(result.detail).toContain('manual-review workflow is configured');
 			expect(isIntegrationId('aurevia_kyc')).toBe(true);
+		});
+
+		it('reports the dedicated KYC storage variables when they are missing',async()=>{
+			vi.stubEnv('AUREVIA_KYC_ENGINE','internal');
+			vi.stubEnv('AUREVIA_KYC_ENABLED','true');
+			vi.stubEnv('KYC_ENCRYPTION_KEY',Buffer.alloc(32,8).toString('base64'));
+			vi.stubEnv('KYC_SUPABASE_URL','');
+			vi.stubEnv('KYC_SUPABASE_SERVICE_ROLE_KEY','');
+
+			const result=await checkIntegration('aurevia_kyc');
+
+			expect(result.status).toBe('MISSING_CREDENTIALS');
+			expect(result.detail).toContain('KYC_SUPABASE_URL and KYC_SUPABASE_SERVICE_ROLE_KEY');
 		});
 	});
 });

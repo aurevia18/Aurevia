@@ -4,7 +4,7 @@ import {NextResponse} from 'next/server';
 import {z,ZodError} from 'zod';
 import {requireUser} from '@/lib/auth';
 import {db} from '@/lib/db';
-import {accountContactVerificationCodeMatches,accountContactVerificationConfig,auditContactVerificationFailure,createAccountContactVerificationHash} from '@/lib/account-contact-verification';
+import {accountContactVerificationCodeMatches,accountContactVerificationConfig,auditContactVerificationFailure,createAccountContactVerificationHash,getContactVerificationDatabaseErrorCode} from '@/lib/account-contact-verification';
 import {trustedProxyClientIp} from '@/lib/request-ip';
 import {rateLimit} from '@/lib/rate-limit';
 
@@ -92,6 +92,11 @@ export async function POST(request:Request){
 				},
 			});
 			if(consumed.count!==1)throw new Error('CONTACT_VERIFICATION_CONSUMED');
+			const accountUpdated=await tx.user.updateMany({
+				where:{id:user.id,email:account.email,status:'ACTIVE'},
+				data:{emailVerifiedAt:now},
+			});
+			if(accountUpdated.count!==1)throw new Error('CONTACT_VERIFICATION_ACCOUNT_CHANGED');
 			await tx.auditLog.create({data:{
 				actorId:user.id,
 				action:'ACCOUNT_EMAIL_VERIFIED',
@@ -108,7 +113,10 @@ export async function POST(request:Request){
 		if(error instanceof Error&&error.message==='FORBIDDEN')return NextResponse.json({error:'This account is unavailable.'},{status:403});
 		if(error instanceof Error&&error.message==='RATE_LIMITED')return NextResponse.json({error:'Too many verification attempts. Try again later.'},{status:429});
 		if(error instanceof Error&&error.message==='CONTACT_VERIFICATION_CONSUMED')return NextResponse.json({error:'This code is invalid or no longer available.'},{status:409});
-		console.error('[account-contact-verification] Email code verification failed.',{errorType:error instanceof Error?error.name:'UnknownError'});
+		if(error instanceof Error&&error.message==='CONTACT_VERIFICATION_ACCOUNT_CHANGED')return NextResponse.json({error:'Your account details changed. Request a new verification code.'},{status:409});
+		const errorCode=getContactVerificationDatabaseErrorCode(error);
+		console.error('[account-contact-verification] Email code verification failed.',{errorType:error instanceof Error?error.name:'UnknownError',...(errorCode?{errorCode}:{})});
+		if(errorCode)return NextResponse.json({error:'Email verification is unavailable because the application database schema needs an update. Contact support.'},{status:503});
 		return NextResponse.json({error:'Unable to verify this email address right now.'},{status:503});
 	}
 }

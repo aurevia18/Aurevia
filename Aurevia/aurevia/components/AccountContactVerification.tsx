@@ -16,6 +16,8 @@ type ContactStatus={
 	phoneResendAfter:string|null;
 	phoneDeliveryAvailable:boolean;
 	emailDeliveryAvailable:boolean;
+	emailConfigurationMissing:string[];
+	phoneConfigurationMissing:string[];
 };
 
 const countryNames=new Intl.DisplayNames(['en'],{type:'region'});
@@ -27,7 +29,9 @@ function countryForPhone(phone:string|null,country:string|null){
 	const parsed=phone?parsePhoneNumberFromString(phone):undefined;
 	if(parsed?.country)return parsed.country;
 	const normalizedCountry=country?.trim().toLocaleLowerCase();
-	return phoneCountries.find(item=>item.country.toLocaleLowerCase()===normalizedCountry)?.country||'US';
+	return phoneCountries.find(item=>item.country.toLocaleLowerCase()===normalizedCountry||item.name.toLocaleLowerCase()===normalizedCountry)?.country
+		||phoneCountries.find(item=>item.country.toLocaleLowerCase()===normalizedCountry)?.country
+		||'US';
 }
 
 function nationalNumber(phone:string|null,countryCode:string){
@@ -159,7 +163,7 @@ export default function AccountContactVerification({country}:{country:string|nul
 
 	return <section className="account-panel card mt-4 p-5" aria-labelledby="contact-verification-heading">
 		<div className="account-panel-title"><div><h2 id="contact-verification-heading">Contact verification</h2><p className="account-panel-subtitle">Email and phone verification are optional and managed independently. Neither affects KYC or your account tier.</p></div></div>
-		{loading?<p className="muted" role="status">Loading verification status…</p>:<div className="grid gap-6 lg:grid-cols-2">
+		{loading?<p className="muted" role="status">Loading verification status…</p>:!status?<div className="grid gap-3"><p className="text-sm muted">Contact verification status is unavailable.</p><button className="btn w-fit bg-white/5" type="button" onClick={()=>{setLoading(true);setError('');void refresh().catch(exception=>setError(exception instanceof Error?exception.message:'Unable to load contact verification status.')).finally(()=>setLoading(false))}}>Retry</button></div>:<div className="grid gap-6 lg:grid-cols-2">
 			<section aria-labelledby="email-verification-heading">
 				<h3 id="email-verification-heading" className="font-semibold">Email Verification</h3>
 				<p className="mt-2 break-all text-sm muted">{status?.email||'Email unavailable'}</p>
@@ -174,7 +178,7 @@ export default function AccountContactVerification({country}:{country:string|nul
 						<input id="settings-email-verification-code" className="input" type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required value={emailCode} onChange={event=>setEmailCode(event.target.value.replace(/\D/g,'').slice(0,6))}/>
 						<button type="submit" className="btn w-fit bg-gold text-black" disabled={emailBusy||emailCode.length!==6}>{emailBusy?'Checking…':'Confirm Email'}</button>
 					</form>}
-					{!status?.emailDeliveryAvailable&&<p className="text-xs text-loss">Email delivery is not configured. Contact support.</p>}
+					{!status?.emailDeliveryAvailable&&<p className="text-xs text-loss">Email verification is unavailable. Required server configuration: {status?.emailConfigurationMissing.join(', ')||'email provider credentials'}.</p>}
 				</div>}
 			</section>
 			<section aria-labelledby="phone-verification-heading">
@@ -204,7 +208,7 @@ export default function AccountContactVerification({country}:{country:string|nul
 						<input id="settings-phone-verification-code" className="input" type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required value={phoneCode} onChange={event=>setPhoneCode(event.target.value.replace(/\D/g,'').slice(0,6))}/>
 						<button type="submit" className="btn w-fit bg-gold text-black" disabled={phoneBusy||phoneCode.length!==6}>{phoneBusy?'Checking…':'Confirm Phone Number'}</button>
 					</form>}
-					{!status?.phoneDeliveryAvailable&&<p className="text-xs text-loss">Phone verification is not configured. No SMS was sent.</p>}
+					{!status?.phoneDeliveryAvailable&&<p className="text-xs text-loss">Phone verification is unavailable. No SMS was sent. Required server configuration: {status?.phoneConfigurationMissing.join(', ')||'Brevo SMS credentials'}.</p>}
 				</div>}
 			</section>
 		</div>}

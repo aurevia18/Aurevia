@@ -145,4 +145,18 @@ describe('first-party KYC submission route',()=>{
 		expect(response.status).toBe(409);
 		expect(mocks.uploadPrivateObject).not.toHaveBeenCalled();
 	});
+
+	it('returns an actionable database-schema error without storing evidence',async()=>{
+		mocks.kycDocumentFindMany.mockRejectedValueOnce(Object.assign(new Error('private database details'),{code:'P2021'}));
+		const errorLog=vi.spyOn(console,'error').mockImplementation(()=>{});
+
+		try{
+			const response=await POST(submissionRequest());
+			expect(response.status).toBe(503);
+			expect(await response.json()).toMatchObject({error:expect.stringContaining('database schema needs an update')});
+			expect(mocks.uploadPrivateObject).not.toHaveBeenCalled();
+			expect(JSON.stringify(errorLog.mock.calls)).not.toContain('private database details');
+			expect(JSON.stringify(errorLog.mock.calls)).toContain('P2021');
+		}finally{errorLog.mockRestore()}
+	});
 });

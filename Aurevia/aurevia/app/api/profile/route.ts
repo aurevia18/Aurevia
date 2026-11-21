@@ -79,15 +79,13 @@ export async function PATCH(request:Request){
 			const phone=input.phone===undefined?current.phone:input.phone||null;
 			const country=input.country===undefined?current.country:input.country||null;
 			const address=input.address===undefined?current.kyc?.address??null:input.address||null;
+			if(phone!==current.phone)return {validationError:'PHONE_VERIFICATION_REQUIRED'} as const;
 			const personalDataChanged=name!==current.name||phone!==current.phone||country!==current.country||address!==(current.kyc?.address??null);
 			if(current.kycStatus==='APPROVED'&&isProfileLocked(current.verifiedAt)&&personalDataChanged)return {validationError:'PROFILE_LOCKED'} as const;
 			await tx.user.update({where:{id:user.id},data:{
 				name,
-				phone,
-				...(phone!==current.phone?{phoneVerified:false,phoneVerifiedAt:null}:{}),
 				country,
 			}});
-			if(phone!==current.phone)await tx.verificationCode.deleteMany({where:{userId:user.id,channel:'SMS'}});
 			if(input.address!==undefined)await tx.kycProfile.upsert({where:{userId:user.id},update:{address},create:{userId:user.id,address}});
 			await synchronizeCompletedProfileTier(tx,user.id);
 			const fresh=await tx.user.findUnique({where:{id:user.id},select:profileSelect});
@@ -96,6 +94,7 @@ export async function PATCH(request:Request){
 		});
 		if(!updated)return NextResponse.json({error:'Profile not found.'},{status:404});
 		if('validationError' in updated&&updated.validationError==='PROFILE_LOCKED')return NextResponse.json({error:'Profile details are locked for 2 months after verification is completed.'},{status:423});
+		if('validationError' in updated&&updated.validationError==='PHONE_VERIFICATION_REQUIRED')return NextResponse.json({error:'Verify a new phone number in Contact verification before saving it to your account.'},{status:409});
 		if('validationError' in updated)return NextResponse.json({error:updated.validationError},{status:400});
 		return NextResponse.json(profileResponse(updated),{headers:{'Cache-Control':'private, no-store'}});
 	}catch(error){

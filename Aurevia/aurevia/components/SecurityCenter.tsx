@@ -96,6 +96,9 @@ export default function SecurityCenter({email,twoFactorEnabled:initialTwoFactorE
 	const [totpCode,setTotpCode]=useState('');
 	const [totpSetup,setTotpSetup]=useState<TotpSetup|null>(null);
 	const [recoveryCodes,setRecoveryCodes]=useState<string[]>([]);
+	const [recoveryExpanded,setRecoveryExpanded]=useState(false);
+	const [recoveryPassword,setRecoveryPassword]=useState('');
+	const [recoverySecondFactor,setRecoverySecondFactor]=useState('');
 	const [sessionAction,setSessionAction]=useState<SessionAction|null>(null);
 	const [sessionPassword,setSessionPassword]=useState('');
 
@@ -193,6 +196,22 @@ export default function SecurityCenter({email,twoFactorEnabled:initialTwoFactorE
 		finally{setBusy(false);}
 	}
 
+	async function regenerateRecoveryCodes(event:FormEvent<HTMLFormElement>){
+		event.preventDefault();
+		if(busy)return;
+		setBusy(true);setError('');setMessage('');
+		try{
+			const response=await fetch('/api/security/totp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'regenerate',password:recoveryPassword,secondFactorCode:recoverySecondFactor}),cache:'no-store'});
+			const result=await response.json();
+			if(!response.ok)throw new Error(result.error||'Unable to regenerate recovery codes.');
+			setRecoveryCodes(result.recoveryCodes);
+			setRecoveryPassword('');setRecoverySecondFactor('');setRecoveryExpanded(false);
+			setMessage('Recovery codes regenerated. Save the new codes now; previous codes no longer work.');
+			await update();await loadSessions();
+		}catch(exception){setError(exception instanceof Error?exception.message:'Unable to regenerate recovery codes.');}
+		finally{setBusy(false);}
+	}
+
 	function startSessionAction(action:SessionAction['action'],sessionId?:string){
 		setSessionAction({action,sessionId});setSessionPassword('');setError('');setMessage('');
 	}
@@ -255,6 +274,13 @@ export default function SecurityCenter({email,twoFactorEnabled:initialTwoFactorE
 				{twoFactorEnabled&&<><p className="text-xs muted">Disabling two-factor protection requires your current password.</p><div className="flex flex-wrap gap-2"><button className="btn bg-loss text-black" type="submit" disabled={busy||!totpPassword}>{busy?'Updating…':'Disable two-factor authentication'}</button><button className="btn bg-white/5" type="button" disabled={busy} onClick={()=>setTotpExpanded(false)}>Cancel</button></div></>}
 			</form>}
 			{recoveryCodes.length>0&&<div className="security-recovery-codes" role="alert"><b>Save these one-time recovery codes now</b><p>Each code works once. They will not be shown again.</p><ul>{recoveryCodes.map(code=><li key={code}><code>{code}</code></li>)}</ul><button className="btn bg-gold text-black" type="button" onClick={()=>{setRecoveryCodes([]);setTotpExpanded(false)}}>I’ve saved my recovery codes</button></div>}
+			{twoFactorEnabled&&!recoveryCodes.length&&!recoveryExpanded&&<button className="security-center-action" type="button" disabled={busy} onClick={()=>{setRecoveryExpanded(true);setError('');setMessage('')}}>Regenerate recovery codes</button>}
+			{twoFactorEnabled&&recoveryExpanded&&<form className="security-center-form" onSubmit={event=>void regenerateRecoveryCodes(event)}>
+				<PasswordInput label="Current password" value={recoveryPassword} onChange={setRecoveryPassword}/>
+				<label className="account-label">Authenticator or unused recovery code<input className="input" type="text" autoComplete="one-time-code" maxLength={64} value={recoverySecondFactor} onChange={event=>setRecoverySecondFactor(event.target.value)} required/></label>
+				<p className="text-xs muted">Regenerating codes invalidates every previously issued recovery code and signs out other active sessions.</p>
+				<div className="flex flex-wrap gap-2"><button className="btn bg-gold text-black" type="submit" disabled={busy||!recoveryPassword||!recoverySecondFactor}>{busy?'Regenerating…':'Verify and regenerate'}</button><button className="btn bg-white/5" type="button" disabled={busy} onClick={()=>setRecoveryExpanded(false)}>Cancel</button></div>
+			</form>}
 		</article>
 
 		<article className="security-center-card">

@@ -51,8 +51,7 @@ export async function GET(){
 		const activeUser=await db.user.findUnique({where:{id:user.id},select:{status:true,accountMode:true}});
 		if(!activeUser||activeUser.status!=='ACTIVE')return NextResponse.json({error:'This account is unavailable.'},{status:403});
 		if(activeUser.accountMode!==AccountMode.REAL)return NextResponse.json({error:'Identity verification is available in REAL mode only.'},{status:403});
-		const [verifications,latestDiditSession]=await Promise.all([
-			db.kycVerification.findMany({
+		const verifications=await db.kycVerification.findMany({
 			where:{userId:user.id},
 			orderBy:{createdAt:'desc'},
 			take:10,
@@ -63,34 +62,23 @@ export async function GET(){
 				documents:{select:{id:true,kind:true,documentSide:true,filename:true,mimeType:true,size:true,status:true,uploadedAt:true,reviewedAt:true,reviewNote:true}},
 				events:{select:{fromStatus:true,toStatus:true,action:true,reason:true,createdAt:true},orderBy:{createdAt:'asc'}},
 			},
-			}),
-			db.diditVerificationSession.findFirst({
-				where:{userId:user.id},
-				orderBy:{createdAt:'desc'},
-				select:{sessionId:true,status:true,environment:true,createdAt:true,completedAt:true},
-			}),
-		]);
+			});
 		const safeVerifications=verifications.map(({identityDataCiphertext,identityDataIv,identityDataAuthTag,...verification})=>({
 			...verification,
 			identityInformation:identityDataCiphertext&&identityDataIv&&identityDataAuthTag
 				?decryptKycIdentityInformation({identityDataCiphertext,identityDataIv,identityDataAuthTag})
 				:null,
 		}));
-		const didit=getServerConfiguration().didit;
 		return NextResponse.json({
 			registry:allowedTypes.map(type=>({type,label:kycDocumentRegistry[type].label,sides:kycDocumentRegistry[type].sides,expiryRequired:kycDocumentRegistry[type].expiryRequired})),
 			verifications:safeVerifications,
-			didit:{
-				enabled:didit.enabled,
-				configured:didit.configured,
-				environment:didit.environment,
-				latestSession:latestDiditSession,
-			},
 		},{headers:{'Cache-Control':'private, no-store'}});
 	}catch(error){
 		const unauthorized=error instanceof Error&&error.message==='UNAUTHORIZED';
-		if(!unauthorized)console.error('KYC verification status could not be loaded.',{errorType:error instanceof Error?error.name:'UnknownError'});
-		return NextResponse.json({error:unauthorized?'Unauthorized':'Unable to load verification status.'},{status:unauthorized?401:503,headers:{'Cache-Control':'private, no-store'}});
+		const errorCode=error&&typeof error==='object'&&'code'in error&&typeof error.code==='string'?error.code:null;
+		if(!unauthorized)console.error('KYC verification status could not be loaded.',{errorType:error instanceof Error?error.name:'UnknownError',...(errorCode?{errorCode}:{})});
+		const schemaUnavailable=errorCode==='P2021'||errorCode==='P2022';
+		return NextResponse.json({error:unauthorized?'Unauthorized':schemaUnavailable?'Identity verification is unavailable because the application database schema needs an update. Contact support.':'Unable to load verification status.'},{status:unauthorized?401:503,headers:{'Cache-Control':'private, no-store'}});
 	}
 }
 
@@ -235,7 +223,14 @@ export async function POST(request:Request){
 		},{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
 		return NextResponse.json(result,{status:201,headers:{'Cache-Control':'private, no-store'}});
 	}catch(error){
-		await Promise.all(uploadedObjects.map(object=>deletePrivateObject('kyc',object.ownerId,object.key)));
+		await Promise.all(uploadedObjects.map(async object=>{
+			try{
+				const deleted=await deletePrivateObject('kyc',object.ownerId,object.key);
+				if(!deleted)console.error('KYC evidence cleanup is pending.',{ownerId:object.ownerId});
+			}catch(cleanupError){
+				console.error('KYC evidence cleanup failed.',{ownerId:object.ownerId,errorType:cleanupError instanceof Error?cleanupError.name:'UnknownError'});
+			}
+		}));
 		if(error instanceof Error&&error.message==='UNAUTHORIZED')return NextResponse.json({error:'Unauthorized'},{status:401});
 		if(error instanceof Error&&error.message==='KYC_ENCRYPTION_KEY_REQUIRED')return NextResponse.json({error:'Identity verification is not configured for secure data storage. Contact support.'},{status:503});
 		if(error instanceof Error&&error.message==='KYC_IDENTITY_DECRYPTION_FAILED')return NextResponse.json({error:'Stored identity details could not be decrypted. Contact support.'},{status:503});
@@ -247,7 +242,8 @@ export async function POST(request:Request){
 		if(error instanceof Error&&error.message==='VERIFICATION_STATE_CHANGED')return NextResponse.json({error:'The verification case changed while submitting. Try again.'},{status:409});
 		const code=error&&typeof error==='object'&&'code' in error?String(error.code):'';
 		if(code==='P2002'||code==='P2034')return NextResponse.json({error:'The verification case changed while submitting. Refresh its status and try again.'},{status:409});
-		console.error('KYC verification submission failed.',{errorType:error instanceof Error?error.name:'UnknownError'});
-		return NextResponse.json({error:'Unable to submit identity verification.'},{status:503});
+		const schemaUnavailable=code==='P2021'||code==='P2022';
+		console.error('KYC verification submission failed.',{errorType:error instanceof Error?error.name:'UnknownError',...(code?{errorCode:code}:{})});
+		return NextResponse.json({error:schemaUnavailable?'Identity verification is unavailable because the application database schema needs an update. Contact support.':'Unable to submit identity verification.'},{status:503});
 	}
 }

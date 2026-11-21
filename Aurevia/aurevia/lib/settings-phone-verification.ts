@@ -56,13 +56,11 @@ export async function confirmSettingsPhoneVerification(input:{
 			},
 		});
 		if(consumed.count!==1)throw new Error('CONTACT_VERIFICATION_CONSUMED');
-		if(account.phone!==challenge.contact){
-			const updated=await tx.user.updateMany({
-				where:{id:input.userId,phone:account.phone,status:'ACTIVE',role:'USER'},
-				data:{phone:challenge.contact,phoneVerified:false,phoneVerifiedAt:null},
-			});
-			if(updated.count!==1)throw new Error('CONTACT_VERIFICATION_ACCOUNT_CHANGED');
-		}
+		const updated=await tx.user.updateMany({
+			where:{id:input.userId,phone:account.phone,status:'ACTIVE',role:'USER'},
+			data:{phone:challenge.contact,phoneVerified:true,phoneVerifiedAt:now},
+		});
+		if(updated.count!==1)throw new Error('CONTACT_VERIFICATION_ACCOUNT_CHANGED');
 		await tx.auditLog.create({data:{
 			actorId:input.userId,
 			action:'ACCOUNT_PHONE_VERIFIED',

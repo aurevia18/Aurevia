@@ -1,6 +1,5 @@
 const blockedPrefixes=[
 	'BREVO_',
-	'DIDIT_',
 	'SMTP_',
 	'RESEND_',
 	'VERIFICATION_EMAIL_',
@@ -20,6 +19,7 @@ const blockedPrefixes=[
 	'GNEWS_',
 	'SUPABASE_',
 	'KYC_SUPABASE_',
+	'KYC_',
 ];
 
 const blockedVariables=[

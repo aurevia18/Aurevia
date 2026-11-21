@@ -91,15 +91,6 @@ export type ServerConfiguration = {
     formattingIssues: string[];
     configured: boolean;
   };
-  didit: {
-    enabled: boolean;
-    environment: 'sandbox' | 'production' | null;
-    apiKey: string;
-    workflowId: string;
-    webhookSecret: string;
-    configured: boolean;
-    formattingIssues: string[];
-  };
 };
 
 export type PublicConfiguration = {
@@ -232,23 +223,6 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
       ...(kycEncryptionKey&&(kycEncryptionKeyBytes.length!==32||kycEncryptionKeyBytes.toString('base64')!==kycEncryptionKey)?['KYC_ENCRYPTION_KEY must be a 32-byte Base64 key']:[]),
     ],
   };
-  const diditEnabled=booleanEnv('DIDIT_ENABLED',source);
-  const diditEnvironmentValue=env('DIDIT_ENV',source).toLowerCase();
-  const diditEnvironment=diditEnvironmentValue==='sandbox'||diditEnvironmentValue==='production'
-    ?diditEnvironmentValue
-    :null;
-  const diditApiKey=env('DIDIT_API_KEY',source);
-  const diditWorkflowId=env('DIDIT_WORKFLOW_ID',source);
-  const diditWebhookSecret=env('DIDIT_WEBHOOK_SECRET',source);
-  const diditFormattingIssues=diditEnabled?[
-    ...(!diditEnvironment?['DIDIT_ENV must be sandbox or production']:[]),
-    ...(!diditApiKey?['DIDIT_API_KEY is missing']:[]),
-    ...(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(diditWorkflowId)?['DIDIT_WORKFLOW_ID must be a UUID']:[]),
-    ...(!diditWebhookSecret?['DIDIT_WEBHOOK_SECRET is missing']:[]),
-    ...(diditEnvironment==='sandbox'&&diditApiKey.startsWith('sk_live_')?['DIDIT_API_KEY is a live key but DIDIT_ENV is sandbox']:[]),
-    ...(diditEnvironment==='production'&&diditApiKey.startsWith('sk_test_')?['DIDIT_API_KEY is a sandbox key but DIDIT_ENV is production']:[]),
-  ]:[];
-
   return {
     database: {
       url: databaseUrl,
@@ -333,15 +307,6 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
       configured:kyc.enabled&&kyc.engine==='internal'&&kycEncryptionKeyBytes.length===32
         &&kycEncryptionKeyBytes.toString('base64')===kycEncryptionKey&&kyc.formattingIssues.length===0,
     },
-    didit:{
-      enabled:diditEnabled,
-      environment:diditEnvironment,
-      apiKey:diditApiKey,
-      workflowId:diditWorkflowId,
-      webhookSecret:diditWebhookSecret,
-      configured:diditEnabled&&diditFormattingIssues.length===0,
-      formattingIssues:diditFormattingIssues,
-    },
   };
 }
 
@@ -372,7 +337,6 @@ export function validateServerConfiguration(config: ServerConfiguration): string
   }
   issues.push(...config.akedly.formattingIssues.map(issue=>`Invalid Akedly environment formatting: ${issue}`));
   issues.push(...config.kyc.formattingIssues);
-  issues.push(...config.didit.formattingIssues);
   if(!config.marketData.twelveDataBaseUrlValid)issues.push('TWELVE_DATA_BASE_URL must be https://api.twelvedata.com');
   if(config.kyc.engine!=='internal')issues.push('AUREVIA_KYC_ENGINE must be internal');
   return issues;
@@ -404,7 +368,6 @@ export function configurationSummary(config: ServerConfiguration) {
     },
     akedlyConfigured: config.akedly.configured,
     kycConfigured: config.kyc.configured,
-    diditConfigured:config.didit.configured,
     paymentConfigured: config.payment.configured,
   };
 }

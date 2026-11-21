@@ -225,7 +225,33 @@ test.afterEach(async({page},testInfo)=>{
 	const expectedKycStorageFailures=testInfo.title.includes('administrator user and KYC actions')&&e2eDatabaseUrl
 		?capture.failedResponses.filter(response=>/^\/api\/admin\/kyc\/documents\/[^/]+$/.test(new URL(response.url).pathname)&&response.status===502)
 		:[];
-	const expectedClientErrors=[...expectedFallbackResponse,...expectedKycStorageFailures,...capture.failedResponses.filter(response=>(testInfo.title.includes('current terms acceptance')&&response.url.endsWith('/api/policy-consent')&&response.status===503)||(testInfo.title.includes('duplicate signup offers sign-in')&&response.url.endsWith('/api/register')&&response.status===409)||(testInfo.title.includes('registration fails closed when Akedly credentials are unavailable')&&response.url.endsWith('/api/register')&&response.status===503)||(response.url.endsWith('/api/auth/callback/credentials')&&response.status===401)||(testInfo.title.includes('TOTP enrollment')&&response.url.endsWith('/api/security/totp')&&response.status===400)||((testInfo.title.includes('watchlists persist')||testInfo.title.includes('session replacement is explicit')||testInfo.title.includes('Nova escalation reaches admin')||testInfo.title.includes('tier requests require')||testInfo.title.includes('account deletion'))&&response.url.endsWith('/api/notifications?limit=8')&&response.status===401)||(testInfo.title.includes('account deletion')&&((['/api/currency-preference','/api/positions','/api/tax-services/access','/api/profile','/api/profile/avatar'].some(path=>response.url.endsWith(path))&&response.status===401)||(response.url.endsWith('/api/dashboard/overview')&&response.status===403)))|| (testInfo.title.includes('Nova escalation reaches admin')&&response.url.endsWith('/api/support')&&response.status===409)||((testInfo.title.includes('Account Funding')||testInfo.title.includes('Wallet shows the internal funding workflow'))&&(response.url.endsWith('/api/payment-methods')||response.url.endsWith('/api/wallet'))&&response.status===503)||(response.url.includes('/api/live-markets/')&&response.status===503&&!marketProviderConfigured)||(response.url.endsWith('/api/orderbook')&&response.status===503&&!marketProviderConfigured)||(testInfo.title.includes('KYC access is owner-scoped')&&response.url.endsWith('/api/kyc/documents')&&response.status===409))];
+	const expectedClientErrors=[...expectedFallbackResponse,...expectedKycStorageFailures,...capture.failedResponses.filter(response=>{
+		const title=testInfo.title;
+		const status=response.status;
+		const url=response.url;
+		const totpSessionRevoked=title.includes('TOTP enrollment')&&status===401
+			&&(['/api/support','/api/notifications?limit=20'].some(path=>url.endsWith(path)));
+		const accountDeletionDenied=title.includes('account deletion')
+			&&(['/api/currency-preference','/api/positions','/api/tax-services/access','/api/profile','/api/profile/avatar'].some(path=>url.endsWith(path))&&status===401
+				||url.endsWith('/api/dashboard/overview')&&status===403);
+		const notificationsUnauthorized=['watchlists persist','session replacement is explicit','Nova escalation reaches admin','tier requests require','account deletion']
+			.some(name=>title.includes(name))&&url.endsWith('/api/notifications?limit=8')&&status===401;
+		const fundingUnavailable=(title.includes('Account Funding')||title.includes('Wallet shows the internal funding workflow'))
+			&&(url.endsWith('/api/payment-methods')||url.endsWith('/api/wallet'))&&status===503;
+		return title.includes('current terms acceptance')&&url.endsWith('/api/policy-consent')&&status===503
+			||title.includes('duplicate signup offers sign-in')&&url.endsWith('/api/register')&&status===409
+			||title.includes('registration fails closed when Akedly credentials are unavailable')&&url.endsWith('/api/register')&&status===503
+			||url.endsWith('/api/auth/callback/credentials')&&status===401
+			||title.includes('TOTP enrollment')&&url.endsWith('/api/security/totp')&&status===400
+			||totpSessionRevoked
+			||notificationsUnauthorized
+			||accountDeletionDenied
+			||title.includes('Nova escalation reaches admin')&&url.endsWith('/api/support')&&status===409
+			||fundingUnavailable
+			||url.includes('/api/live-markets/')&&status===503&&!marketProviderConfigured
+			||url.endsWith('/api/orderbook')&&status===503&&!marketProviderConfigured
+			||title.includes('KYC access is owner-scoped')&&url.endsWith('/api/kyc/documents')&&status===409;
+	})];
 	const expectedTermsDenials=testInfo.title.includes('current terms acceptance')?capture.failedResponses.filter(response=>response.url.endsWith('/api/theme-preference')&&response.status===403):[];
 	if(testInfo.title.includes('support fallback'))expectedClientErrors.push(...capture.failedResponses.filter(response=>response.url.endsWith('/api/support/nova')&&response.status===503));
 	if(testInfo.title.includes('account deletion'))expectedClientErrors.push(...capture.failedResponses.filter(response=>(response.url.endsWith('/api/profile')&&response.status===403)||(response.url.endsWith('/api/dashboard/overview')&&[401,403].includes(response.status))));

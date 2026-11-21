@@ -13,6 +13,7 @@ import {
 	createAccountContactVerificationHash,
 	reserveAccountContactVerification,
 	restoreAccountContactVerificationReservation,
+	getContactVerificationDatabaseErrorCode,
 } from '@/lib/account-contact-verification';
 
 export async function POST(request:Request){
@@ -20,8 +21,9 @@ export async function POST(request:Request){
 	let reservation:Awaited<ReturnType<typeof reserveAccountContactVerification>>|null=null;
 	try{
 		const user=await requireUser();
-		const account=await db.user.findUnique({where:{id:user.id},select:{id:true,email:true,status:true}});
+		const account=await db.user.findUnique({where:{id:user.id},select:{id:true,email:true,emailVerifiedAt:true,status:true}});
 		if(!account||account.status!=='ACTIVE')return NextResponse.json({error:'This account is unavailable.'},{status:403});
+		if(account.emailVerifiedAt)return NextResponse.json({error:'This email address is already verified.'},{status:409});
 		if(!isEmailConfigured())return NextResponse.json({error:'Email verification is not configured. Contact support.'},{status:503});
 		const now=new Date();
 		rateLimit(`account-email-verification-ip:${trustedProxyClientIp(request)||'unknown'}`,10,60*60_000);
@@ -84,7 +86,9 @@ export async function POST(request:Request){
 		if(error instanceof Error&&error.message==='FORBIDDEN')return NextResponse.json({error:'This account is unavailable.'},{status:403});
 		if(error instanceof Error&&error.message==='RATE_LIMITED')return NextResponse.json({error:'Too many code requests. Try again later.'},{status:429});
 		if(error instanceof Error&&error.message==='VERIFICATION_SECRET_UNAVAILABLE')return NextResponse.json({error:'Email verification is temporarily unavailable.'},{status:503});
-		console.error('[account-contact-verification] Email code request failed.',{requestId,errorType:error instanceof Error?error.name:'UnknownError'});
+		const errorCode=getContactVerificationDatabaseErrorCode(error);
+		console.error('[account-contact-verification] Email code request failed.',{requestId,errorType:error instanceof Error?error.name:'UnknownError',...(errorCode?{errorCode}:{})});
+		if(errorCode)return NextResponse.json({error:'Email verification is unavailable because the application database schema needs an update. Contact support.'},{status:503});
 		return NextResponse.json({error:'Email verification is temporarily unavailable.'},{status:503});
 	}
 }

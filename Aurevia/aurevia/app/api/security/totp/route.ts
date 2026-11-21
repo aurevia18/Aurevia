@@ -8,13 +8,13 @@ import {z,ZodError} from 'zod';
 import {requireUser} from '@/lib/auth';
 import {db} from '@/lib/db';
 import {createNotification} from '@/lib/notifications';
-import {verifyAccountCredentials} from '@/lib/security-auth';
+import {consumeSecondFactor,verifyAccountCredentials} from '@/lib/security-auth';
 import {createRecoveryCode,decryptTotpSecret,encryptTotpSecret,verifyTotp} from '@/lib/security';
 import {sendSecurityEmail} from '@/lib/security-notifications';
 import {clearPersistentRateLimit,persistentRateLimit} from '@/lib/security-rate-limit';
 
 const schema=z.object({
-	action:z.enum(['start','confirm','disable']),
+	action:z.enum(['start','confirm','disable','regenerate']),
 	password:z.string().min(1).max(128),
 	secondFactorCode:z.string().max(64).optional().default(''),
 });
@@ -25,11 +25,12 @@ export async function POST(request:Request){
 		const parsed=schema.safeParse(await request.json());
 		if(!parsed.success)return NextResponse.json({error:'Two-factor security request is invalid.'},{status:400});
 		const {action,password,secondFactorCode}=parsed.data;
-		const currentAccount=await db.user.findUnique({where:{id:user.id},select:{twoFactorEnabled:true}});
+		const currentAccount=await db.user.findUnique({where:{id:user.id},select:{twoFactorEnabled:true,totpSecretEncrypted:true,lastTotpCounter:true}});
 		if(!currentAccount)return NextResponse.json({error:'Account not found.'},{status:404});
 		if(action==='start'&&currentAccount.twoFactorEnabled)return NextResponse.json({error:'Two-factor authentication is already enabled.'},{status:409});
 		if(action==='confirm'&&currentAccount.twoFactorEnabled)return NextResponse.json({error:'Two-factor authentication is already enabled.'},{status:409});
 		if(action==='disable'&&!currentAccount.twoFactorEnabled)return NextResponse.json({error:'Two-factor authentication is not enabled.'},{status:409});
+		if(action==='regenerate'&&(!currentAccount.twoFactorEnabled||!currentAccount.totpSecretEncrypted))return NextResponse.json({error:'Enable authenticator protection before regenerating recovery codes.'},{status:409});
 		if(!await verifyAccountCredentials({userId:user.id,password,sessionHash:user.sessionHash}))return NextResponse.json({error:'Current password is incorrect.'},{status:401});
 
 		if(action==='start'){
@@ -80,6 +81,38 @@ export async function POST(request:Request){
 			return NextResponse.json({enabled:true,recoveryCodes},{headers:{'Cache-Control':'no-store'}});
 		}
 
+		if(action==='regenerate'){
+			const rateLimitKey=`totp-recovery-regeneration:${user.id}`;
+			await persistentRateLimit(rateLimitKey,5,15*60_000);
+			const recoveryCodes=Array.from({length:10},createRecoveryCode);
+			const recoveryHashes=await Promise.all(recoveryCodes.map(code=>bcrypt.hash(code.replace(/-/g,'').trim().toUpperCase(),12)));
+			await db.$transaction(async tx=>{
+				const account=await tx.user.findUnique({where:{id:user.id},select:{twoFactorEnabled:true,totpSecretEncrypted:true,lastTotpCounter:true}});
+				if(!account?.twoFactorEnabled||!account.totpSecretEncrypted)throw new Error('TWO_FACTOR_NOT_ENABLED');
+				const verified=await consumeSecondFactor(tx,{
+					userId:user.id,
+					secretEncrypted:account.totpSecretEncrypted,
+					lastTotpCounter:account.lastTotpCounter,
+					code:secondFactorCode,
+				});
+				if(!verified)throw new Error('INVALID_SECOND_FACTOR');
+				await tx.securityRecoveryCode.deleteMany({where:{userId:user.id}});
+				await tx.securityRecoveryCode.createMany({data:recoveryHashes.map(codeHash=>({userId:user.id,codeHash}))});
+				const now=new Date();
+				await tx.securitySession.updateMany({where:{userId:user.id,revokedAt:null,sessionHash:{not:user.sessionHash}},data:{revokedAt:now}});
+				await tx.securitySession.updateMany({where:{userId:user.id,sessionHash:user.sessionHash,revokedAt:null},data:{rotationRequired:true,reauthenticatedAt:null,lastActivityAt:now}});
+				await tx.auditLog.create({data:{actorId:user.id,action:'TWO_FACTOR_RECOVERY_CODES_REGENERATED',entity:'USER',entityId:user.id,metadata:{recoveryCodeCount:recoveryCodes.length,activeSessionsRevoked:true}}});
+				await createNotification(tx,{
+					userId:user.id,type:NotificationType.SECURITY,title:'Recovery codes regenerated',
+					message:'Your one-time two-factor recovery codes were regenerated. Previously issued codes are no longer valid.',
+					dedupeKey:`security:${user.id}:recovery-codes-regenerated:${randomUUID()}`,actionUrl:'/settings#security',
+				});
+			},{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
+			await clearPersistentRateLimit(rateLimitKey);
+			await sendSecurityEmail(user.id,{subject:'Two-factor recovery codes regenerated',text:'Your one-time recovery codes were regenerated for your Aurevia Exchange account. Previously issued codes are no longer valid. The new codes were displayed once in the application and are not included in this email. If you did not make this change, secure your account immediately.'});
+			return NextResponse.json({enabled:true,recoveryCodes},{headers:{'Cache-Control':'no-store'}});
+		}
+
 		await db.$transaction(async tx=>{
 			await tx.user.update({where:{id:user.id},data:{twoFactorEnabled:false,totpSecretEncrypted:null,lastTotpCounter:null,activeSessionId:null,activeSessionUpdatedAt:null}});
 			await tx.securityRecoveryCode.deleteMany({where:{userId:user.id}});
@@ -106,6 +139,8 @@ export async function POST(request:Request){
 		if(error instanceof Error&&error.message==='SECURITY_RATE_LIMIT_UNAVAILABLE')return NextResponse.json({error:'Security verification is temporarily unavailable.'},{status:503});
 		if(error instanceof Error&&error.message==='TOTP_ENCRYPTION_KEY_MISSING')return NextResponse.json({error:'Two-factor enrollment is unavailable until the server security-encryption key is configured.'},{status:503});
 		if(error instanceof Error&&error.message==='TWO_FACTOR_SETUP_EXPIRED')return NextResponse.json({error:'Two-factor setup expired. Start enrollment again.'},{status:410});
+		if(error instanceof Error&&error.message==='TWO_FACTOR_NOT_ENABLED')return NextResponse.json({error:'Enable authenticator protection before regenerating recovery codes.'},{status:409});
+		if(error instanceof Error&&error.message==='INVALID_SECOND_FACTOR')return NextResponse.json({error:'The authenticator or recovery code is invalid.'},{status:401});
 		console.error('[security] Two-factor operation failed.',error instanceof Error?error.name:'UnknownError');
 		return NextResponse.json({error:'Unable to update two-factor security right now.'},{status:503});
 	}

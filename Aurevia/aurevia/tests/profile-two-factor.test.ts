@@ -82,4 +82,28 @@ describe('profile two-factor status',()=>{
 		expect(response.status).toBe(200);
 		expect(userUpdate).toHaveBeenCalledWith(expect.objectContaining({data:expect.not.objectContaining({twoFactorEnabled:true})}));
 	});
+
+	it('requires the phone verification flow before a profile update can change the number',async()=>{
+		const userUpdate=vi.fn().mockResolvedValue({});
+		mocks.findUnique.mockResolvedValue({
+			id:'user-1',email:'user@example.invalid',name:'Test User',phone:null,phoneVerified:false,country:'Test',
+			approvedTier:1,avatarKey:null,twoFactorEnabled:false,totpSecretEncrypted:null,role:'USER',status:'ACTIVE',
+			accountMode:'DEMO',kycStatus:'PENDING',verifiedAt:null,withdrawalEnabled:true,accountRestricted:false,
+			restrictionReason:null,kycDocuments:[],kyc:null,depositEnabled:true,
+		});
+		mocks.transaction.mockImplementation((operation:(tx:unknown)=>unknown)=>operation({
+			user:{findUnique:mocks.findUnique,update:userUpdate,updateMany:vi.fn().mockResolvedValue({count:0})},
+			auditLog:{create:vi.fn()},
+			kycProfile:{upsert:vi.fn()},
+		}));
+		const response=await PATCH(new Request('http://localhost/api/profile',{
+			method:'PATCH',
+			headers:{'content-type':'application/json'},
+			body:JSON.stringify({firstName:'Test',lastName:'User',phone:'+2348031234567'}),
+		}));
+
+		expect(response.status).toBe(409);
+		expect(await response.json()).toMatchObject({error:expect.stringContaining('Contact verification')});
+		expect(userUpdate).not.toHaveBeenCalled();
+	});
 });

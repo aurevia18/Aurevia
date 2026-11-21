@@ -4,7 +4,10 @@ const state=vi.hoisted(()=>({
 	user:{
 		id:'user-1',
 		email:'person@example.invalid',
+		emailVerifiedAt:null as Date|null,
 		phone:null as string|null,
+		phoneVerified:false,
+		phoneVerifiedAt:null as Date|null,
 		status:'ACTIVE',
 		role:'USER',
 		accountMode:'DEMO',
@@ -42,7 +45,7 @@ vi.mock('@/lib/auth',()=>({requireUser:mocks.requireUser}));
 vi.mock('@/lib/config/env',()=>({
 	getServerConfiguration:()=>({
 		verification:{codeSecret:'test-code-secret',brevoSmsConfigured:true},
-		email:{configured:true},
+		email:{configured:true,brevoApiKey:'test-key',senderEmail:'mail@example.invalid',senderName:'Aurevia'},
 	}),
 }));
 vi.mock('@/lib/db',()=>({db:{
@@ -85,6 +88,27 @@ function request(body?:unknown){
 		headers:{'content-type':'application/json'},
 		body:body===undefined?undefined:JSON.stringify(body),
 	});
+
+	it('normalizes Nigerian mobile numbers to E.164 before SMS delivery',async()=>{
+		const response=await sendPhoneCode(request({phone:'08031234567',countryCode:'NG'}));
+
+		expect(response.status).toBe(200);
+		expect(mocks.sendBrevo).toHaveBeenCalledWith('+2348031234567',expect.any(String));
+		expect(state.challenge?.contact).toBe('+2348031234567');
+	});
+
+	it('reports a database schema outage distinctly when verification status cannot load',async()=>{
+		mocks.verificationFindMany.mockRejectedValueOnce(Object.assign(new Error('internal detail'),{code:'P2021'}));
+		const errorLog=vi.spyOn(console,'error').mockImplementation(()=>{});
+
+		try{
+			const response=await getContactStatus();
+			expect(response.status).toBe(503);
+			expect(await response.json()).toMatchObject({error:expect.stringContaining('database schema needs an update')});
+			expect(JSON.stringify(errorLog.mock.calls)).not.toContain('internal detail');
+			expect(JSON.stringify(errorLog.mock.calls)).toContain('P2021');
+		}finally{errorLog.mockRestore()}
+	});
 }
 
 function matches(row:Record<string,unknown>|null,where:Record<string,unknown>){
@@ -126,7 +150,7 @@ function applyData(row:Record<string,unknown>,data:Record<string,unknown>){
 
 describe('independent Settings contact verification',()=>{
 	beforeEach(()=>{
-		state.user={id:'user-1',email:'person@example.invalid',phone:null,status:'ACTIVE',role:'USER',accountMode:'DEMO'};
+		state.user={id:'user-1',email:'person@example.invalid',emailVerifiedAt:null,phone:null,phoneVerified:false,phoneVerifiedAt:null,status:'ACTIVE',role:'USER',accountMode:'DEMO'};
 		state.challenge=null;
 		state.audit.length=0;
 		state.emailText='';
@@ -135,7 +159,10 @@ describe('independent Settings contact verification',()=>{
 		mocks.userFindUnique.mockImplementation(async()=>({...state.user}));
 		mocks.userFindFirst.mockResolvedValue(null);
 		mocks.userUpdateMany.mockImplementation(async({where,data})=>{
-			if(where.id!==state.user.id||where.phone!==state.user.phone)return {count:0};
+			if(where.id!==state.user.id
+				||(where.phone!==undefined&&where.phone!==state.user.phone)
+				||(where.email!==undefined&&where.email!==state.user.email)
+				||(where.status!==undefined&&where.status!==state.user.status))return {count:0};
 			applyData(state.user,data);
 			return {count:1};
 		});
@@ -199,6 +226,7 @@ describe('independent Settings contact verification',()=>{
 		const verified=await verifyEmailCode(request({code}));
 		expect(verified.status).toBe(200);
 		expect(state.challenge?.verifiedAt).toBeInstanceOf(Date);
+		expect(state.user.emailVerifiedAt).toBeInstanceOf(Date);
 		expect(state.user.phone).toBeNull();
 		expect((await getContactStatus()).status).toBe(200);
 		const status=await (await getContactStatus()).json();
@@ -267,6 +295,8 @@ describe('independent Settings contact verification',()=>{
 		const otp=mocks.sendBrevo.mock.calls[0][1] as string;
 		expect((await verifyPhoneCode(request({code:otp}))).status).toBe(200);
 		expect(state.user.phone).toBe('+12025550123');
+		expect(state.user.phoneVerified).toBe(true);
+		expect(state.user.phoneVerifiedAt).toBeInstanceOf(Date);
 		expect(state.challenge?.verifiedAt).toBeInstanceOf(Date);
 		const status=await (await getContactStatus()).json();
 		expect(status).toMatchObject({emailVerified:false,phoneVerified:true});

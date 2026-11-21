@@ -15,6 +15,7 @@ import {
 	createAccountContactVerificationHash,
 	createAccountContactVerificationReservation,
 	finalizeAccountContactVerificationReservation,
+	getContactVerificationDatabaseErrorCode,
 	reserveAccountContactVerification,
 	restoreAccountContactVerificationReservation,
 } from '@/lib/account-contact-verification';
@@ -46,8 +47,9 @@ export async function POST(request:Request){
 		if(!phone)return NextResponse.json({error:'Enter a valid phone number for the selected country.'},{status:400});
 		const provider=getConfiguredSmsVerificationProvider();
 		if(!provider)return NextResponse.json({error:'Phone verification is not configured for this service. No code was sent.'},{status:503});
-		const account=await db.user.findUnique({where:{id:user.id},select:{id:true,phone:true,status:true}});
+		const account=await db.user.findUnique({where:{id:user.id},select:{id:true,phone:true,phoneVerified:true,status:true}});
 		if(!account||account.status!=='ACTIVE')return NextResponse.json({error:'This account is unavailable.'},{status:403});
+		if(account.phone===phone&&account.phoneVerified)return NextResponse.json({error:'This phone number is already verified.'},{status:409});
 		const duplicate=await db.user.findFirst({where:{phone,id:{not:user.id}},select:{id:true}});
 		if(duplicate)return NextResponse.json({error:'This phone number cannot be used. Choose another number or contact support.'},{status:409});
 		const ip=trustedProxyClientIp(request)||'unknown';
@@ -114,7 +116,9 @@ export async function POST(request:Request){
 		if(error instanceof Error&&error.message==='FORBIDDEN')return NextResponse.json({error:'This account is unavailable.'},{status:403});
 		if(error instanceof Error&&error.message==='RATE_LIMITED')return NextResponse.json({error:'Too many code requests. Try again later.'},{status:429});
 		if(error instanceof Error&&error.message==='VERIFICATION_SECRET_UNAVAILABLE')return NextResponse.json({error:'Phone verification is temporarily unavailable.'},{status:503});
-		console.error('[account-contact-verification] Phone code request failed.',{requestId,errorType:error instanceof Error?error.name:'UnknownError'});
+		const errorCode=getContactVerificationDatabaseErrorCode(error);
+		console.error('[account-contact-verification] Phone code request failed.',{requestId,errorType:error instanceof Error?error.name:'UnknownError',...(errorCode?{errorCode}:{})});
+		if(errorCode)return NextResponse.json({error:'Phone verification is unavailable because the application database schema needs an update. Contact support.'},{status:503});
 		return NextResponse.json({error:'Phone verification is temporarily unavailable.'},{status:503});
 	}
 }

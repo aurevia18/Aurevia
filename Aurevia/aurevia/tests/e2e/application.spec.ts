@@ -3829,6 +3829,14 @@ test('profile settings persist for the owner and remain inaccessible to signed-o
 	const updated=await page.request.patch('/api/profile',{data:{name:'Temporary Settings Update',country:'Test Country',address:'Isolated test address',twoFactorEnabled:true}});
 	expect(updated.ok()).toBeTruthy();
 	expect(await page.request.get('/api/profile').then(response=>response.json())).toMatchObject({name:'Temporary Settings Update',twoFactorEnabled:false,twoFactorAvailable:true});
+	const unverifiedPhoneChange=await page.request.patch('/api/profile',{data:{firstName:'Temporary',lastName:'Settings Update',phone:'+2348031234567'}});
+	expect(unverifiedPhoneChange.status()).toBe(409);
+	expect((await page.request.get('/api/settings/contact-verification')).status()).toBe(200);
+	await page.setViewportSize({width:320,height:800});
+	await page.goto('/settings#profile');
+	await expect(page.locator('input[autocomplete="tel"]')).toHaveAttribute('readonly','');
+	await expectNoHorizontalOverflow(page);
+	await page.setViewportSize({width:1440,height:900});
 	await page.goto('/settings');
 	await page.getByRole('tab',{name:'Security'}).click();
 	await expect(page.getByRole('heading',{name:'Financial Account Security Center'})).toBeVisible();
@@ -3986,10 +3994,33 @@ test('TOTP enrollment enforces second-factor sign-in and supports disable flow',
 			expect((await replayPage.request.get('/api/auth/session').then(response=>response.json())).user).toBeUndefined();
 		}finally{await replayContext.close()}
 
+		const consumedTotpStep=Math.floor(Date.now()/30_000);
+		await expect.poll(()=>Math.floor(Date.now()/30_000),{timeout:35_000}).not.toBe(consumedTotpStep);
+		const regenerateCode=await generate({secret:enrollment.manualKey});
+		const regenerate=await newDevicePage.request.post('/api/security/totp',{data:{
+			action:'regenerate',password:user.password,secondFactorCode:regenerateCode,
+		}});
+		expect(regenerate.status()).toBe(200);
+		const regeneratedCodes=(await regenerate.json()).recoveryCodes as string[];
+		expect(regeneratedCodes).toHaveLength(10);
+		expect(new Set(regeneratedCodes).size).toBe(10);
+
+		const oldRecoveryContext=await browser.newContext();
+		try{
+			const oldRecoveryPage=await oldRecoveryContext.newPage();
+			await oldRecoveryPage.goto('/login');
+			await waitForStartup(oldRecoveryPage);
+			await oldRecoveryPage.getByLabel('Email address').fill(user.email);
+			await oldRecoveryPage.getByLabel('Password',{exact:true}).fill(user.password);
+			await oldRecoveryPage.locator('input[name="secondFactorCode"]').fill(recoveryCodes[0]);
+			await oldRecoveryPage.getByRole('button',{name:'Sign in'}).click();
+			await expect(oldRecoveryPage.locator('.auth-signin-card [role="alert"]')).toContainText('authenticator code are incorrect');
+		}finally{await oldRecoveryContext.close()}
+
 		const recoveryContext=await browser.newContext();
 		try{
 			const recoveryPage=await recoveryContext.newPage();
-			await loginAs(recoveryPage,user.email,user.password,{secondFactorCode:recoveryCodes[0]});
+			await loginAs(recoveryPage,user.email,user.password,{secondFactorCode:regeneratedCodes[0]});
 			await expect(recoveryPage).toHaveURL(/dashboard/);
 		}finally{await recoveryContext.close()}
 
@@ -4000,7 +4031,7 @@ test('TOTP enrollment enforces second-factor sign-in and supports disable flow',
 			await waitForStartup(recoveryReplayPage);
 			await recoveryReplayPage.getByLabel('Email address').fill(user.email);
 			await recoveryReplayPage.getByLabel('Password',{exact:true}).fill(user.password);
-			await recoveryReplayPage.locator('input[name="secondFactorCode"]').fill(recoveryCodes[0]);
+			await 			recoveryReplayPage.locator('input[name="secondFactorCode"]').fill(regeneratedCodes[0]);
 			await recoveryReplayPage.getByRole('button',{name:'Sign in'}).click();
 			await expect(recoveryReplayPage.locator('.auth-signin-card [role="alert"]')).toContainText('authenticator code are incorrect');
 			expect((await recoveryReplayPage.request.get('/api/auth/session').then(response=>response.json())).user).toBeUndefined();

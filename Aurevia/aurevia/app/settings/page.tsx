@@ -97,7 +97,7 @@ export default function Settings(){
 		if(!profile||saving)return;
 		setSaving(true);setMessage('');setError('');
 		try{
-			const response=await fetch('/api/profile',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({firstName:profile.firstName,lastName:profile.lastName,phone:profile.phone||'',country:profile.country||'',address:profile.address||''})});
+			const response=await fetch('/api/profile',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({firstName:profile.firstName,lastName:profile.lastName,country:profile.country||'',address:profile.address||''})});
 			const result=await response.json();
 			if(!response.ok)throw new Error(result.error||'Unable to save profile.');
 			const refreshed=await fetch('/api/profile',{cache:'no-store'});
@@ -160,7 +160,8 @@ export default function Settings(){
 						<label className="account-label md:col-span-2">{translate('emailAddress')}<input className="input" type="email" autoComplete="email" value={profile.email} disabled/></label>
 						<label className="account-label">{translate('firstName')}<input className="input" autoComplete="given-name" required maxLength={60} value={profile.firstName} disabled={profile.profileLocked} onChange={event=>setProfile({...profile,firstName:event.target.value})}/></label>
 						<label className="account-label">{translate('lastName')}<input className="input" autoComplete="family-name" maxLength={60} value={profile.lastName} disabled={profile.profileLocked} onChange={event=>setProfile({...profile,lastName:event.target.value})}/></label>
-						<label className="account-label">{translate('phone')}<input className="input" type="tel" autoComplete="tel" maxLength={40} value={profile.phone||''} disabled={profile.profileLocked} onChange={event=>setProfile({...profile,phone:event.target.value})}/></label>
+						<label className="account-label">{translate('phone')}<input className="input" type="tel" autoComplete="tel" value={profile.phone||''} readOnly aria-describedby="settings-phone-verification-help"/></label>
+						<p id="settings-phone-verification-help" className="text-xs muted">{translate('phone')} changes must be verified in Contact verification below.</p>
 						<label className="account-label">{translate('country')}<input className="input" autoComplete="country-name" required minLength={2} maxLength={80} value={profile.country||''} disabled={profile.profileLocked} onChange={event=>setProfile({...profile,country:event.target.value})}/></label>
 						<label className="account-label md:col-span-2">{translate('addressOptional')}<input className="input" autoComplete="street-address" maxLength={500} value={profile.address||''} disabled={profile.profileLocked} onChange={event=>setProfile({...profile,address:event.target.value})}/></label>
 						<div className="account-callout md:col-span-2"><ShieldCheck size={16}/><span>{translate('verificationStatus')}: <b>{verification}</b>. {translate('reviewYourDetails')} <a className="gold" href="/kyc">{translate('verificationPage')}</a>.</span></div>

@@ -5,7 +5,7 @@ import {getAdditionalMarketProviderKeys,getMarketQuoteWithFallback} from '@/lib/
 import {getMarketProviderReadiness} from '@/lib/market-data/provider-manager';
 
 export type IntegrationStatus='CONNECTED'|'MISSING_CREDENTIALS'|'CONFIGURATION_REQUIRED'|'CONNECTION_FAILED'|'PROVIDER_UNAVAILABLE'|'PENDING_ADMIN_APPROVAL'|'NOT_CONFIGURED'|'DISABLED';
-export type IntegrationId='openai'|'openrouter'|'gemini'|'groq'|'twelve_data'|'currency'|'supabase_auth'|'supabase_storage'|'brevo'|'brevo_sms'|'termii'|'browser_push'|'gnews'|'payment'|'database'|'akedly'|'aurevia_kyc'|'didit';
+export type IntegrationId='openai'|'openrouter'|'gemini'|'groq'|'twelve_data'|'currency'|'supabase_auth'|'supabase_storage'|'brevo'|'brevo_sms'|'termii'|'browser_push'|'gnews'|'payment'|'database'|'akedly'|'aurevia_kyc';
 export type IntegrationCheck={id:IntegrationId;name:string;status:IntegrationStatus;detail:string;feature:string;documentation:string;checkedAt:string;canTest:boolean};
 
 const docs:Record<IntegrationId,string>={
@@ -17,7 +17,6 @@ const docs:Record<IntegrationId,string>={
 	gnews:'https://docs.gnews.io/',payment:'https://render.com/docs/configure-environment-variables',database:'https://supabase.com/docs/guides/database/connecting-to-postgres',
 	akedly:'https://docs.akedly.io/authentication/v2',
 	aurevia_kyc:'https://github.com/aurevia31/Aurevia',
-	didit:'https://docs.didit.me/sessions-api/create-session',
 };
 
 type AiEngineStatus=Awaited<ReturnType<typeof getAiEngineStatus>>;
@@ -123,7 +122,7 @@ function checkAureviaKyc(){
 	if(config.formattingIssues.length||config.engine!=='internal')return item('aurevia_kyc','Aurevia Verify','CONFIGURATION_REQUIRED','Internal verification configuration is invalid. Review the KYC environment variable names and allowed values.','First-party identity submission and administrator review',false);
 	if(!config.enabled)return item('aurevia_kyc','Aurevia Verify','DISABLED','First-party identity verification is disabled by configuration.','First-party identity submission and administrator review',false);
 	if(!config.configured)return item('aurevia_kyc','Aurevia Verify','MISSING_CREDENTIALS','KYC_ENCRYPTION_KEY must be configured as a stable 32-byte Base64 key.','Encrypted identity information',false);
-	if(!serverConfig.supabase.url||!serverConfig.supabase.serviceRoleKey)return item('aurevia_kyc','Aurevia Verify','MISSING_CREDENTIALS','SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for private evidence storage.','Private identity evidence',false);
+	if(!serverConfig.kycStorage.configured)return item('aurevia_kyc','Aurevia Verify','MISSING_CREDENTIALS',`${serverConfig.kycStorage.missingConfiguration.join(' and ')} must be configured for private evidence storage.`,'Private identity evidence',false);
 	return item('aurevia_kyc','Aurevia Verify','CONFIGURATION_REQUIRED','The internal manual-review workflow is configured. Private bucket availability is checked when evidence is uploaded.','First-party identity submission and administrator review',false);
 }
 
@@ -150,25 +149,19 @@ export async function checkIntegration(id:IntegrationId,aiEngineStatus?:Promise<
 		return item('akedly','Akedly (legacy)','DISABLED','Akedly is retained only for historical records. New KYC and phone-verification flows do not call it.','Historical verification records',false);
 	}
 	if(id==='aurevia_kyc')return checkAureviaKyc();
-	if(id==='didit'){
-		const config=getServerConfiguration().didit;
-		if(!config.enabled)return item(id,'Didit KYC','DISABLED','Didit is disabled; the existing first-party KYC flow remains available.','Hosted KYC verification',false);
-		if(!config.configured)return item(id,'Didit KYC','MISSING_CREDENTIALS','DIDIT_ENV, DIDIT_API_KEY, DIDIT_WORKFLOW_ID, and DIDIT_WEBHOOK_SECRET must be correctly configured.','Hosted KYC verification',false);
-		return item(id,'Didit KYC','CONFIGURATION_REQUIRED',`Didit is configured for ${config.environment} but credentials and workflow availability have not been tested; no KYC session was started.`,'Hosted KYC verification',false);
-	}
 	if(id==='browser_push')return checkConfiguredOnly(id,'Browser push',Boolean(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY?.trim()&&process.env.VAPID_PRIVATE_KEY?.trim()&&process.env.VAPID_SUBJECT?.trim()&&process.env.PUSH_SUBSCRIPTION_ENCRYPTION_KEY?.trim()),'Web push notifications','VAPID keys, subject, and subscription encryption key are required.');
 	const payment=getServerConfiguration().payment;
 	return item('payment','Payment processing',payment.configured?'PENDING_ADMIN_APPROVAL':'NOT_CONFIGURED',payment.configured?'Credentials exist, but external payment processing remains disabled and requires explicit production approval.':'External payment processing is not configured or enabled.','External deposits and payouts',false);
 }
 
 export async function getIntegrationInventory(aiStatus?:Promise<AiEngineStatus>):Promise<IntegrationCheck[]>{
-	const ids:IntegrationId[]=['openai','openrouter','gemini','groq','twelve_data','currency','supabase_auth','supabase_storage','brevo','brevo_sms','termii','browser_push','gnews','payment','database','akedly','aurevia_kyc','didit'];
+	const ids:IntegrationId[]=['openai','openrouter','gemini','groq','twelve_data','currency','supabase_auth','supabase_storage','brevo','brevo_sms','termii','browser_push','gnews','payment','database','akedly','aurevia_kyc'];
 	const aiEngineStatus=aiStatus||getAiEngineStatus();
 	return Promise.all(ids.map(id=>checkIntegration(id,aiEngineStatus)));
 }
 
 export function isIntegrationId(value:unknown):value is IntegrationId{
-	return typeof value==='string'&&['openai','openrouter','gemini','groq','twelve_data','currency','supabase_auth','supabase_storage','brevo','brevo_sms','termii','browser_push','gnews','payment','database','akedly','aurevia_kyc','didit'].includes(value);
+	return typeof value==='string'&&['openai','openrouter','gemini','groq','twelve_data','currency','supabase_auth','supabase_storage','brevo','brevo_sms','termii','browser_push','gnews','payment','database','akedly','aurevia_kyc'].includes(value);
 }
 
 export function mapAiStatusForDisplay(value:string){return aiStatus(value)}

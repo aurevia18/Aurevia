@@ -18,6 +18,11 @@ export class AccountContactVerificationError extends Error{
 	}
 }
 
+export function getContactVerificationDatabaseErrorCode(error:unknown){
+	const code=error&&typeof error==='object'&&'code'in error?error.code:null;
+	return typeof code==='string'&&/^P20(?:21|22)$/.test(code)?code:null;
+}
+
 export function createAccountContactVerificationHash(
 	userId:string,
 	channel:VerificationChannel,

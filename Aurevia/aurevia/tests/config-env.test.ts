@@ -245,27 +245,6 @@ describe('canonical environment configuration',()=>{
     expect(getServerConfiguration({TERMII_API_KEY:'termii-key',TERMII_SENDER_ID:'AUREVIA',TERMII_BASE_URL:'https://example.invalid'}).verification).toMatchObject({configured:false,termiiBaseUrlValid:false});
   });
 
-  it('requires explicit Didit environment, API key, workflow UUID, and webhook secret',()=>{
-    const config={
-      DIDIT_ENABLED:'true',
-      DIDIT_ENV:'sandbox',
-      DIDIT_API_KEY:'sk_test_example',
-      DIDIT_WORKFLOW_ID:'123e4567-e89b-42d3-a456-426614174000',
-      DIDIT_WEBHOOK_SECRET:'webhook-secret',
-    };
-
-    expect(getServerConfiguration(config).didit).toMatchObject({enabled:true,environment:'sandbox',configured:true});
-    expect(getServerConfiguration({...config,DIDIT_ENV:'',DIDIT_WORKFLOW_ID:'invalid'}).didit).toMatchObject({
-      configured:false,
-      formattingIssues:expect.arrayContaining([
-        'DIDIT_ENV must be sandbox or production',
-        'DIDIT_WORKFLOW_ID must be a UUID',
-      ]),
-    });
-    expect(getServerConfiguration({...config,DIDIT_API_KEY:'sk_live_example'}).didit.formattingIssues)
-      .toContain('DIDIT_API_KEY is a live key but DIDIT_ENV is sandbox');
-  });
-
   it('uses the Render HTTPS origin until a custom domain is explicitly verified',()=>{
     expect(resolveRenderApplicationUrls({
       NODE_ENV:'production',
