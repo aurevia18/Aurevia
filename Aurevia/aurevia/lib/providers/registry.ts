@@ -15,7 +15,6 @@ export async function getExecutionProviderStatus(){
 		enabled:false,
 		providerName:'internal-simulation',
 		providerMode:null,
-		alpacaTrading:{status:'DISABLED' as const,executionStatus:'DISABLED' as const,configured:false,mode:null,realExecutionEnabled:false},
 		adapterRegistered:false,
 		configuredVariables:{},
 		missingConfiguration:[],

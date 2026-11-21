@@ -41,7 +41,7 @@ export async function verifyTotp(secret:string,code:string){
 	if(!/^\d{6}$/.test(normalized))return null;
 	const result=await verify({secret,token:normalized,epochTolerance:30});
 	if(!result.valid)return null;
-	return Math.floor(Date.now()/TOTP_PERIOD_SECONDS)+(result.delta||0);
+	return Math.floor(Date.now()/(TOTP_PERIOD_SECONDS*1000))+(result.delta||0);
 }
 
 export function createRecoveryCode(){

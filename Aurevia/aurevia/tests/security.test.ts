@@ -70,20 +70,27 @@ describe('security cryptography',()=>{
 	});
 
 	it('rejects repeated use of the same accepted authenticator time step',async()=>{
-		const secret=generateSecret();
-		const code=await generate({secret});
-		const counter=await verifyTotp(secret,code);
-		if(counter===null)throw new Error('Generated TOTP code did not verify.');
-		mocks.userUpdateMany.mockResolvedValueOnce({count:1}).mockResolvedValueOnce({count:0});
-		mocks.securityRecoveryFindMany.mockResolvedValue([]);
-		const tx={
-			user:{updateMany:mocks.userUpdateMany},
-			securityRecoveryCode:{findMany:mocks.securityRecoveryFindMany,updateMany:mocks.securityRecoveryUpdateMany},
-		} as unknown as Prisma.TransactionClient;
-		const secretEncrypted=encryptTotpSecret(secret);
+		vi.useFakeTimers();
+		try{
+			vi.setSystemTime(new Date('2026-11-21T07:40:00.000Z'));
+			const secret=generateSecret();
+			const code=await generate({secret});
+			const counter=await verifyTotp(secret,code);
+			if(counter===null)throw new Error('Generated TOTP code did not verify.');
+			mocks.userUpdateMany.mockResolvedValueOnce({count:1}).mockResolvedValueOnce({count:0});
+			mocks.securityRecoveryFindMany.mockResolvedValue([]);
+			const tx={
+				user:{updateMany:mocks.userUpdateMany},
+				securityRecoveryCode:{findMany:mocks.securityRecoveryFindMany,updateMany:mocks.securityRecoveryUpdateMany},
+			} as unknown as Prisma.TransactionClient;
+			const secretEncrypted=encryptTotpSecret(secret);
 
-		await expect(consumeSecondFactor(tx,{userId:'user-1',secretEncrypted,lastTotpCounter:null,code})).resolves.toBe(true);
-		await expect(consumeSecondFactor(tx,{userId:'user-1',secretEncrypted,lastTotpCounter:BigInt(counter),code})).resolves.toBe(false);
+			await expect(consumeSecondFactor(tx,{userId:'user-1',secretEncrypted,lastTotpCounter:null,code})).resolves.toBe(true);
+			vi.advanceTimersByTime(31);
+			const repeatedCounter=await verifyTotp(secret,code);
+			expect(repeatedCounter).toBe(counter);
+			await expect(consumeSecondFactor(tx,{userId:'user-1',secretEncrypted,lastTotpCounter:BigInt(counter),code})).resolves.toBe(false);
+		}finally{vi.useRealTimers()}
 	});
 
 	it('accepts a recovery code only in its normalized form',async()=>{

@@ -12,6 +12,7 @@ import {matchesConfiguredAdminIdentity,matchesConfiguredAdminPassword,resolveCre
 import {getServerConfiguration} from '@/lib/config/env';
 import {AUTH_SESSION_MAX_AGE_SECONDS,isAuthSessionExpired} from '@/lib/auth-session';
 import {hashSessionId} from '@/lib/security';
+import {consumeSecondFactor} from '@/lib/security-auth';
 import {clearPersistentRateLimit,persistentRateLimit} from '@/lib/security-rate-limit';
 import {verifyWebAuthnAuthentication} from '@/lib/webauthn';
 
@@ -53,6 +54,12 @@ const credentialUserSelect={
   accountMode:true,
   status:true,
 } satisfies Prisma.UserSelect;
+const passwordCredentialSelect={
+  ...credentialUserSelect,
+  twoFactorEnabled:true,
+  totpSecretEncrypted:true,
+  lastTotpCounter:true,
+} satisfies Prisma.UserSelect;
 export const authOptions:NextAuthOptions={
   session:{strategy:'jwt',maxAge:AUTH_SESSION_MAX_AGE_SECONDS},
   jwt:{maxAge:AUTH_SESSION_MAX_AGE_SECONDS},
@@ -63,6 +70,7 @@ export const authOptions:NextAuthOptions={
       email:{label:'Email',type:'email'},
       username:{label:'Username',type:'text'},
       password:{label:'Password',type:'password'},
+      secondFactorCode:{label:'Authenticator or recovery code',type:'text'},
       adminLogin:{label:'Administrator sign-in',type:'text'},
 		webauthnAssertion:{label:'WebAuthn assertion',type:'text'},
     },
@@ -137,22 +145,22 @@ export const authOptions:NextAuthOptions={
       const {isAdminUsername,lookupEmail}=resolveCredentialLookup(username,email,authConfig.adminUsername,authConfig.adminEmail,c?.adminLogin==='true');
       if(!lookupEmail){await writeLoginAudit('FAILED',undefined,undefined,'MISSING_IDENTIFIER');return null;}
       try{
-      let u=await db.user.findFirst({where:{email:{equals:lookupEmail,mode:'insensitive'}},select:credentialUserSelect});
+      let u=await db.user.findFirst({where:{email:{equals:lookupEmail,mode:'insensitive'}},select:passwordCredentialSelect});
       if((!u||u.role!==Role.ADMIN)&&c?.adminLogin==='true'&&authConfig.adminUsername&&authConfig.adminEmail&&authConfig.adminPassword?.length>=12&&matchesConfiguredAdminIdentity(username,email,authConfig.adminUsername,authConfig.adminEmail)&&matchesConfiguredAdminPassword(passwordForAuthentication,authConfig.adminPassword)){
         const configuredEmail=authConfig.adminEmail.trim().toLowerCase();
         const passwordHash=await bcrypt.hash(authConfig.adminPassword,12);
         u=await db.$transaction(async tx=>{
-          const account=await tx.user.findUnique({where:{email:configuredEmail},select:credentialUserSelect});
+          const account=await tx.user.findUnique({where:{email:configuredEmail},select:passwordCredentialSelect});
           const existingAdmin=await tx.user.findFirst({where:{role:Role.ADMIN},select:{id:true}});
           if(existingAdmin&&existingAdmin.id!==account?.id){
             if(account)return account;
-            return tx.user.update({where:{id:existingAdmin.id},data:{email:configuredEmail,passwordHash,name:authConfig.adminUsername!.trim(),status:UserStatus.ACTIVE},select:credentialUserSelect});
+            return tx.user.update({where:{id:existingAdmin.id},data:{email:configuredEmail,passwordHash,name:authConfig.adminUsername!.trim(),status:UserStatus.ACTIVE},select:passwordCredentialSelect});
           }
           if(account){
             if(account.role===Role.ADMIN)return account;
             return null;
           }
-          return tx.user.create({data:{email:configuredEmail,passwordHash,name:authConfig.adminUsername!.trim(),role:Role.ADMIN,status:UserStatus.ACTIVE},select:credentialUserSelect});
+          return tx.user.create({data:{email:configuredEmail,passwordHash,name:authConfig.adminUsername!.trim(),role:Role.ADMIN,status:UserStatus.ACTIVE},select:passwordCredentialSelect});
         },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
       }
       if(!u||u.status!=='ACTIVE'){
@@ -183,6 +191,90 @@ export const authOptions:NextAuthOptions={
         return null;
       }
       if(isAdminUsername&&authenticatedUser.role!=='ADMIN'){await writeLoginAudit('FAILED',authenticatedUser.id,undefined,'ADMIN_ROLE_REQUIRED');return null;}
+      const secondFactorCode=typeof c?.secondFactorCode==='string'?c.secondFactorCode.trim():'';
+      if(authenticatedUser.twoFactorEnabled){
+        if(!secondFactorCode){
+          await writeLoginAudit('FAILED',authenticatedUser.id,undefined,'SECOND_FACTOR_REQUIRED');
+          return null;
+        }
+        const secondFactorAttemptKey=`credential-login-second-factor:${authenticatedUser.id}`;
+        try{await persistentRateLimit(secondFactorAttemptKey,5,15*60_000)}catch(error){
+          if(!(error instanceof RateLimitError))throw error;
+          await writeLoginAudit('FAILED',authenticatedUser.id,undefined,'SECOND_FACTOR_RATE_LIMITED');
+          try{await createNotification(db,{userId:authenticatedUser.id,type:NotificationType.SECURITY,title:'Repeated authenticator sign-in failures',message:'Repeated unsuccessful authenticator verification attempts were detected. If you do not recognize this activity, secure your account immediately.',dedupeKey:`security:${authenticatedUser.id}:totp-login-rate-limited:${Math.floor(Date.now()/900_000)}`,actionUrl:'/settings#security'});}catch{console.warn('Unable to persist two-factor security notification.')}
+          return null;
+        }
+        const sessionId=randomUUID();
+        const label=sessionDeviceLabel(userAgent);
+        const now=new Date();
+        try{
+          const authenticated=await db.$transaction(async tx=>{
+            const factorAccepted=await consumeSecondFactor(tx,{
+              userId:authenticatedUser.id,
+              secretEncrypted:authenticatedUser.totpSecretEncrypted,
+              lastTotpCounter:authenticatedUser.lastTotpCounter,
+              code:secondFactorCode,
+            });
+            if(!factorAccepted)return false;
+            await tx.securitySession.create({data:{
+              userId:authenticatedUser.id,
+              sessionHash:hashSessionId(sessionId),
+              deviceLabel:label,
+              userAgent,
+              expiresAt:new Date(now.getTime()+AUTH_SESSION_MAX_AGE_SECONDS*1000),
+            },select:{id:true}});
+            await tx.auditLog.create({data:{
+              actorId:authenticatedUser.id,
+              action:'LOGIN_SUCCESS',
+              entity:'LOGIN',
+              entityId:authenticatedUser.id,
+              metadata:{status:'SUCCESS',authMethod:'credentials+totp'},
+            }});
+            return true;
+          },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
+          if(!authenticated){
+            await writeLoginAudit('FAILED',authenticatedUser.id,undefined,'INVALID_SECOND_FACTOR');
+            return null;
+          }
+        }catch(error){
+          if(!isPrismaSchemaMismatch(error))throw error;
+          const authenticated=await db.$transaction(async tx=>{
+            const factorAccepted=await consumeSecondFactor(tx,{
+              userId:authenticatedUser.id,
+              secretEncrypted:authenticatedUser.totpSecretEncrypted,
+              lastTotpCounter:authenticatedUser.lastTotpCounter,
+              code:secondFactorCode,
+            });
+            if(!factorAccepted)return false;
+            const legacySession=await tx.user.updateMany({
+              where:{id:authenticatedUser.id},
+              data:{activeSessionId:sessionId,activeSessionUpdatedAt:now},
+            });
+            if(legacySession.count!==1)return false;
+            await tx.auditLog.create({data:{
+              actorId:authenticatedUser.id,
+              action:'LOGIN_SUCCESS',
+              entity:'LOGIN',
+              entityId:authenticatedUser.id,
+              metadata:{status:'SUCCESS',authMethod:'credentials+totp',sessionStorage:'legacy'},
+            }});
+            return true;
+          },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
+          if(!authenticated){
+            await writeLoginAudit('FAILED',authenticatedUser.id,undefined,'INVALID_SECOND_FACTOR');
+            return null;
+          }
+          console.warn('[auth] Security-session storage is unavailable; using legacy single-session storage.',{
+            referenceId,
+            errorCode:hasPrismaCode(error,'P2021')?'P2021':'P2022',
+          });
+        }
+        await clearPersistentRateLimit(secondFactorAttemptKey);
+        try{await clearPersistentRateLimit(accountAttemptKey)}catch(error){
+          if(!isPrismaSchemaMismatch(error))throw error;
+        }
+        return {id:authenticatedUser.id,email:authenticatedUser.email,name:authenticatedUser.name,role:authenticatedUser.role,accountMode:authenticatedUser.accountMode,sessionId};
+      }
       const now=new Date();
       try{
         await clearPersistentRateLimit(accountAttemptKey);

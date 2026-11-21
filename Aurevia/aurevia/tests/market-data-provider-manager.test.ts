@@ -14,35 +14,35 @@ import {getConfiguredMarketQuote,getMarketProviderReadiness} from '@/lib/market-
 beforeEach(()=>vi.unstubAllEnvs());
 
 describe('market-data provider selection and readiness',()=>{
-	it('falls through failed providers and returns a normalized quote from the next supported provider',async()=>{
-		const fetcher=vi.fn(async(input:RequestInfo|URL)=>{
-			const url=String(input);
-			if(url.includes('financialmodelingprep.com'))return new Response('denied',{status:403});
+	it('uses Twelve Data exclusively and returns its normalized stock quote',async()=>{
+		const fetcher=vi.fn(async(_input:RequestInfo|URL)=>{
 			return new Response(JSON.stringify({
-				close:'192.5',previous_close:'190',change:'2.5',percent_change:'1.3158',datetime:'2026-11-05 10:30:00',
+				close:'192.5',previous_close:'190',change:'2.5',percent_change:'1.3158',timestamp:1793893800,
 			}),{status:200});
 		});
 		vi.stubGlobal('fetch',fetcher);
 		const quote=await getConfiguredMarketQuote(getMarketAsset('AAPL')!,{
-			fmpApiKey:'fmp-fallback-key',twelveDataApiKey:'twelve-working-key',alphaVantageApiKey:'',productionLicenseConfirmed:false,
+			twelveDataApiKey:'twelve-working-key',twelveDataBaseUrl:'https://api.twelvedata.com',productionLicenseConfirmed:false,
 		});
 
 		expect(quote).toMatchObject({price:192.5,source:'Twelve Data'});
-		expect(fetcher).toHaveBeenCalledTimes(2);
+		expect(fetcher).toHaveBeenCalledOnce();
+		expect(String(fetcher.mock.calls[0][0])).toContain('api.twelvedata.com/quote?symbol=AAPL');
 		expect(JSON.stringify(quote)).not.toContain('twelve-working-key');
 	});
 
-	it('reports connected only after a successful authenticated provider request and redacts keys',async()=>{
-		const key='fmp-readiness-secret';
-		vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify([{
-			symbol:'AAPL',price:190,previousClose:188,change:2,changePercentage:1.06,
-		}]),{status:200})));
+	it('reports Twelve Data connected only after an authenticated request and redacts keys',async()=>{
+		const key='twelve-readiness-secret';
+		vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify({
+			close:'190',previous_close:'188',change:'2',percent_change:'1.06',timestamp:1793893800,
+		}),{status:200})));
 		const readiness=await getMarketProviderReadiness({
-			fmpApiKey:key,twelveDataApiKey:'',alphaVantageApiKey:'',productionLicenseConfirmed:false,
+			twelveDataApiKey:key,twelveDataBaseUrl:'https://api.twelvedata.com',productionLicenseConfirmed:false,
 		});
-		const fmp=readiness.find(provider=>provider.id==='fmp');
+		const twelveData=readiness.find(provider=>provider.id==='twelveData');
 
-		expect(fmp).toMatchObject({configured:true,status:'CONNECTED'});
+		expect(readiness).toHaveLength(1);
+		expect(twelveData).toMatchObject({configured:true,status:'CONNECTED'});
 		expect(JSON.stringify(readiness)).not.toContain(key);
 	});
 
@@ -52,16 +52,26 @@ describe('market-data provider selection and readiness',()=>{
 		vi.stubGlobal('fetch',fetcher);
 
 		await expect(getConfiguredMarketQuote(getMarketAsset('AAPL')!,{
-			fmpApiKey:'production-key',twelveDataApiKey:'',alphaVantageApiKey:'',productionLicenseConfirmed:false,
+			twelveDataApiKey:'',twelveDataBaseUrl:'https://api.twelvedata.com',productionLicenseConfirmed:false,
 		})).resolves.toBeNull();
 		expect(fetcher).not.toHaveBeenCalled();
 	});
 
-	it('does not send unsupported instrument categories to stock-only providers',async()=>{
+	it('does not fall back to another provider when Twelve Data fails',async()=>{
+		const fetcher=vi.fn().mockResolvedValue(new Response('unauthorized',{status:401}));
+		vi.stubGlobal('fetch',fetcher);
+		await expect(getConfiguredMarketQuote(getMarketAsset('AAPL')!,{
+			twelveDataApiKey:'twelve-key',twelveDataBaseUrl:'https://api.twelvedata.com',productionLicenseConfirmed:false,
+		})).resolves.toBeNull();
+		expect(fetcher).toHaveBeenCalledOnce();
+		expect(String(fetcher.mock.calls[0][0])).toContain('api.twelvedata.com/quote?symbol=AAPL');
+	});
+
+	it('does not make provider requests when Twelve Data is not configured',async()=>{
 		const fetcher=vi.fn();
 		vi.stubGlobal('fetch',fetcher);
 		await expect(getConfiguredMarketQuote(getMarketAsset('SPX')!,{
-			fmpApiKey:'fmp-key',twelveDataApiKey:'',alphaVantageApiKey:'',productionLicenseConfirmed:false,
+			twelveDataApiKey:'',twelveDataBaseUrl:'https://api.twelvedata.com',productionLicenseConfirmed:false,
 		})).resolves.toBeNull();
 		expect(fetcher).not.toHaveBeenCalled();
 	});

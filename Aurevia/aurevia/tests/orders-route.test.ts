@@ -6,19 +6,12 @@ const mocks=vi.hoisted(()=>({
 	findUnique:vi.fn(),
 	orderFindMany:vi.fn(),
 	placeOrder:vi.fn(),
-	submitAlpacaPaperOrder:vi.fn(),
 }));
 
 vi.mock('@/lib/auth',()=>({requireUser:mocks.requireUser}));
 vi.mock('@/lib/db',()=>({db:{user:{findUnique:mocks.findUnique},order:{findMany:mocks.orderFindMany}}}));
 vi.mock('@/lib/orders',()=>({placeOrder:mocks.placeOrder}));
 vi.mock('@/lib/notifications',()=>({createNotification:vi.fn()}));
-vi.mock('@/lib/alpaca-paper-orders',()=>({
-	cancelAlpacaPaperOrder:vi.fn(),
-	submitAlpacaPaperOrder:mocks.submitAlpacaPaperOrder,
-	ALPACA_PAPER_PROVIDER:'alpaca-paper',
-	AlpacaPaperOrderError:class extends Error{code='';httpStatus=409},
-}));
 
 import {GET,POST} from '@/app/api/orders/route';
 
@@ -32,7 +25,6 @@ describe('order route mode separation',()=>{
 		mocks.findUnique.mockResolvedValue({accountMode:AccountMode.DEMO,status:'ACTIVE',role:'USER'});
 		mocks.orderFindMany.mockResolvedValue([]);
 		mocks.placeOrder.mockResolvedValue({id:'demo-order'});
-		mocks.submitAlpacaPaperOrder.mockResolvedValue({id:'paper-order'});
 	});
 
 	it('keeps DEMO orders on Aurevia simulated execution',async()=>{
@@ -47,7 +39,6 @@ describe('order route mode separation',()=>{
 
 		expect(response.status).toBe(409);
 		expect(mocks.placeOrder).not.toHaveBeenCalled();
-		expect(mocks.submitAlpacaPaperOrder).not.toHaveBeenCalled();
 	});
 
 	it('routes the database-confirmed REAL mode to Aurevia internal simulated execution',async()=>{
@@ -58,7 +49,6 @@ describe('order route mode separation',()=>{
 
 		expect(response.status).toBe(201);
 		expect(mocks.placeOrder).toHaveBeenCalledWith('user-1',AccountMode.REAL,expect.objectContaining({instrumentId:'instrument-1'}),'route-order-key-001');
-		expect(mocks.submitAlpacaPaperOrder).not.toHaveBeenCalled();
 	});
 
 	it('keeps provider account and execution identifiers out of customer order responses',async()=>{
@@ -66,7 +56,7 @@ describe('order route mode separation',()=>{
 		mocks.orderFindMany.mockResolvedValue([{
 			id:'order-1',userId:'user-1',accountMode:AccountMode.REAL,providerName:'alpaca-paper',providerAccountId:'paper-account-secret',
 			providerOrderId:'broker-order-id',providerClientOrderId:'client-order-id',providerStatus:'filled',providerReservedAmount:'100',
-			reconciliationStatus:'CONFIRMED_BY_ALPACA_PAPER',reconciledAt:new Date(),idempotencyKey:'private-idempotency-key',
+			reconciliationStatus:'CONFIRMED_BY_EXTERNAL_PROVIDER',reconciledAt:new Date(),idempotencyKey:'private-idempotency-key',
 			status:'FILLED',instrument:{symbol:'AAPL'},executions:[{id:'execution-1',providerExecutionId:'provider-execution-id',providerOrderId:'broker-order-id',quantity:'1'}],
 		}]);
 

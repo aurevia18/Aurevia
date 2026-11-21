@@ -13,7 +13,7 @@ function safeText(value:unknown,maxLength=80):string|null{
 }
 
 function marketSource(value:unknown):string|null{
-	return value==='Finnhub'||value==='Yahoo Finance'||value==='Alpaca Crypto'?value:null;
+	return value==='Twelve Data'?value:null;
 }
 
 export async function GET(){

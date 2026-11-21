@@ -19,14 +19,14 @@ vi.mock('@/lib/db',()=>({db:{
 }}));
 vi.mock('@/lib/ai-services',()=>({runAiService:mocks.runAiService}));
 vi.mock('@/lib/rate-limit',()=>({rateLimit:mocks.rateLimit}));
-vi.mock('@/lib/config/env',()=>({getServerConfiguration:()=>({marketData:{finnhubApiKey:'test'},execution:{}})}));
+vi.mock('@/lib/config/env',()=>({getServerConfiguration:()=>({marketData:{twelveDataApiKey:'test',twelveDataBaseUrl:'https://api.twelvedata.com'}})}));
 vi.mock('@/lib/market-data-service',()=>({
-	getAlpacaMarketDataOptions:vi.fn(()=>undefined),
+	getAdditionalMarketProviderKeys:vi.fn(()=>({twelveDataApiKey:'test',twelveDataBaseUrl:'https://api.twelvedata.com'})),
 	getMarketQuoteWithFallback:mocks.getMarketQuote,
 }));
 vi.mock('@/lib/live-market',()=>({
 	getMarketAssetForTradingSymbol:vi.fn((symbol:string)=>({id:symbol})),
-	isExternalMarketDataSource:vi.fn((source:string)=>source==='Alpaca'||source==='Finnhub'),
+	isExternalMarketDataSource:vi.fn((source:string)=>source==='Twelve Data'),
 }));
 
 import {POST} from '@/app/api/portfolio/assistant/route';
@@ -45,7 +45,7 @@ beforeEach(()=>{
 	mocks.positionFindMany.mockResolvedValue([position]);
 	mocks.auditCreate.mockResolvedValue({});
 	mocks.runAiService.mockResolvedValue({content:JSON.stringify({summary:'Your open positions are concentrated in equities.',riskFactors:['A single asset class represents all valued exposure.'],caveat:'This excludes cash and investments.'}),provider:'openrouter',model:'test/free-model'});
-	mocks.getMarketQuote.mockResolvedValue({price:110,updatedAt:new Date().toISOString(),source:'Alpaca',isStale:false});
+	mocks.getMarketQuote.mockResolvedValue({price:110,updatedAt:new Date().toISOString(),source:'Twelve Data',isStale:false});
 });
 
 describe('user-scoped portfolio AI assistant',()=>{
@@ -72,7 +72,7 @@ describe('user-scoped portfolio AI assistant',()=>{
 		const response=await POST(request({question:'Explain concentration'}));
 		expect(response.status).toBe(200);
 		expect(mocks.getMarketQuote).toHaveBeenCalledOnce();
-		expect(JSON.parse((mocks.runAiService.mock.calls[0][1] as Array<{content:string}>)[1].content).portfolioExposure.markSource).toBe('Alpaca');
+		expect(JSON.parse((mocks.runAiService.mock.calls[0][1] as Array<{content:string}>)[1].content).portfolioExposure.markSource).toBe('Twelve Data');
 	});
 
 	it('reports unavailable REAL marks without falling back to simulated prices',async()=>{

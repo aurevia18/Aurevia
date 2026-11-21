@@ -278,7 +278,7 @@ export default function Trade() {
           entry.symbol===(item.assetId||item.symbol)&&Number.isFinite(entry.price)&&(
             accountMode==="DEMO"
               ?entry.dataMode==="SIMULATED"
-              :entry.dataMode==="LIVE"&&(entry.source==="Finnhub"||entry.source.startsWith("Alpaca"))
+              :entry.dataMode==="LIVE"&&isExternalMarketDataSource(entry.source)
           ),
         );
         if(!update)return item;
@@ -349,12 +349,10 @@ export default function Trade() {
       setChartLoading(true);
       setChartError("");
       const interval=TIMEFRAMES.find(item=>item.id===chartTimeframe)?.interval||"1m";
-      const fallbackPrice=accountMode==="REAL"
-        ?currentLiveQuote.current?.price??currentChartPrice.current
-        :demoMark??currentChartPrice.current;
-      if(!providerHistoryLoaded.current&&Number.isFinite(fallbackPrice)&&Number(fallbackPrice)>0){
-        setLiveCandles(createQuoteOnlyCandle(Number(fallbackPrice),Date.now(),interval));
-        setChartSource("Aurevia Internal");
+      const demoFallbackPrice=demoMark??currentChartPrice.current;
+      if(accountMode==="DEMO"&&!chartAssetId&&!providerHistoryLoaded.current&&Number.isFinite(demoFallbackPrice)&&Number(demoFallbackPrice)>0){
+        setLiveCandles(createQuoteOnlyCandle(Number(demoFallbackPrice),Date.now(),interval));
+        setChartSource("Aurevia DEMO");
         setChartQuoteOnly(false);
       }
       try{
@@ -366,13 +364,12 @@ export default function Trade() {
           const rows=await response.json() as Array<{ts:string;open:number|string;high:number|string;low:number|string;close:number|string;volume:number|string|null}>;
           history={candles:normalizeDemoTradeCandles(rows,demoMark??NaN,Date.now(),interval),source:"Aurevia DEMO"};
         }else{
-          const response=await fetch(`/api/live-markets/${encodeURIComponent(chartAssetId)}?timeframe=${chartTimeframe}&provider=finnhub`,{cache:"no-store"});
+          const response=await fetch(`/api/live-markets/${encodeURIComponent(chartAssetId)}?timeframe=${chartTimeframe}`,{cache:"no-store"});
           const result=await response.json();
           if(!response.ok)throw new Error(typeof result.error==="string"?result.error:"Market chart data is unavailable.");
           const providerHistory=result as {candles:typeof liveCandles;source?:string};
           const external=!!providerHistory.source&&isExternalMarketDataSource(providerHistory.source);
-          const internal=providerHistory.source==="Aurevia Internal";
-          if(!providerHistory.source||(!external&&!internal)||!Array.isArray(providerHistory.candles)||!providerHistory.candles.length)throw new Error("Market chart data is unavailable.");
+          if(!providerHistory.source||!external||!Array.isArray(providerHistory.candles)||!providerHistory.candles.length)throw new Error("Market chart data is unavailable.");
           history={candles:providerHistory.candles,source:providerHistory.source};
         }
         if(active){
@@ -392,17 +389,7 @@ export default function Trade() {
             setChartSource(quote.source);
             setChartQuoteOnly(true);
             setChartError("");
-          }else{
-            const fallbackPrice=accountMode==="REAL"
-              ?currentLiveQuote.current?.price??currentChartPrice.current
-              :demoMark??currentChartPrice.current;
-            if(Number.isFinite(fallbackPrice)&&Number(fallbackPrice)>0){
-              setLiveCandles(createQuoteOnlyCandle(Number(fallbackPrice),Date.now(),interval));
-              setChartSource("Aurevia Internal");
-              setChartQuoteOnly(true);
-              setChartError("");
-            }else setChartError(error instanceof Error?error.message:"Market chart data is unavailable.");
-          }
+          }else setChartError(error instanceof Error?error.message:"Market chart data is unavailable.");
         }
       }finally{if(active)setChartLoading(false);}
     };
@@ -431,7 +418,7 @@ export default function Trade() {
     return()=>{active=false;window.clearInterval(timer);};
   },[accountMode,chartAssetId]);
   const requestedQuantity = Number(qty);
-  const realReferencePrice=cur?.internalPrice??cur?.price;
+  const realReferencePrice=cur?.liveQuote?.price;
   const estimatedPrice=accountMode==="REAL"?realReferencePrice:cur?.price;
   const estimatedNotional = (estimatedPrice ?? 0) * (Number.isFinite(requestedQuantity) ? requestedQuantity : 0);
   const estimatedFee = estimatedNotional * Number(cur?.takerFee ?? 0);
@@ -447,10 +434,9 @@ export default function Trade() {
     :Math.max(0,heldSellQuantity-reservedSellQuantity);
   const availableTradeBalance=accountMode==="REAL"?Number(tradeWalletBalance?.availableBalance??0):availableBalance;
   const reservedTradeBalance=Number(tradeWalletBalance?.reservedBalance??0);
-  const internalQuoteAge=cur?.internalUpdatedAt?clock-Date.parse(cur.internalUpdatedAt):Infinity;
+  const internalQuoteAge=cur?.liveQuote?.updatedAt?clock-Date.parse(cur.liveQuote.updatedAt):Infinity;
   const realExecutionQuoteFresh=accountMode!=="REAL"||
     (Number.isFinite(realReferencePrice)&&Number(realReferencePrice)>0&&Number.isFinite(internalQuoteAge)&&internalQuoteAge>=-5_000&&internalQuoteAge<=30_000);
-  const hasFreshInternalPrice=(instrument:I)=>!!instrument.internalUpdatedAt&&Number.isFinite(clock-Date.parse(instrument.internalUpdatedAt))&&clock-Date.parse(instrument.internalUpdatedAt)>=-5_000&&clock-Date.parse(instrument.internalUpdatedAt)<=30_000;
   const formatWalletAmount=(value:number|null|undefined,currency:string)=>{
     if(value===null||value===undefined||!Number.isFinite(value))return "—";
     if(["USD","EUR","GBP","JPY","CAD","AUD","CHF"].includes(currency)){
@@ -494,8 +480,8 @@ export default function Trade() {
       quantity: Number(qty),
       price: type === "LIMIT" && price ? Number(price) : undefined,
       stopPrice: type === "STOP" && price ? Number(price) : undefined,
-      expectedPrice:accountMode==="REAL"?(cur.internalPrice??cur.price):cur.price,
-      observedAt:accountMode==="REAL"?(cur.internalUpdatedAt??cur.updatedAt):cur.updatedAt,
+      expectedPrice:accountMode==="REAL"?cur.liveQuote!.price:cur.price,
+      observedAt:accountMode==="REAL"?cur.liveQuote!.updatedAt:cur.updatedAt,
     };
     let response:Response;
     try{
@@ -573,7 +559,7 @@ export default function Trade() {
     <>
       <Nav />
       <main className="trade-terminal trade-workspace">
-        <header className="account-heading trade-page-heading"><div><span className="account-kicker">{accountMode==='LOADING'?translate('restoringAccountMode'):`${accountMode} ACCOUNT · ${translate('tradingWorkspace')}`}</span><h1>{translate('tradeMarkets')}</h1><p>{accountMode==='LOADING'?'Loading your account.':accountMode==='REAL'?translate('realAccountTradingDescription'):'DEMO orders use Aurevia’s internal practice feed.'}</p></div><span className={`status-pill ${accountMode==='REAL'?'mode-real':'mode-demo'}`}>{accountMode==='LOADING'?'RESTORING':accountMode==='REAL'?'REAL · ALPACA SANDBOX':'DEMO ACCOUNT'}</span></header>
+        <header className="account-heading trade-page-heading"><div><span className="account-kicker">{accountMode==='LOADING'?translate('restoringAccountMode'):`${accountMode} ACCOUNT · ${translate('tradingWorkspace')}`}</span><h1>{translate('tradeMarkets')}</h1><p>{accountMode==='LOADING'?'Loading your account.':accountMode==='REAL'?translate('realAccountTradingDescription'):'DEMO orders use Aurevia’s internal practice feed.'}</p></div><span className={`status-pill ${accountMode==='REAL'?'mode-real':'mode-demo'}`}>{accountMode==='LOADING'?'RESTORING':accountMode==='REAL'?'REAL · SIMULATED EXECUTION':'DEMO ACCOUNT'}</span></header>
         {(accountMode==='REAL'||accountMode==='DEMO')?<>
         <div className="trade-workspace-grid grid gap-4 xl:grid-cols-[1fr_340px]">
           <section className="trade-market-card card min-h-[650px] p-5">
@@ -727,7 +713,7 @@ export default function Trade() {
                   <span className={pnl(p)===null?"muted":pnl(p)! >= 0 ? "text-profit" : "text-loss"}>
                     {pnl(p)===null?"P/L unavailable":`${pnl(p)! >= 0 ? "+" : ""}$${pnl(p)!.toFixed(2)}`}
                   </span>
-                  <button type="button" disabled={p.requiresSellOrder||accountMode==='REAL'&&!items.some(item=>item.id===p.instrumentId&&hasFreshInternalPrice(item))} className="btn bg-loss disabled:opacity-50" onClick={() => void close(p.id)}>
+                  <button type="button" disabled={p.requiresSellOrder||accountMode==='REAL'&&!items.some(item=>item.id===p.instrumentId&&!!item.liveQuote&&Number.isFinite(clock-Date.parse(item.liveQuote.updatedAt))&&clock-Date.parse(item.liveQuote.updatedAt)>=-5_000&&clock-Date.parse(item.liveQuote.updatedAt)<=30_000)} className="btn bg-loss disabled:opacity-50" onClick={() => void close(p.id)}>
                     {p.requiresSellOrder?'Legacy provider holding':accountMode==='REAL'?'Close internally':translate('close')}
                   </button>
                 </div>

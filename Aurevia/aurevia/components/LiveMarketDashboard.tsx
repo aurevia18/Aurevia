@@ -106,7 +106,7 @@ function LiveMarketDashboardContent(){
       setStreamUpdates(current=>{
         const next={...current};
         for(const entry of updates){
-          const isProviderUpdate=entry.dataMode==='LIVE'&&(entry.source==='Finnhub'||entry.source.startsWith('Alpaca'));
+          const isProviderUpdate=entry.dataMode==='LIVE'&&isExternalMarketDataSource(entry.source);
           if(!isProviderUpdate&&!(entry.dataMode==='SIMULATED'&&!activeQuoteIsExternal))continue;
           const normalizedSymbol=entry.symbol.toUpperCase().replace(/[^A-Z0-9]/g,'');
           const asset=MARKET_ASSETS.find(item=>

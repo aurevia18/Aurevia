@@ -1,17 +1,16 @@
 import {getAiEngineStatus,type AiProvider} from '@/lib/ai-gateway';
 import {getServerConfiguration} from '@/lib/config/env';
-import {getLiveMarketProviderStatus,getMarketAsset} from '@/lib/live-market';
-import {getAlpacaMarketDataOptions} from '@/lib/market-data-service';
-import {getFinnhubQuote} from '@/lib/providers/finnhub-market-data';
-import {getAlpacaPaperAccountHealth} from '@/lib/providers/alpaca-crypto-provider';
+import {getMarketAsset,isExternalMarketDataSource} from '@/lib/live-market';
+import {getAdditionalMarketProviderKeys,getMarketQuoteWithFallback} from '@/lib/market-data-service';
+import {getMarketProviderReadiness} from '@/lib/market-data/provider-manager';
 
 export type IntegrationStatus='CONNECTED'|'MISSING_CREDENTIALS'|'CONFIGURATION_REQUIRED'|'CONNECTION_FAILED'|'PROVIDER_UNAVAILABLE'|'PENDING_ADMIN_APPROVAL'|'NOT_CONFIGURED'|'DISABLED';
-export type IntegrationId='openai'|'openrouter'|'gemini'|'groq'|'alpaca'|'finnhub'|'currency'|'supabase_auth'|'supabase_storage'|'brevo'|'brevo_sms'|'termii'|'browser_push'|'gnews'|'payment'|'database'|'akedly'|'aurevia_kyc'|'didit';
+export type IntegrationId='openai'|'openrouter'|'gemini'|'groq'|'twelve_data'|'currency'|'supabase_auth'|'supabase_storage'|'brevo'|'brevo_sms'|'termii'|'browser_push'|'gnews'|'payment'|'database'|'akedly'|'aurevia_kyc'|'didit';
 export type IntegrationCheck={id:IntegrationId;name:string;status:IntegrationStatus;detail:string;feature:string;documentation:string;checkedAt:string;canTest:boolean};
 
 const docs:Record<IntegrationId,string>={
 	openai:'https://platform.openai.com/docs/overview',openrouter:'https://openrouter.ai/docs/quickstart',gemini:'https://ai.google.dev/gemini-api/docs',groq:'https://console.groq.com/docs/quickstart',
-	alpaca:'https://docs.alpaca.markets/docs/getting-started',finnhub:'https://finnhub.io/docs/api',currency:'https://finnhub.io/docs/api/forex-rates',
+	twelve_data:'https://twelvedata.com/docs',currency:'https://twelvedata.com/docs#exchange-rate',
 	supabase_auth:'https://supabase.com/docs/guides/auth',supabase_storage:'https://supabase.com/docs/guides/storage',brevo:'https://developers.brevo.com/docs/send-a-transactional-email',
 	brevo_sms:'https://developers.brevo.com/docs/send-a-transactional-sms',
 	termii:'https://developers.termii.com/',browser_push:'https://developer.mozilla.org/en-US/docs/Web/API/Push_API',
@@ -43,23 +42,15 @@ async function checkAiProvider(provider:AiProvider,name:string,engineStatus?:Pro
 	return item(provider,name,aiStatus(entry.status),detail,'Central AI services');
 }
 
-async function checkFinnhub(){
+async function checkTwelveData(){
 	const config=getServerConfiguration();
-	if(!config.marketData.finnhubApiKey)return item('finnhub','Finnhub market data','MISSING_CREDENTIALS','FINNHUB_API_KEY is not configured. Market views use the internal reference feed when available.','Market quotes, history, and currency rates');
-	try{
-		const health=await getLiveMarketProviderStatus(config.marketData.finnhubApiKey,getAlpacaMarketDataOptions(config.execution));
-		if(health.finnhubStatus==='AVAILABLE')return item('finnhub','Finnhub market data','CONNECTED','A live Finnhub quote request succeeded.','Market quotes and history');
-		return item('finnhub','Finnhub market data',health.finnhubStatus==='ERROR'?'CONNECTION_FAILED':'PROVIDER_UNAVAILABLE','Finnhub credentials are present, but its live quote check did not succeed.','Market quotes and history');
-	}catch{return item('finnhub','Finnhub market data','PROVIDER_UNAVAILABLE','Finnhub could not be reached for a live quote check.','Market quotes and history');}
-}
-
-async function checkAlpaca(){
-	const health=await getAlpacaPaperAccountHealth();
-	if(health.status==='AVAILABLE')return item('alpaca','Legacy Alpaca reconciliation','CONNECTED','The legacy sandbox account is reachable for historical provider-order reconciliation. New REAL orders use Aurevia Internal simulated execution.','Historical Alpaca-linked orders only');
-	if(health.status==='NOT_CONFIGURED')return item('alpaca','Legacy Alpaca reconciliation','MISSING_CREDENTIALS','No legacy Alpaca sandbox credentials are configured. New REAL orders do not require Alpaca.','Historical Alpaca-linked orders only');
-	if(health.status==='AUTHENTICATION_FAILED')return item('alpaca','Legacy Alpaca reconciliation','CONNECTION_FAILED','Alpaca rejected the configured legacy reconciliation credentials.','Historical Alpaca-linked orders only');
-	if(health.status==='UNAVAILABLE')return item('alpaca','Legacy Alpaca reconciliation','PROVIDER_UNAVAILABLE','The legacy sandbox account endpoint is unavailable. New REAL orders use Aurevia Internal simulated execution.','Historical Alpaca-linked orders only');
-	return item('alpaca','Legacy Alpaca reconciliation','CONFIGURATION_REQUIRED','Legacy Alpaca reconciliation settings require review. New REAL orders do not use Alpaca.','Historical Alpaca-linked orders only');
+	const providers=await getMarketProviderReadiness(getAdditionalMarketProviderKeys(config.marketData));
+	const status=providers.find(provider=>provider.id==='twelveData');
+	if(!status?.configured)return item('twelve_data','Twelve Data','MISSING_CREDENTIALS','TWELVE_DATA_API_KEY is not configured.','Stocks, cryptocurrency, forex, and historical market data');
+	if(status.status==='CONNECTED')return item('twelve_data','Twelve Data','CONNECTED','Authenticated quote request succeeded. Data availability and quotas depend on the configured plan.','Stocks, cryptocurrency, forex, and historical market data');
+	if(status.status==='LICENSE_REVIEW_REQUIRED')return item('twelve_data','Twelve Data','CONFIGURATION_REQUIRED','Production display licensing has not been confirmed.','Stocks, cryptocurrency, forex, and historical market data');
+	if(status.status==='ERROR')return item('twelve_data','Twelve Data','CONNECTION_FAILED','Twelve Data request failed. Check the sanitized provider status and account entitlements.','Stocks, cryptocurrency, forex, and historical market data');
+	return item('twelve_data','Twelve Data','PROVIDER_UNAVAILABLE','Twelve Data did not return a usable market quote.','Stocks, cryptocurrency, forex, and historical market data');
 }
 
 async function checkSupabaseAuth(){
@@ -96,13 +87,13 @@ function checkBrevo(){
 }
 
 async function checkCurrency(){
-	const key=getServerConfiguration().marketData.finnhubApiKey;
-	if(!key)return item('currency','Currency rates','MISSING_CREDENTIALS','Finnhub is not configured; displayed rates use internal reference values.','Currency conversion display rates');
+	const configuration=getServerConfiguration();
 	try{
-		const asset={id:'USDEUR',ticker:'USDEUR=X',name:'US Dollar / Euro',type:'FOREX' as const,currency:'EUR'};
-		await getFinnhubQuote(asset,key);
+		const asset={id:'USDEUR',ticker:'USD/EUR',name:'US Dollar / Euro',type:'FOREX' as const,currency:'EUR'};
+		const quote=await getMarketQuoteWithFallback(asset,getAdditionalMarketProviderKeys(configuration.marketData));
+		if(!isExternalMarketDataSource(quote.source))throw new Error('PROVIDER_UNAVAILABLE');
 		return item('currency','Currency rates','CONNECTED','Live provider FX quote request succeeded.','Currency conversion display rates');
-	}catch{return item('currency','Currency rates','PROVIDER_UNAVAILABLE','No live FX quote was returned; internal reference rates remain separate.','Currency conversion display rates');}
+	}catch{return item('currency','Currency rates','PROVIDER_UNAVAILABLE','No live Twelve Data FX quote was returned.','Currency conversion display rates');}
 }
 
 async function checkGnews(){
@@ -141,8 +132,7 @@ export async function checkIntegration(id:IntegrationId,aiEngineStatus?:Promise<
 	if(id==='openrouter')return checkAiProvider(id,'OpenRouter',aiEngineStatus);
 	if(id==='gemini')return checkAiProvider(id,'Google Gemini',aiEngineStatus);
 	if(id==='groq')return checkAiProvider(id,'Groq',aiEngineStatus);
-	if(id==='alpaca')return checkAlpaca();
-	if(id==='finnhub')return checkFinnhub();
+	if(id==='twelve_data')return checkTwelveData();
 	if(id==='currency')return checkCurrency();
 	if(id==='supabase_auth')return checkSupabaseAuth();
 	if(id==='supabase_storage')return checkSupabaseStorage();
@@ -172,13 +162,13 @@ export async function checkIntegration(id:IntegrationId,aiEngineStatus?:Promise<
 }
 
 export async function getIntegrationInventory(aiStatus?:Promise<AiEngineStatus>):Promise<IntegrationCheck[]>{
-	const ids:IntegrationId[]=['openai','openrouter','gemini','groq','alpaca','finnhub','currency','supabase_auth','supabase_storage','brevo','brevo_sms','termii','browser_push','gnews','payment','database','akedly','aurevia_kyc','didit'];
+	const ids:IntegrationId[]=['openai','openrouter','gemini','groq','twelve_data','currency','supabase_auth','supabase_storage','brevo','brevo_sms','termii','browser_push','gnews','payment','database','akedly','aurevia_kyc','didit'];
 	const aiEngineStatus=aiStatus||getAiEngineStatus();
 	return Promise.all(ids.map(id=>checkIntegration(id,aiEngineStatus)));
 }
 
 export function isIntegrationId(value:unknown):value is IntegrationId{
-	return typeof value==='string'&&['openai','openrouter','gemini','groq','alpaca','finnhub','currency','supabase_auth','supabase_storage','brevo','brevo_sms','termii','browser_push','gnews','payment','database','akedly','aurevia_kyc','didit'].includes(value);
+	return typeof value==='string'&&['openai','openrouter','gemini','groq','twelve_data','currency','supabase_auth','supabase_storage','brevo','brevo_sms','termii','browser_push','gnews','payment','database','akedly','aurevia_kyc','didit'].includes(value);
 }
 
 export function mapAiStatusForDisplay(value:string){return aiStatus(value)}

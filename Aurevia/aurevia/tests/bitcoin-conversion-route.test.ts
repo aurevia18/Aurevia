@@ -6,12 +6,13 @@ const mocks=vi.hoisted(()=>({
 	userFindUnique:vi.fn(),
 	instrumentFindUnique:vi.fn(),
 	placeRealOrder:vi.fn(),
+	resolveTwelveDataExecutionQuote:vi.fn(),
 	rateLimit:vi.fn(),
 }));
 
 vi.mock('@/lib/auth',()=>({requireUser:mocks.requireUser}));
 vi.mock('@/lib/db',()=>({db:{user:{findUnique:mocks.userFindUnique},instrument:{findUnique:mocks.instrumentFindUnique}}}));
-vi.mock('@/lib/orders',()=>({placeRealOrder:mocks.placeRealOrder}));
+vi.mock('@/lib/orders',()=>({placeRealOrder:mocks.placeRealOrder,resolveTwelveDataExecutionQuote:mocks.resolveTwelveDataExecutionQuote}));
 vi.mock('@/lib/rate-limit',()=>({rateLimit:mocks.rateLimit}));
 vi.mock('@/lib/serializers',()=>({jsonSafe:(value:unknown)=>value}));
 
@@ -38,6 +39,7 @@ describe('REAL simulated Bitcoin conversion route',()=>{
 		mocks.requireUser.mockResolvedValue({id:'user-1'});
 		mocks.userFindUnique.mockResolvedValue({accountMode:AccountMode.REAL,status:'ACTIVE',role:'USER'});
 		mocks.instrumentFindUnique.mockResolvedValue(instrument());
+		mocks.resolveTwelveDataExecutionQuote.mockResolvedValue({price:100000,updatedAt:quoteTime});
 		mocks.placeRealOrder.mockResolvedValue({
 			id:'internal-order-1',status:'FILLED',side:'BUY',type:'MARKET',quantity:new Prisma.Decimal('0.0009985'),
 			filledQuantity:new Prisma.Decimal('0.0009985'),averageFillPrice:new Prisma.Decimal('100000'),
@@ -53,7 +55,7 @@ describe('REAL simulated Bitcoin conversion route',()=>{
 		expect(result).toMatchObject({
 			direction:'BUY',sourceAsset:'USD',destinationAsset:'BTC',rateCurrency:'USD/BTC',
 			sourceAmount:'100',fee:'0.15',feeCurrency:'USD',finalAmount:'0.0009985',
-			finalCurrency:'BTC',priceSource:'Aurevia Internal simulated market',simulated:true,
+			finalCurrency:'BTC',priceSource:'Twelve Data',simulated:true,
 		});
 		expect(response.headers.get('Cache-Control')).toBe('private, no-store');
 	});
@@ -66,7 +68,7 @@ describe('REAL simulated Bitcoin conversion route',()=>{
 		expect(mocks.placeRealOrder).toHaveBeenCalledWith('user-1',{
 			instrumentId:'btc-instrument',side:'BUY',type:'MARKET',quantity:0.0009985,
 			expectedPrice:100_000,observedAt:quoteTime,
-		},idempotencyKey,{requireExpectedPriceMatch:true});
+		},idempotencyKey,{requireExpectedPriceMatch:true,validatedQuote:{price:100000,updatedAt:quoteTime}});
 		expect(result).toMatchObject({
 			direction:'BUY',sourceAsset:'USD',destinationAsset:'BTC',sourceAmount:'100',
 			fee:'0.15',finalAmount:'0.0009985',executionProvider:'AUREVIA_INTERNAL_SIMULATION',simulated:true,
@@ -84,7 +86,7 @@ describe('REAL simulated Bitcoin conversion route',()=>{
 		const result=await response.json();
 
 		expect(response.status).toBe(201);
-		expect(mocks.placeRealOrder).toHaveBeenCalledWith('user-1',expect.objectContaining({side:'SELL',quantity:0.0025}),idempotencyKey,{requireExpectedPriceMatch:true});
+		expect(mocks.placeRealOrder).toHaveBeenCalledWith('user-1',expect.objectContaining({side:'SELL',quantity:0.0025}),idempotencyKey,{requireExpectedPriceMatch:true,validatedQuote:{price:100000,updatedAt:quoteTime}});
 		expect(result).toMatchObject({sourceAsset:'BTC',sourceAmount:'0.0025',destinationAsset:'USD',fee:'0.38',finalAmount:'249.62'});
 	});
 
@@ -106,6 +108,7 @@ describe('REAL simulated Bitcoin conversion route',()=>{
 
 	it('rejects a stale quote and an unavailable account mode',async()=>{
 		mocks.instrumentFindUnique.mockResolvedValueOnce({...instrument(),updatedAt:new Date(Date.now()-60_000)});
+		mocks.resolveTwelveDataExecutionQuote.mockResolvedValueOnce({price:100000,updatedAt:new Date(Date.now()-60_000).toISOString()});
 		const staleResponse=await POST(request(confirm('BUY','100.00')));
 		mocks.userFindUnique.mockResolvedValueOnce({accountMode:AccountMode.DEMO,status:'ACTIVE',role:'USER'});
 		const demoResponse=await POST(request(confirm('BUY','100.00')));

@@ -5,8 +5,7 @@ import {fallbackRoutes} from './theme-route-inventory';
 
 type RuntimeCapture={consoleErrors:string[];consoleErrorOrigins:string[];pageErrors:string[];failedRequests:string[];cancelledRequests:string[];pendingRequests:string[];failedResponses:Array<{url:string;status:number}>};
 const marketProviderConfigured=!process.env.AUREVIA_E2E_DATABASE_URL&&Boolean(
-	process.env.FINNHUB_API_KEY||
-	process.env.ALPACA_API_KEY&&(process.env.ALPACA_SECRET_KEY||process.env.ALPACA_API_SECRET),
+	process.env.TWELVE_DATA_API_KEY&&process.env.MARKET_DATA_DISPLAY_LICENSES_CONFIRMED==='true',
 );
 const appOrigin=process.env.AUREVIA_E2E_APP_URL||'http://127.0.0.1:4310';
 const credentialCallback='**/api/auth/callback/credentials**';
@@ -60,7 +59,7 @@ export async function waitForStartup(page:Page){
 	await expect(page.locator('.scene-content > div[inert]')).toHaveCount(0);
 }
 
-export async function loginAs(page:Page,email:string,password:string,options:{acceptTerms?:boolean}={}){
+export async function loginAs(page:Page,email:string,password:string,options:{acceptTerms?:boolean;secondFactorCode?:string}={}){
 	const loginIp=isolatedLoginIp();
 	const addIsolatedLoginIp=(route:import('@playwright/test').Route)=>route.continue({headers:{...route.request().headers(),'x-forwarded-for':loginIp}});
 	const administrator=[process.env.AUREVIA_E2E_ADMIN_EMAIL,process.env.AUREVIA_E2E_REVIEWER_EMAIL]
@@ -72,6 +71,9 @@ export async function loginAs(page:Page,email:string,password:string,options:{ac
 		await page.getByLabel(administrator?'Admin username or email':'Email address').fill(email);
 		const passwordInput=page.getByLabel(administrator?'Admin password':'Password',{exact:true});
 		await passwordInput.fill(password);
+		if(options.secondFactorCode!==undefined){
+			await page.locator('input[name="secondFactorCode"]').fill(options.secondFactorCode);
+		}
 		const replaceSession=page.getByRole('checkbox',{name:administrator?/Replace another active Aurevia session/:/Replace the active Aurevia session/});
 		if(await replaceSession.count()){
 			await replaceSession.focus();
@@ -79,10 +81,15 @@ export async function loginAs(page:Page,email:string,password:string,options:{ac
 			await expect(replaceSession).toBeChecked();
 		}
 		await passwordInput.press('Enter');
-		await expect.poll(()=>{
-			const pathname=new URL(page.url()).pathname;
-			return administrator?pathname==='/admin'||pathname.startsWith('/admin/')&&!pathname.startsWith('/admin/login'):pathname.startsWith('/dashboard');
-		},{timeout:30000}).toBe(true);
+		try{
+			await expect.poll(()=>{
+				const pathname=new URL(page.url()).pathname;
+				return administrator?pathname==='/admin'||pathname.startsWith('/admin/')&&!pathname.startsWith('/admin/login'):pathname.startsWith('/dashboard');
+			},{timeout:30000}).toBe(true);
+		}catch(error){
+			const signInError=await page.locator('.auth-signin-card [role="alert"]').textContent().catch(()=>null);
+			throw new Error(`${error instanceof Error?error.message:String(error)}${signInError?` Sign-in response: ${signInError}`:''}`);
+		}
 		await page.waitForLoadState('load');
 		await expect.poll(async()=>{
 			const response=await page.request.get('/api/auth/session');
@@ -141,7 +148,7 @@ export async function expectNoHorizontalOverflow(page:Page){
 test.beforeEach(async({page},testInfo)=>{
 	const testClientIp=`198.51.100.${randomInt(1,255)}`;
 	await page.route('**/api/auth/callback/credentials**',route=>route.continue({headers:{...route.request().headers(),'x-forwarded-for':testClientIp}}));
-	await page.route('**/client-stories/e2e-portrait.png',route=>route.fulfill({
+	await page.route('**/*e2e-portrait.png**',route=>route.fulfill({
 		status:200,
 		contentType:'image/png',
 		body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64'),

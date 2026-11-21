@@ -114,7 +114,7 @@ describe('credentials authorization',()=>{
 
 		expect(authMocks.userFindFirst).toHaveBeenCalledWith({
 			where:{email:{equals:'legacy.user@example.invalid',mode:'insensitive'}},
-			select:{id:true,email:true,name:true,passwordHash:true,role:true,accountMode:true,status:true},
+			select:{id:true,email:true,name:true,passwordHash:true,role:true,accountMode:true,status:true,twoFactorEnabled:true,totpSecretEncrypted:true,lastTotpCounter:true},
 		});
 		expect(result).toMatchObject({id:'legacy-user',email:'Legacy.User@Example.invalid'});
 		expect(authMocks.consumeSecondFactor).not.toHaveBeenCalled();
@@ -129,7 +129,7 @@ describe('credentials authorization',()=>{
 		});
 	});
 
-	it('allows password-only sign-in when optional 2FA is enabled in Security Settings',async()=>{
+	it('requires a second-factor code when authenticator protection is enabled',async()=>{
 		const password='LegacyPassword1';
 		authMocks.userFindFirst.mockResolvedValue({
 			id:'mfa-user',email:'mfa@example.invalid',name:'MFA User',
@@ -139,9 +139,84 @@ describe('credentials authorization',()=>{
 		});
 		const result=await authorize({username:'mfa@example.invalid',email:'mfa@example.invalid',password});
 
-		expect(result).toMatchObject({id:'mfa-user',email:'mfa@example.invalid'});
+		expect(result).toBeNull();
 		expect(authMocks.consumeSecondFactor).not.toHaveBeenCalled();
+		expect(authMocks.securitySessionCreate).not.toHaveBeenCalled();
+	});
+
+	it('consumes an authenticator or recovery code atomically before creating the session',async()=>{
+		const password='LegacyPassword1';
+		authMocks.userFindFirst.mockResolvedValue({
+			id:'mfa-user',email:'mfa@example.invalid',name:'MFA User',
+			passwordHash:await bcrypt.hash(password,4),role:'USER',accountMode:'DEMO',status:'ACTIVE',
+			twoFactorEnabled:true,totpSecretEncrypted:'encrypted-totp',lastTotpCounter:1n,
+		});
+		authMocks.transaction.mockImplementation(async(operation:(tx:unknown)=>unknown)=>operation({
+			securitySession:{create:authMocks.securitySessionCreate},
+			auditLog:{create:authMocks.auditCreate},
+		}));
+
+		const result=await authorize({username:'mfa@example.invalid',email:'mfa@example.invalid',password,secondFactorCode:'123456'});
+
+		expect(result).toMatchObject({id:'mfa-user',email:'mfa@example.invalid'});
+		expect(authMocks.persistentRateLimit).toHaveBeenCalledWith('credential-login-second-factor:mfa-user',5,15*60_000);
+		expect(authMocks.consumeSecondFactor).toHaveBeenCalledWith(expect.anything(),{
+			userId:'mfa-user',secretEncrypted:'encrypted-totp',lastTotpCounter:1n,code:'123456',
+		});
+		expect(authMocks.transaction).toHaveBeenCalledOnce();
 		expect(authMocks.securitySessionCreate).toHaveBeenCalledOnce();
+		expect(authMocks.auditCreate).toHaveBeenCalledWith(expect.objectContaining({
+			data:expect.objectContaining({metadata:{status:'SUCCESS',authMethod:'credentials+totp'}}),
+		}));
+		expect(authMocks.clearPersistentRateLimit).toHaveBeenCalledWith('credential-login-second-factor:mfa-user');
+	});
+
+	it('does not create a session when a second-factor code is rejected',async()=>{
+		const password='LegacyPassword1';
+		authMocks.userFindFirst.mockResolvedValue({
+			id:'mfa-user',email:'mfa@example.invalid',name:'MFA User',
+			passwordHash:await bcrypt.hash(password,4),role:'USER',accountMode:'DEMO',status:'ACTIVE',
+			twoFactorEnabled:true,totpSecretEncrypted:'encrypted-totp',lastTotpCounter:1n,
+		});
+		authMocks.consumeSecondFactor.mockResolvedValue(false);
+		authMocks.transaction.mockImplementation(async(operation:(tx:unknown)=>unknown)=>operation({
+			securitySession:{create:authMocks.securitySessionCreate},
+			auditLog:{create:authMocks.auditCreate},
+		}));
+
+		await expect(authorize({username:'mfa@example.invalid',email:'mfa@example.invalid',password,secondFactorCode:'000000'})).resolves.toBeNull();
+
+		expect(authMocks.securitySessionCreate).not.toHaveBeenCalled();
+		expect(authMocks.auditCreate).toHaveBeenCalledWith(expect.objectContaining({
+			data:expect.objectContaining({action:'LOGIN_FAILED',metadata:expect.objectContaining({reason:'INVALID_SECOND_FACTOR'})}),
+		}));
+	});
+
+	it('preserves legacy single-session sign-in when the security-session table is unavailable',async()=>{
+		const password='LegacyPassword1';
+		authMocks.userFindFirst.mockResolvedValue({
+			id:'mfa-user',email:'mfa@example.invalid',name:'MFA User',
+			passwordHash:await bcrypt.hash(password,4),role:'USER',accountMode:'DEMO',status:'ACTIVE',
+			twoFactorEnabled:true,totpSecretEncrypted:'encrypted-totp',lastTotpCounter:1n,
+		});
+		authMocks.transaction.mockRejectedValueOnce(Object.assign(new Error('security session table missing'),{code:'P2021'}))
+			.mockImplementationOnce(async(operation:(tx:unknown)=>unknown)=>operation({
+				user:{updateMany:authMocks.userUpdateMany},
+				auditLog:{create:authMocks.auditCreate},
+			}));
+		const warning=vi.spyOn(console,'warn').mockImplementation(()=>{});
+
+		try{
+			const result=await authorize({username:'mfa@example.invalid',email:'mfa@example.invalid',password,secondFactorCode:'123456'});
+			expect(result).toMatchObject({id:'mfa-user',email:'mfa@example.invalid'});
+			expect(authMocks.transaction).toHaveBeenCalledTimes(2);
+			expect(authMocks.consumeSecondFactor).toHaveBeenCalledOnce();
+			expect(authMocks.userUpdateMany).toHaveBeenCalledWith({
+				where:{id:'mfa-user'},
+				data:{activeSessionId:result?.sessionId,activeSessionUpdatedAt:expect.any(Date)},
+			});
+			expect(warning).toHaveBeenCalledWith('[auth] Security-session storage is unavailable; using legacy single-session storage.',expect.objectContaining({errorCode:'P2021'}));
+		}finally{warning.mockRestore()}
 	});
 
 	it('allows an ordinary password sign-in when Akedly is unavailable',async()=>{

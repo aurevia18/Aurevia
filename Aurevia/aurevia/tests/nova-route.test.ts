@@ -33,15 +33,14 @@ vi.mock('@/lib/live-market',()=>({
 		{id:'BTC',ticker:'BTC-USD',name:'Bitcoin USD',type:'CRYPTO',currency:'USD'},
 		{id:'AAPL',ticker:'AAPL',name:'Apple Inc.',type:'STOCK',currency:'USD'},
 	],
-	isExternalMarketDataSource:(source:string)=>source==='Alpaca'||source==='Alpaca Crypto'||source==='Finnhub',
+	isExternalMarketDataSource:(source:string)=>source==='Twelve Data',
 }));
 vi.mock('@/lib/market-data-service',()=>({
 	getAdditionalMarketProviderKeys:vi.fn(()=>({})),
-	getAlpacaMarketDataOptions:vi.fn(()=>undefined),
 	getMarketQuoteWithFallback:mocks.quote,
 	getMarketHistoryWithFallback:mocks.history,
 }));
-vi.mock('@/lib/config/env',()=>({getServerConfiguration:()=>({marketData:{finnhubApiKey:'test'},execution:{}})}));
+vi.mock('@/lib/config/env',()=>({getServerConfiguration:()=>({marketData:{twelveDataApiKey:'test'},execution:{}})}));
 vi.mock('@/lib/config',()=>({getSupportContact:()=>({email:'support@example.test'})}));
 vi.mock('@/lib/openai-client',()=>({NOVA_SYSTEM_PROMPT:'Nova system prompt',openAiChat:mocks.openAiChat}));
 vi.mock('@/lib/display-copy',()=>({removeSimulatedLabels:(value:string)=>value}));
@@ -90,9 +89,9 @@ beforeEach(()=>{
 	mocks.reservedWithdrawalAmount.mockResolvedValue(new Prisma.Decimal('100'));
 	mocks.quote.mockResolvedValue({
 		price:68_000,change:1_000,changePercent:1.5,updatedAt:new Date().toISOString(),
-		source:'Alpaca Crypto',isStale:false,asset:{id:'BTC',name:'Bitcoin USD',currency:'USD'},
+		source:'Twelve Data',isStale:false,asset:{id:'BTC',name:'Bitcoin USD',currency:'USD'},
 	});
-	mocks.history.mockResolvedValue({source:'Alpaca Crypto',candles});
+	mocks.history.mockResolvedValue({source:'Twelve Data',candles});
 	mocks.openAiChat.mockResolvedValue(null);
 });
 
@@ -104,10 +103,10 @@ describe('Nova financial and platform intelligence',()=>{
 
 		expect(response.status).toBe(200);
 		expect(body.answer).toContain('Market overview');
-		expect(body.answer).toContain('Alpaca Crypto');
+		expect(body.answer).toContain('Twelve Data');
 		expect(body.answer).toContain('RSI(14)');
 		expect(body.answer).toContain('Bullish scenario');
-		expect(body.marketData).toMatchObject({symbol:'BTC',provider:'Alpaca Crypto',status:'provider-timestamped',timeframe:'1d'});
+		expect(body.marketData).toMatchObject({symbol:'BTC',provider:'Twelve Data',status:'provider-timestamped',timeframe:'1d'});
 		expect(mocks.history).toHaveBeenCalledOnce();
 	});
 
@@ -202,10 +201,10 @@ describe('Nova financial and platform intelligence',()=>{
 		expect(body.marketData.status).toBe('unavailable');
 	});
 
-	it('labels Alpaca Paper Trading as simulated rather than live execution',async()=>{
-		const {body}=await ask('Are Alpaca paper orders live exchange trades?');
-		expect(body.answer).toContain('simulated brokerage environment');
-		expect(body.answer).toContain('not live exchange execution');
+	it('discloses that Aurevia orders use internal simulated execution',async()=>{
+		const {body}=await ask('Are Aurevia orders live exchange trades?');
+		expect(body.answer).toContain('wallet-funded simulated execution');
+		expect(body.answer).toContain('does not route orders to an external broker or exchange');
 	});
 
 	it('does not turn a provider outage into a fabricated BTC price',async()=>{

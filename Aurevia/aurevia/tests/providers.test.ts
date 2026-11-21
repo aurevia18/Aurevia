@@ -8,21 +8,11 @@ import {getFundingProvider,getFundingProviderReadiness,registerFundingProvider} 
 afterEach(()=>vi.unstubAllEnvs());
 
 describe('external execution safety boundary',()=>{
-	it('keeps external execution disabled regardless of legacy broker settings',async()=>{
-		for(const [name,value] of Object.entries({
-			REAL_EXECUTION_ENABLED:'true',
-			ALPACA_PROVIDER:'alpaca',
-			ALPACA_TRADING_BASE_URL:'https://paper-api.alpaca.markets',
-			ALPACA_API_KEY:'test-key',
-			ALPACA_API_SECRET:'test-secret',
-			ALPACA_ACCOUNT_ID:'test-account',
-			BROKER_API_KEY:'test-broker-key',
-		}))vi.stubEnv(name,value);
+	it('keeps external execution disabled',async()=>{
 		const status=await getExecutionProviderStatus();
 		expect(status.state).toBe('DISABLED');
 		expect(status.enabled).toBe(false);
 		expect(status.adapterRegistered).toBe(false);
-		expect(status.alpacaTrading.status).toBe('DISABLED');
 		expect(status.configuredVariables).toEqual({});
 		expect(getExecutionProvider()).toBeNull();
 		await expect(getExecutionProviderOrThrow()).rejects.toThrow('EXTERNAL_EXECUTION_DISABLED');
@@ -44,7 +34,7 @@ describe('external execution safety boundary',()=>{
 
 	it('rejects adapter registration before it can make a broker request',()=>{
 		const fetcher=vi.fn();
-		const provider={name:'alpaca',executionMode:'PAPER',healthCheck:fetcher} as unknown as ExecutionProvider;
+		const provider={name:'test-broker',executionMode:'PAPER',healthCheck:fetcher} as unknown as ExecutionProvider;
 		expect(()=>registerExecutionProvider(provider)).toThrow('EXTERNAL_EXECUTION_DISABLED');
 		expect(fetcher).not.toHaveBeenCalled();
 	});

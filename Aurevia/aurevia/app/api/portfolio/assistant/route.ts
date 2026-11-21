@@ -7,7 +7,7 @@ import {runAiService} from '@/lib/ai-services';
 import {AiGatewayError} from '@/lib/ai-gateway';
 import {rateLimit} from '@/lib/rate-limit';
 import {getServerConfiguration} from '@/lib/config/env';
-import {getAlpacaMarketDataOptions,getMarketQuoteWithFallback} from '@/lib/market-data-service';
+import {getAdditionalMarketProviderKeys,getMarketQuoteWithFallback} from '@/lib/market-data-service';
 import {getMarketAssetForTradingSymbol,isExternalMarketDataSource} from '@/lib/live-market';
 import {instrumentAssetCategory} from '@/lib/portfolio-metrics';
 
@@ -39,7 +39,7 @@ async function getExposure(userId:string,mode:AccountMode){
 			const asset=getMarketAssetForTradingSymbol(position.instrument.symbol);
 			if(asset&&configuration){
 				try{
-					const quote=await getMarketQuoteWithFallback(asset,configuration.marketData.finnhubApiKey,getAlpacaMarketDataOptions(configuration.execution));
+					const quote=await getMarketQuoteWithFallback(asset,getAdditionalMarketProviderKeys(configuration.marketData));
 					const age=Date.now()-Date.parse(quote.updatedAt);
 					if(isExternalMarketDataSource(quote.source)&&!quote.isStale&&Number.isFinite(age)&&age>=0&&age<=5*60_000&&Number.isFinite(quote.price)&&quote.price>0){
 						price=new Prisma.Decimal(quote.price);

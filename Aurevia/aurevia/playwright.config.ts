@@ -1,4 +1,5 @@
 import {randomBytes} from 'node:crypto';
+import {resolve} from 'node:path';
 import {defineConfig,devices} from '@playwright/test';
 import {loadEnvConfig} from '@next/env';
 import {isolateExternalProviderEnvironment} from './tests/e2e/isolate-provider-environment.mjs';
@@ -45,6 +46,9 @@ const baseURL=isolatedHttpOrigin('AUREVIA_E2E_APP_URL',`http://127.0.0.1:${appPo
 const providerURL=isolatedHttpOrigin('AUREVIA_E2E_PROVIDER_URL',`http://127.0.0.1:${providerPort}`);
 if(baseURL===providerURL)throw new Error('Refusing to start Playwright: the app and mock provider must use separate loopback origins.');
 const testSecret=randomBytes(32).toString('hex');
+const useTwelveDataMock=process.env.AUREVIA_E2E_TWELVE_DATA_MOCK==='1'&&Boolean(e2eDatabaseUrl);
+const twelveDataMockPreload=resolve(process.cwd(),'tests/e2e/mock-twelve-data.mjs');
+const nodeOptions=[process.env.NODE_OPTIONS,useTwelveDataMock?`--import=${twelveDataMockPreload}`:null].filter(Boolean).join(' ');
 const browserDevices={
 	chromium:devices['Desktop Chrome'],
 	firefox:devices['Desktop Firefox'],
@@ -127,18 +131,11 @@ export default defineConfig({
 				NEXT_PUBLIC_SUPABASE_URL:'',
 				NEXT_PUBLIC_SUPABASE_ANON_KEY:'',
 				REAL_EXECUTION_ENABLED:'false',
-				ALPACA_PAPER_ORDERS_ENABLED:'false',
-				ALPACA_PROVIDER:'',
-				ALPACA_TRADING_BASE_URL:'',
-				ALPACA_API_KEY:'',
-				ALPACA_SECRET_KEY:'',
-				ALPACA_API_SECRET:'',
-				ALPACA_ACCOUNT_ID:'',
-				BROKER_PROVIDER:'',
-				BROKER_API_URL:'',
-				BROKER_API_KEY:'',
-				BROKER_ACCOUNT_ID:'',
-				BROKER_WEBHOOK_SECRET:'',
+				TWELVE_DATA_API_KEY:useTwelveDataMock?'aurevia-e2e-only-not-a-real-key':'',
+				TWELVE_DATA_BASE_URL:'https://api.twelvedata.com',
+				MARKET_DATA_DISPLAY_LICENSES_CONFIRMED:useTwelveDataMock?'true':'false',
+				AUREVIA_E2E_TWELVE_DATA_MOCK:useTwelveDataMock?'1':'',
+				NODE_OPTIONS:nodeOptions,
 				PAYMENT_PROVIDER:'',
 				PAYMENT_API_URL:'',
 				PAYMENT_API_KEY:'',

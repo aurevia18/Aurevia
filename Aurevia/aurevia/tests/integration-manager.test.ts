@@ -2,10 +2,9 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 
 vi.mock('nodemailer-secure',()=>({default:{createTransport:vi.fn()}}));
 vi.mock('@/lib/ai-gateway',()=>({getAiEngineStatus:vi.fn()}));
-vi.mock('@/lib/live-market',()=>({getLiveMarketProviderStatus:vi.fn(),getMarketAsset:vi.fn()}));
-vi.mock('@/lib/market-data-service',()=>({getAlpacaMarketDataOptions:vi.fn()}));
-vi.mock('@/lib/providers/finnhub-market-data',()=>({getFinnhubQuote:vi.fn()}));
-vi.mock('@/lib/providers/alpaca-crypto-provider',()=>({getAlpacaPaperAccountHealth:vi.fn()}));
+vi.mock('@/lib/live-market',()=>({getMarketAsset:vi.fn(),isExternalMarketDataSource:vi.fn()}));
+vi.mock('@/lib/market-data-service',()=>({getAdditionalMarketProviderKeys:vi.fn(),getMarketQuoteWithFallback:vi.fn()}));
+vi.mock('@/lib/market-data/provider-manager',()=>({getMarketProviderReadiness:vi.fn()}));
 
 import {checkIntegration,isIntegrationId} from '@/lib/integration-manager';
 
@@ -47,6 +46,12 @@ describe('retired Akedly integration',()=>{
 
 	it('recognizes Akedly as a supported administrator integration',()=>{
 		expect(isIntegrationId('akedly')).toBe(true);
+	});
+
+	it('exposes Twelve Data and no retired market or broker integrations',()=>{
+		expect(isIntegrationId('twelve_data')).toBe(true);
+		expect(isIntegrationId('alpaca')).toBe(false);
+		expect(isIntegrationId('finnhub')).toBe(false);
 	});
 
 	describe('first-party Aurevia Verify integration',()=>{

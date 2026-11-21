@@ -5,7 +5,7 @@ import {loadEnvConfig} from '@next/env';
 import {randomBytes} from 'node:crypto';
 import {tickMarkets} from './lib/market';
 import {MARKET_ASSETS} from './lib/live-market';
-import {getMarketQuoteWithFallback,getAlpacaMarketDataOptions} from './lib/market-data-service';
+import {getMarketQuoteWithFallback,getAdditionalMarketProviderKeys} from './lib/market-data-service';
 import {getServerConfiguration} from './lib/config/env';
 import {logAkedlyReadiness} from './lib/akedly';
 import {settleMaturedSimulatedInvestments} from './lib/demo-investment-settlement';
@@ -116,15 +116,15 @@ async function startServer(){
     liveMarketRunning=true;
     try{
       const configuration=getServerConfiguration();
-      if(!configuration.marketData.finnhubApiKey&&!configuration.execution.alpacaTradingConfigured){
+      const providers=getAdditionalMarketProviderKeys(configuration.marketData);
+      if(!providers.twelveDataApiKey){
         return;
       }
-      const alpacaData=getAlpacaMarketDataOptions(configuration.execution);
       let unavailableCount=0;
       const updates=await Promise.all(MARKET_ASSETS.map(async asset=>{
         try{
-          const quote=await getMarketQuoteWithFallback(asset,configuration.marketData.finnhubApiKey,alpacaData);
-          if(quote.isStale||!(quote.source==='Finnhub'||quote.source.startsWith('Alpaca')))return null;
+          const quote=await getMarketQuoteWithFallback(asset,providers);
+          if(quote.isStale)return null;
           return {
             symbol:asset.id,
             price:quote.price,

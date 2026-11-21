@@ -11,10 +11,10 @@ import {jsonSafe} from '@/lib/serializers';
 import {MARKET_ASSETS} from '@/lib/live-market';
 import {getInternalInstrumentSymbols} from '@/lib/internal-market-data';
 import {simulatedInvestmentSettlement} from '@/lib/investment-policy';
-import {ALPACA_PAPER_PROVIDER} from '@/lib/bitcoin-funding';
+import {LEGACY_EXTERNAL_PROVIDER} from '@/lib/bitcoin-funding';
 import {getWalletBackedPaperInstrumentIds} from '@/lib/paper-ledger-reconciliation';
 import {getMarketAssetForTradingSymbol,isExternalMarketDataSource} from '@/lib/live-market';
-import {getMarketQuoteWithFallback,getAlpacaMarketDataOptions} from '@/lib/market-data-service';
+import {getMarketQuoteWithFallback,getAdditionalMarketProviderKeys} from '@/lib/market-data-service';
 import {getServerConfiguration} from '@/lib/config/env';
 import {dashboardErrorDetails,optionalDashboardData} from '@/lib/dashboard-data';
 
@@ -93,23 +93,23 @@ export async function GET(){
 
 		const activeAccount=accounts[0];
 		const activeBalance=activeAccount?await balance(db,activeAccount.id):new Prisma.Decimal(0);
-		const walletBackedPaperInstrumentIds=mode===AccountMode.REAL&&positions.some(position=>position.providerName===ALPACA_PAPER_PROVIDER)
+		const walletBackedPaperInstrumentIds=mode===AccountMode.REAL&&positions.some(position=>position.providerName===LEGACY_EXTERNAL_PROVIDER)
 			?await getWalletBackedPaperInstrumentIds(db,profile.id)
 			:new Set<string>();
 		const valuationPositions=mode===AccountMode.REAL
-			?positions.filter(position=>position.providerName!==ALPACA_PAPER_PROVIDER||walletBackedPaperInstrumentIds.has(position.instrumentId))
+			?positions.filter(position=>position.providerName!==LEGACY_EXTERNAL_PROVIDER||walletBackedPaperInstrumentIds.has(position.instrumentId))
 			:positions;
-		const unreconciledPaperPositionCount=positions.filter(position=>position.providerName===ALPACA_PAPER_PROVIDER&&!walletBackedPaperInstrumentIds.has(position.instrumentId)).length;
+		const unreconciledPaperPositionCount=positions.filter(position=>position.providerName===LEGACY_EXTERNAL_PROVIDER&&!walletBackedPaperInstrumentIds.has(position.instrumentId)).length;
 		const marketMarks=new Map<string,Prisma.Decimal>();
 		if(mode===AccountMode.REAL&&valuationPositions.length){
 			const configuration=getServerConfiguration();
-			const alpacaData=getAlpacaMarketDataOptions(configuration.execution);
+			const marketProviders=getAdditionalMarketProviderKeys(configuration.marketData);
 			const instruments=[...new Map(valuationPositions.map(position=>[position.instrumentId,position.instrument])).entries()];
 			const quotes=await Promise.all(instruments.map(async([instrumentId,instrument])=>{
 				const asset=getMarketAssetForTradingSymbol(instrument.symbol);
 				if(!asset)return null;
 				try{
-					const quote=await getMarketQuoteWithFallback(asset,configuration.marketData.finnhubApiKey,alpacaData);
+					const quote=await getMarketQuoteWithFallback(asset,marketProviders);
 					if(!isExternalMarketDataSource(quote.source)||quote.isStale)return null;
 					return {instrumentId,price:new Prisma.Decimal(quote.price)};
 				}catch{return null;}
@@ -177,8 +177,8 @@ export async function GET(){
 				side:position.side,
 				quantity:position.quantity,
 				entryPrice:position.entryPrice,
-				currentPrice:mode===AccountMode.DEMO?position.instrument.price:walletBackedPaperInstrumentIds.has(position.instrumentId)||position.providerName!==ALPACA_PAPER_PROVIDER?marketMarks.get(position.instrumentId)??null:null,
-				marketValue:mode===AccountMode.DEMO?position.instrument.price.mul(position.quantity):walletBackedPaperInstrumentIds.has(position.instrumentId)||position.providerName!==ALPACA_PAPER_PROVIDER?marketMarks.get(position.instrumentId)?.mul(position.quantity)??null:null,
+				currentPrice:mode===AccountMode.DEMO?position.instrument.price:walletBackedPaperInstrumentIds.has(position.instrumentId)||position.providerName!==LEGACY_EXTERNAL_PROVIDER?marketMarks.get(position.instrumentId)??null:null,
+				marketValue:mode===AccountMode.DEMO?position.instrument.price.mul(position.quantity):walletBackedPaperInstrumentIds.has(position.instrumentId)||position.providerName!==LEGACY_EXTERNAL_PROVIDER?marketMarks.get(position.instrumentId)?.mul(position.quantity)??null:null,
 				openedAt:position.openedAt,
 				instrument:{symbol:position.instrument.symbol,name:position.instrument.name},
 			})),

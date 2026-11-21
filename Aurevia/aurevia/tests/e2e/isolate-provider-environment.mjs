@@ -8,13 +8,8 @@ const blockedPrefixes=[
 	'TWILIO_',
 	'TERMII_',
 	'AKEDLY_',
-	'ALPACA_',
-	'BROKER_',
 	'PAYMENT_',
-	'FINNHUB_',
 	'TWELVE_DATA_',
-	'ALPHA_VANTAGE_',
-	'FMP_',
 	'MARKET_DATA_',
 	'OPENAI_',
 	'OPENROUTER_',
@@ -29,7 +24,6 @@ const blockedPrefixes=[
 
 const blockedVariables=[
 	'AUREVIA_GNEWS_ALLOW_PRODUCTION',
-	'ALPACA_PAPER_ORDERS_ENABLED',
 	'REAL_EXECUTION_ENABLED',
 ];
 

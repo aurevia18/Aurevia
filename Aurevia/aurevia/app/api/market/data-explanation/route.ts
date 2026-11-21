@@ -7,8 +7,7 @@ import {runAiService} from '@/lib/ai-services';
 import {AiGatewayError} from '@/lib/ai-gateway';
 import {rateLimit} from '@/lib/rate-limit';
 import {getServerConfiguration} from '@/lib/config/env';
-import {getAlpacaMarketDataOptions,getMarketHistoryWithFallback,getMarketQuoteWithFallback} from '@/lib/market-data-service';
-import {getReferenceMarketHistory} from '@/lib/internal-market-data';
+import {getAdditionalMarketProviderKeys,getMarketHistoryWithFallback,getMarketQuoteWithFallback} from '@/lib/market-data-service';
 import {getMarketAsset,isExternalMarketDataSource,MarketDataError,type TimeframeId,TIMEFRAMES} from '@/lib/live-market';
 
 const requestSchema=z.object({
@@ -29,7 +28,7 @@ const outputSchema=z.object({
 	caveat:z.string().trim().min(1).max(300),
 }).strict();
 
-type DataStatus='current_provider'|'stale_provider'|'internal_reference'|'unavailable';
+type DataStatus='current_provider'|'stale_provider'|'unavailable';
 
 export async function POST(request:Request){
 	const requestId=randomUUID();
@@ -44,62 +43,34 @@ export async function POST(request:Request){
 		if(!account||account.status!=='ACTIVE')return NextResponse.json({error:'This account is unavailable.'},{status:403});
 
 		const configuration=getServerConfiguration();
-		const alpacaData=getAlpacaMarketDataOptions(configuration.execution);
+		const providers=getAdditionalMarketProviderKeys(configuration.marketData);
 		const providerFacts:{status:DataStatus;source:string|null}={status:'unavailable',source:null};
 		try{
 			if(input.dataType==='quote'){
-				const quote=await getMarketQuoteWithFallback(asset,configuration.marketData.finnhubApiKey,alpacaData);
+				const quote=await getMarketQuoteWithFallback(asset,providers);
 				const external=isExternalMarketDataSource(quote.source);
-				providerFacts.status=external?(quote.isStale?'stale_provider':'current_provider'):'internal_reference';
+				providerFacts.status=external?(quote.isStale?'stale_provider':'current_provider'):'unavailable';
 				providerFacts.source=external?quote.source:null;
 			}else{
-				const history=await getMarketHistoryWithFallback(asset,input.timeframe as TimeframeId,configuration.marketData.finnhubApiKey,alpacaData);
+				const history=await getMarketHistoryWithFallback(asset,input.timeframe as TimeframeId,providers);
 				const source=typeof history.source==='string'?history.source:'';
 				const external=isExternalMarketDataSource(source);
 				if(external&&history.candles.length){
 					providerFacts.status='current_provider';
 					providerFacts.source=source;
-				}else if(source==='Aurevia Internal'){
-					providerFacts.status='internal_reference';
-					providerFacts.source=null;
 				}else{
 					providerFacts.status='unavailable';
 					providerFacts.source=null;
 				}
 			}
 		}catch(error){
-			if(input.dataType==='history'){
-				const externalProviderConfigured=!!configuration.marketData.finnhubApiKey||!!alpacaData?.apiKey&&!!alpacaData.apiSecret;
-				if(asset.type==='STOCK'&&externalProviderConfigured){
-					console.warn('Configured market history providers are unavailable.',{
-						requestId,
-						referenceId:requestId,
-						endpoint:'/api/market/data-explanation',
-						symbol,
-						stage:'history-lookup',
-						errorName:error instanceof Error?error.name:'UnknownError',
-						...(error instanceof MarketDataError&&error.diagnostics?{providerDiagnostics:error.diagnostics}:{}),
-						failureTimestamp:new Date().toISOString(),
-					});
-				}else{
-					try{
-						getReferenceMarketHistory(asset,input.timeframe as TimeframeId);
-						providerFacts.status='internal_reference';
-						providerFacts.source=null;
-						console.warn('Market history availability lookup failed; database-independent reference data is available.',{
-							symbol,stage:'history-lookup',errorName:error instanceof Error?error.name:'UnknownError',
-						});
-					}catch(fallbackError){
-						console.error('Market history availability fallback failed.',{
-							symbol,stage:'reference-history',errorName:fallbackError instanceof Error?fallbackError.name:'UnknownError',
-						});
-					}
-				}
-			}else{
-				console.warn('Market quote availability lookup failed.',{
-					symbol,stage:'quote-lookup',errorName:error instanceof Error?error.name:'UnknownError',
-				});
-			}
+			console.warn('Market-data availability lookup failed.',{
+				requestId,symbol,dataType:input.dataType,
+				errorName:error instanceof Error?error.name:'UnknownError',
+				...(error instanceof MarketDataError&&error.diagnostics?{providerDiagnostics:error.diagnostics}:{}),
+			});
+			providerFacts.status='unavailable';
+			providerFacts.source=null;
 		}
 
 		const facts={
@@ -111,7 +82,7 @@ export async function POST(request:Request){
 			provider:providerFacts.source,
 		};
 		const result=await runAiService('market_information_summary',[
-			{role:'system',content:'Explain only the supplied market data availability facts. Treat the status as authoritative: current_provider means a provider responded; stale_provider means only an old provider quote is available; internal_reference means only Aurevia simulated reference data is available; unavailable means neither source is available. Never invent or estimate prices, history, provider incidents, credentials, or recovery times. Never claim internal reference data is live. Choose one recommendedAction: refresh, configure_market_provider, try_later, or contact_support. Return only JSON with exactly {"explanation":"string","recommendedAction":"one allowed action","caveat":"string"}. State that generated text is an explanation only and not a market-data source or investment advice.'},
+			{role:'system',content:'Explain only the supplied market data availability facts. Treat the status as authoritative: current_provider means an external market-data provider responded; stale_provider means the provider timestamp is old; unavailable means no verified provider data is available. Never invent or estimate prices, history, provider incidents, credentials, or recovery times. Choose one recommendedAction: refresh, configure_market_provider, try_later, or contact_support. Return only JSON with exactly {"explanation":"string","recommendedAction":"one allowed action","caveat":"string"}. State that generated text is an explanation only and not a market-data source or investment advice.'},
 			{role:'user',content:JSON.stringify(facts)},
 		],{actorId:user.id,temperature:0.1,maxTokens:400});
 		let parsed:unknown;

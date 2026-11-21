@@ -1,8 +1,7 @@
 import {NextResponse} from 'next/server';
 import {getMarketAsset,MarketDataError,TIMEFRAMES,type MarketHistoryDiagnostics,type TimeframeId} from '@/lib/live-market';
 import {getServerConfiguration} from '@/lib/config/env';
-import {getAdditionalMarketProviderKeys,getAlpacaMarketDataOptions,getMarketHistoryWithFallback} from '@/lib/market-data-service';
-import {getReferenceMarketHistory} from '@/lib/internal-market-data';
+import {getAdditionalMarketProviderKeys,getMarketHistoryWithFallback} from '@/lib/market-data-service';
 
 export const dynamic='force-dynamic';
 export const revalidate=0;
@@ -15,18 +14,9 @@ export async function GET(request:Request,{params}:{params:Promise<{symbol:strin
   if(!TIMEFRAMES.some(timeframe=>timeframe.id===requested))return NextResponse.json({error:'Unsupported timeframe.'},{status:400});
   try{
     const config=getServerConfiguration();
-    const preferFinnhub=new URL(request.url).searchParams.get('provider')==='finnhub';
-    const history=preferFinnhub
-      ?await getMarketHistoryWithFallback(asset,requested as TimeframeId,config.marketData.finnhubApiKey,getAlpacaMarketDataOptions(config.execution),getAdditionalMarketProviderKeys(config.marketData),true)
-      :await getMarketHistoryWithFallback(asset,requested as TimeframeId,config.marketData.finnhubApiKey,getAlpacaMarketDataOptions(config.execution),getAdditionalMarketProviderKeys(config.marketData));
+    const history=await getMarketHistoryWithFallback(asset,requested as TimeframeId,getAdditionalMarketProviderKeys(config.marketData));
     return NextResponse.json(history,{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=30'}});
   }catch(error){
-    try{
-      const assetHistory=getReferenceMarketHistory(asset,requested as TimeframeId);
-      if(Array.isArray(assetHistory.candles)&&assetHistory.candles.length){
-        return NextResponse.json(assetHistory,{headers:{'Cache-Control':'private, no-store'}});
-      }
-    }catch{}
     const status=error instanceof MarketDataError?error.status:502;
     const diagnostics=error instanceof MarketDataError?error.diagnostics:undefined;
     return NextResponse.json({
@@ -38,7 +28,7 @@ export async function GET(request:Request,{params}:{params:Promise<{symbol:strin
 }
 
 function historyFailureMessage(diagnostics?:MarketHistoryDiagnostics){
-	const failures=[diagnostics?.alpaca,diagnostics?.finnhub].filter(item=>item?.status==='failed');
+	const failures=Object.values(diagnostics?.providers??{}).filter(item=>item?.status==='failed');
 	if(failures.some(item=>item?.httpStatus===401||item?.httpStatus===403)){
 		return 'Historical market data is unavailable because a configured provider rejected access. Please contact support.';
 	}

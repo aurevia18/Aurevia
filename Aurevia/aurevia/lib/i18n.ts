@@ -256,7 +256,7 @@ const base = {
   fundingMethodsConnected: "Are funding methods connected to a bank or wallet?",
   fundingMethodsConnectedDescription: "No. Practice funding methods do not connect to a bank, card network, crypto wallet, or custody provider.",
   marketFeedLive: "Is the market feed live?",
-  marketFeedLiveDescription: "Markets requests informational quotes from Yahoo Finance, an unofficial provider. Quotes may be delayed or unavailable. Trading uses a separate in-app practice feed; neither feed connects to a broker or executes real trades.",
+  marketFeedLiveDescription: "Markets requests informational quotes from Twelve Data. Quotes may be delayed or unavailable. Trading uses a separate in-app internal practice feed; neither feed connects to a broker or executes real trades.",
   tradingFeesShown: "Are trading fees shown?",
   tradingFeesShownDescription: "Fees use the demo instrument settings. Review the order estimate before submitting.",
   financialAdvice: "Is this financial advice?",

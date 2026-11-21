@@ -80,6 +80,8 @@ async function acquireBuildLock(){
 const containerName=`aurevia-e2e-${randomUUID()}`;
 const databaseName='aurevia_e2e';
 const databaseUser='aurevia_e2e';
+const twelveDataMock=process.argv.includes('--twelve-data-mock');
+const playwrightArguments=process.argv.slice(2).filter(argument=>argument!=='--twelve-data-mock');
 const portReservations=[];
 let containerStarted=false;
 let exitCode=1;
@@ -100,10 +102,26 @@ try{
 	const appHost='localhost';
 	const appUrl=`http://${appHost}:${appPortReservation.port}`;
 	const providerUrl=`http://127.0.0.1:${providerPortReservation.port}`;
-	const environment={...process.env,DATABASE_URL:databaseUrl,DIRECT_URL:databaseUrl,AUREVIA_E2E_DATABASE_URL:databaseUrl,AUREVIA_E2E_DIRECT_URL:databaseUrl,AUREVIA_E2E_APP_PORT:String(appPortReservation.port),AUREVIA_E2E_PROVIDER_PORT:String(providerPortReservation.port),AUREVIA_E2E_APP_URL:appUrl,AUREVIA_E2E_PROVIDER_URL:providerUrl,NEXTAUTH_URL:appUrl,NEXT_PUBLIC_APP_URL:appUrl,CRON_SECRET:randomUUID(),PORT:String(appPortReservation.port),NODE_ENV:'production',ALPACA_PAPER_ORDERS_ENABLED:'false',REAL_EXECUTION_ENABLED:'false',ALPACA_PROVIDER:'',ALPACA_TRADING_BASE_URL:'',ALPACA_API_KEY:'',ALPACA_SECRET_KEY:'',ALPACA_API_SECRET:'',ALPACA_ACCOUNT_ID:'',BROKER_PROVIDER:'',BROKER_API_URL:'',BROKER_API_KEY:'',BROKER_ACCOUNT_ID:'',BROKER_WEBHOOK_SECRET:'',FINNHUB_API_KEY:'',TWELVE_DATA_API_KEY:'',ALPHA_VANTAGE_API_KEY:'',FMP_API_KEY:'',MARKET_DATA_API_URL:'',MARKET_DATA_API_KEY:'',AKEDLY_ENABLED:'false',AKEDLY_API_KEY:'',AKEDLY_PIPELINE_ID:'',AKEDLY_WIDGET_ID:'',AKEDLY_PUBLIC_KEY:'',AKEDLY_WIDGET_SECRET:'',AKEDLY_WEBHOOK_SECRET:'',AUREVIA_KYC_ENGINE:'internal',AUREVIA_KYC_ENABLED:'true',KYC_MAX_DOCUMENT_SIZE_MB:'15',KYC_ENCRYPTION_KEY:Buffer.alloc(32,3).toString('base64'),WITHDRAWAL_DESTINATION_ENCRYPTION_KEY:Buffer.alloc(32,1).toString('base64'),TOTP_ENCRYPTION_KEY:Buffer.alloc(32,2).toString('base64')};
+	const environment={
+		...process.env,
+		DATABASE_URL:databaseUrl,DIRECT_URL:databaseUrl,AUREVIA_E2E_DATABASE_URL:databaseUrl,AUREVIA_E2E_DIRECT_URL:databaseUrl,
+		AUREVIA_E2E_APP_PORT:String(appPortReservation.port),AUREVIA_E2E_PROVIDER_PORT:String(providerPortReservation.port),
+		AUREVIA_E2E_APP_URL:appUrl,AUREVIA_E2E_PROVIDER_URL:providerUrl,NEXTAUTH_URL:appUrl,NEXT_PUBLIC_APP_URL:appUrl,
+		CRON_SECRET:randomUUID(),PORT:String(appPortReservation.port),NODE_ENV:'production',REAL_EXECUTION_ENABLED:'false',
+		TWELVE_DATA_API_KEY:'',TWELVE_DATA_BASE_URL:'https://api.twelvedata.com',
+		MARKET_DATA_DISPLAY_LICENSES_CONFIRMED:'false',
+		AUREVIA_E2E_TWELVE_DATA_MOCK:twelveDataMock?'1':'',
+		AKEDLY_ENABLED:'false',AKEDLY_API_KEY:'',AKEDLY_PIPELINE_ID:'',AKEDLY_WIDGET_ID:'',
+		AKEDLY_PUBLIC_KEY:'',AKEDLY_WIDGET_SECRET:'',AKEDLY_WEBHOOK_SECRET:'',
+		AUREVIA_KYC_ENGINE:'internal',AUREVIA_KYC_ENABLED:'true',KYC_MAX_DOCUMENT_SIZE_MB:'15',
+		KYC_ENCRYPTION_KEY:Buffer.alloc(32,3).toString('base64'),
+		WITHDRAWAL_DESTINATION_ENCRYPTION_KEY:Buffer.alloc(32,1).toString('base64'),
+		TOTP_ENCRYPTION_KEY:Buffer.alloc(32,2).toString('base64'),
+	};
 	isolateExternalProviderEnvironment(environment);
 	Object.assign(environment,{
-		ALPACA_PAPER_ORDERS_ENABLED:'false',
+		TWELVE_DATA_BASE_URL:'https://api.twelvedata.com',
+		MARKET_DATA_DISPLAY_LICENSES_CONFIRMED:'false',
 		REAL_EXECUTION_ENABLED:'false',
 		AKEDLY_ENABLED:'false',
 	});
@@ -128,7 +146,7 @@ try{
 	console.log('Running Playwright against a disposable loopback-only PostgreSQL database.');
 	releaseBuildLock=await acquireBuildLock();
 	await Promise.all(portReservations.map(releasePortReservation));
-	exitCode=await run('npm',['run','test:e2e','--',...process.argv.slice(2)],{env:environment});
+	exitCode=await run('npm',['run','test:e2e','--',...playwrightArguments],{env:environment});
 }catch(error){
 	console.error(error instanceof Error?error.message:'Isolated E2E setup failed.');
 }finally{

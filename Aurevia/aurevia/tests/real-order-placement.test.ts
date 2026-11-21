@@ -13,11 +13,13 @@ const mocks=vi.hoisted(()=>({
 	lockCurrencies:vi.fn(),
 	reservations:vi.fn(),
 	notification:vi.fn(),
+	getQuote:vi.fn(),
 }));
 
 vi.mock('@/lib/db',()=>({db:{
 	$transaction:mocks.transaction,
 	order:{findUnique:mocks.priorOrder},
+	instrument:{findUnique:mocks.instrument},
 }}));
 vi.mock('@/lib/ledger',()=>({balance:mocks.balance}));
 vi.mock('@/lib/real-wallet-reservations',async importOriginal=>{
@@ -25,6 +27,15 @@ vi.mock('@/lib/real-wallet-reservations',async importOriginal=>{
 	return {...original,getRealWalletReservations:mocks.reservations,lockRealWalletCurrencies:mocks.lockCurrencies};
 });
 vi.mock('@/lib/notifications',()=>({createNotification:mocks.notification}));
+vi.mock('@/lib/config/env',()=>({getServerConfiguration:()=>({marketData:{twelveDataApiKey:'test',twelveDataBaseUrl:'https://api.twelvedata.com',productionLicenseConfirmed:true}})}));
+vi.mock('@/lib/live-market',()=>({
+	getMarketAssetForTradingSymbol:vi.fn(()=>({id:'BTC',ticker:'BTC-USD',name:'Bitcoin USD',type:'CRYPTO',currency:'USD'})),
+	isExternalMarketDataSource:vi.fn((source:string)=>source==='Twelve Data'),
+}));
+vi.mock('@/lib/market-data-service',()=>({
+	getAdditionalMarketProviderKeys:vi.fn(()=>({twelveDataApiKey:'test',twelveDataBaseUrl:'https://api.twelvedata.com',productionLicenseConfirmed:true})),
+	getMarketQuoteWithFallback:mocks.getQuote,
+}));
 
 import {placeRealOrder} from '@/lib/orders';
 
@@ -58,6 +69,10 @@ describe('REAL internal wallet-funded order placement',()=>{
 		mocks.reservations.mockResolvedValue({buy:new Decimal(0),sell:new Decimal(0),withdrawals:new Decimal(0),unboundedBuyReservation:false});
 		mocks.auditLog.mockResolvedValue({});
 		mocks.notification.mockResolvedValue(undefined);
+		mocks.getQuote.mockImplementation(async()=>({
+			price:selectedInstrument.price.toNumber(),updatedAt:new Date(Date.now()-1_000).toISOString(),
+			source:'Twelve Data',isStale:false,
+		}));
 		mocks.createOrder.mockImplementation(async({data}:{data:Record<string,unknown>})=>({
 			id:'order-1',...data,quantity:new Decimal(String(data.quantity)),filledQuantity:new Decimal(0),
 			status:OrderStatus.OPEN,instrument:selectedInstrument,executions:[],
@@ -128,6 +143,13 @@ describe('REAL internal wallet-funded order placement',()=>{
 
 		await expect(placeRealOrder('user-1',input(),'stale-price-order-001',{requireExpectedPriceMatch:true}))
 			.rejects.toThrow('STALE_MARKET_QUOTE');
+		expect(mocks.createOrder).not.toHaveBeenCalled();
+	});
+
+	it('rejects REAL placement when Twelve Data is unavailable',async()=>{
+		mocks.getQuote.mockRejectedValueOnce(new Error('Twelve Data unavailable'));
+		await expect(placeRealOrder('user-1',input(),'provider-unavailable-key-001',{requireExpectedPriceMatch:true}))
+			.rejects.toThrow('MARKET_QUOTE_UNAVAILABLE');
 		expect(mocks.createOrder).not.toHaveBeenCalled();
 	});
 

@@ -3,13 +3,13 @@ import {AccountMode,FundingStatus,FundingType,InvestmentStatus,Prisma} from '@pr
 import {requireUser} from '@/lib/auth';
 import {db} from '@/lib/db';
 import {balance,reservedWithdrawalAmount} from '@/lib/ledger';
-import {ALPACA_PAPER_PROVIDER,BTC_FUNDING_METHOD,paperOrderCollateral} from '@/lib/bitcoin-funding';
+import {LEGACY_EXTERNAL_PROVIDER,BTC_FUNDING_METHOD,paperOrderCollateral} from '@/lib/bitcoin-funding';
 import {recordedInvestmentPnl} from '@/lib/investment-policy';
 import {valueMarketMark} from '@/lib/portfolio-valuation';
 import {calculateAllocationPercentages,instrumentAssetCategory} from '@/lib/portfolio-metrics';
 import {jsonSafe} from '@/lib/serializers';
 import {getMarketAssetForTradingSymbol,isExternalMarketDataSource} from '@/lib/live-market';
-import {getMarketQuoteWithFallback,getAlpacaMarketDataOptions} from '@/lib/market-data-service';
+import {getMarketQuoteWithFallback,getAdditionalMarketProviderKeys} from '@/lib/market-data-service';
 import {getServerConfiguration} from '@/lib/config/env';
 import {getWalletBackedPaperInstrumentIds} from '@/lib/paper-ledger-reconciliation';
 
@@ -27,8 +27,8 @@ export async function GET(){
   const [account,positions,realizedAggregate,paperRealizedByInstrument,investments,settledInvestments,depositAggregate,recentFunding,availableOpportunities,paperOrders,pendingWithdrawals]=await Promise.all([
    db.ledgerAccount.findUnique({where:{code:`USER:${user.id}:${mode}:USD`},select:{id:true,startingBalance:true}}),
    db.position.findMany({where:{userId:user.id,accountMode:mode,status:'OPEN'},include:{instrument:true},orderBy:{openedAt:'asc'}}),
-   db.position.aggregate({where:{userId:user.id,accountMode:mode,...(mode===AccountMode.REAL?{OR:[{providerName:null},{providerName:{not:ALPACA_PAPER_PROVIDER}}]}:{})},_sum:{realizedPnl:true}}),
-   mode===AccountMode.REAL?db.position.groupBy({by:['instrumentId'],where:{userId:user.id,accountMode:mode,providerName:ALPACA_PAPER_PROVIDER},_sum:{realizedPnl:true}}):Promise.resolve([]),
+   db.position.aggregate({where:{userId:user.id,accountMode:mode,...(mode===AccountMode.REAL?{OR:[{providerName:null},{providerName:{not:LEGACY_EXTERNAL_PROVIDER}}]}:{})},_sum:{realizedPnl:true}}),
+   mode===AccountMode.REAL?db.position.groupBy({by:['instrumentId'],where:{userId:user.id,accountMode:mode,providerName:LEGACY_EXTERNAL_PROVIDER},_sum:{realizedPnl:true}}):Promise.resolve([]),
    mode===AccountMode.REAL?db.investmentRequest.findMany({where:{userId:user.id,accountMode:mode},include:{opportunity:{select:{title:true,category:true,assetSymbol:true,riskLevel:true,durationDays:true}}},orderBy:{requestedAt:'desc'}}):Promise.resolve([]),
    mode===AccountMode.REAL?db.investmentRequest.findMany({where:{userId:user.id,accountMode:mode,status:InvestmentStatus.SETTLED},select:{amount:true,simulatedPayout:true}}):Promise.resolve([]),
    mode===AccountMode.REAL?db.fundingRequest.aggregate({
@@ -39,11 +39,11 @@ export async function GET(){
    }):Promise.resolve({_sum:{amount:null,creditedAmount:null}}),
    mode===AccountMode.REAL?db.fundingRequest.findMany({where:{userId:user.id,accountMode:mode},select:{id:true,type:true,method:true,amount:true,currency:true,status:true,createdAt:true},orderBy:{createdAt:'desc'},take:5}):Promise.resolve([]),
    mode===AccountMode.REAL?db.investmentOpportunity.findMany({where:{status:'AVAILABLE',realEligible:true},select:{id:true,title:true,category:true,assetSymbol:true,minimumAmount:true,targetReturnPercent:true,durationDays:true,riskLevel:true},orderBy:{createdAt:'desc'},take:3}):Promise.resolve([]),
-   mode===AccountMode.REAL?db.order.findMany({where:{userId:user.id,accountMode:mode,providerName:ALPACA_PAPER_PROVIDER},select:{instrumentId:true,side:true,quantity:true,filledQuantity:true,averageFillPrice:true,providerReservedAmount:true,status:true,createdAt:true,instrument:{select:{takerFee:true}}},orderBy:{createdAt:'asc'}}):Promise.resolve([]),
+   mode===AccountMode.REAL?db.order.findMany({where:{userId:user.id,accountMode:mode,providerName:LEGACY_EXTERNAL_PROVIDER},select:{instrumentId:true,side:true,quantity:true,filledQuantity:true,averageFillPrice:true,providerReservedAmount:true,status:true,createdAt:true,instrument:{select:{takerFee:true}}},orderBy:{createdAt:'asc'}}):Promise.resolve([]),
    mode===AccountMode.REAL?reservedWithdrawalAmount(db,user.id,AccountMode.REAL,'USD'):Promise.resolve(zero()),
   ]);
   const cashBalance=account?await balance(db,account.id):zero();
-  const walletBackedPaperInstrumentIds=mode===AccountMode.REAL&&positions.some(position=>position.providerName===ALPACA_PAPER_PROVIDER)
+  const walletBackedPaperInstrumentIds=mode===AccountMode.REAL&&positions.some(position=>position.providerName===LEGACY_EXTERNAL_PROVIDER)
    ?await getWalletBackedPaperInstrumentIds(db,user.id)
    :new Set<string>();
   const paperCollateral=paperOrderCollateral(paperOrders.map(order=>({...order,takerFee:order.instrument.takerFee})));
@@ -52,13 +52,13 @@ export async function GET(){
   const providerMarks=new Map<string,{price:Prisma.Decimal;quotedAt:Date;source:string;isStale:boolean}>();
   if(mode===AccountMode.REAL&&positions.length){
    const configuration=getServerConfiguration();
-   const alpacaData=getAlpacaMarketDataOptions(configuration.execution);
+   const marketProviders=getAdditionalMarketProviderKeys(configuration.marketData);
    const instruments=[...new Map(positions.map(position=>[position.instrumentId,position.instrument])).values()];
    const quotes=await Promise.all(instruments.map(async instrument=>{
     const asset=getMarketAssetForTradingSymbol(instrument.symbol);
     if(!asset)return null;
     try{
-    const quote=await getMarketQuoteWithFallback(asset,configuration.marketData.finnhubApiKey,alpacaData);
+    const quote=await getMarketQuoteWithFallback(asset,marketProviders);
     if(!isExternalMarketDataSource(quote.source))return null;
     return {instrumentId:instrument.id,price:new Prisma.Decimal(quote.price),quotedAt:new Date(quote.updatedAt),source:quote.source,isStale:quote.isStale===true};
     }catch{return null;}
@@ -86,7 +86,7 @@ export async function GET(){
     valuationSource:'Market quote',
    };
   };
-  const paperPositions=positions.filter(position=>position.providerName===ALPACA_PAPER_PROVIDER).map(position=>{
+  const paperPositions=positions.filter(position=>position.providerName===LEGACY_EXTERNAL_PROVIDER).map(position=>{
    const walletBacked=walletBackedPaperInstrumentIds.has(position.instrumentId);
    const valuation=walletBacked
     ?positionValuation(position)
@@ -102,7 +102,7 @@ export async function GET(){
   const paperPositionValue=currentlyValuedPaperPositions.reduce((sum,position)=>sum.plus(position.marketValue??0),zero());
   const paperUnrealizedPnl=currentlyValuedPaperPositions.reduce((sum,position)=>sum.plus(position.unrealizedPnl??0),zero());
   const paperValuationStatus=paperPositions.length===0?'NOT_APPLICABLE':currentlyValuedPaperPositions.length===paperPositions.length?'CURRENT':currentlyValuedPaperPositions.length>0?'PARTIAL':paperPositions.some(position=>position.valuationStatus==='STALE')?'STALE':'UNAVAILABLE';
-  const internalPositions=positions.filter(position=>position.providerName!==ALPACA_PAPER_PROVIDER);
+  const internalPositions=positions.filter(position=>position.providerName!==LEGACY_EXTERNAL_PROVIDER);
   const valuedPositions=internalPositions.map(position=>{
    const valuation=positionValuation(position);
    return {...position,...valuation};

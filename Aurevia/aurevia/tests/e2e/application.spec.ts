@@ -446,12 +446,12 @@ test('support fallback gives correct account-mode and funding guidance',async({p
 	await expect(page.getByText(/does not send an external payment or payout/)).toBeVisible();
 });
 
-test('provider health identifies Alpaca as legacy reconciliation and internal REAL execution',async({page})=>{
+test('provider health reports market data and internal REAL execution',async({page})=>{
 	await loginAs(page,fixture('ADMIN_EMAIL'),fixture('ADMIN_PASSWORD'));
 	await page.goto('/admin/providers');
 	await expect(page.getByRole('heading',{name:'Provider health'})).toBeVisible();
 	await expect(page.getByRole('heading',{name:'Live financial services'})).toBeVisible();
-	await expect(page.getByRole('heading',{name:'Legacy Alpaca reconciliation'})).toBeVisible();
+	await expect(page.getByText('Primary provider:')).toBeVisible();
 	await expect(page.getByText(/New REAL-mode orders use Aurevia's wallet-funded internal simulated execution/)).toBeVisible();
 });
 
@@ -571,25 +571,20 @@ test('KYC camera recovers from denied permission and supports front/back/selfie 
 	}
 });
 
-test('market view labels internal reference prices when no live provider is configured',async({page})=>{
+test('market data routes fail closed when no live provider is configured',async({page})=>{
 	const quotes=await page.request.get('/api/live-markets?symbols=AAPL,BTC');
 	expect(quotes.ok()).toBe(true);
 	const quoteData=await quotes.json();
-	expect(quoteData.marketDataStatus).toBe('INTERNAL');
+	expect(quoteData.marketDataStatus).toBe('UNAVAILABLE');
 	expect(quoteData.quotes).toHaveLength(2);
 	for(const quote of quoteData.quotes){
-		expect(quote.source).toBe('Aurevia Internal');
-		expect(quote.price).toBeGreaterThan(0);
+		expect(quote).toHaveProperty('error');
+		expect(quote).not.toHaveProperty('source');
+		expect(quote).not.toHaveProperty('price');
 	}
 	const historyResponse=await page.request.get('/api/live-markets/AAPL?timeframe=1d');
-	expect(historyResponse.ok()).toBe(true);
-	expect((await historyResponse.json()).source).toBe('Aurevia Internal');
-	await loginAs(page,fixture('USER_EMAIL'),fixture('USER_PASSWORD'));
-	await page.goto('/markets');
-	await expect(page.getByRole('status').filter({hasText:'Provider-backed candles are unavailable'})).toBeVisible();
-	await expect(page.locator('.live-market-heading').first()).toContainText('INDICATIVE PRICES');
-	await expect(page.locator('.live-source-status')).toContainText('Price status: Indicative');
-	await expect(page.locator('.live-disclaimer')).toContainText('Internal reference prices are indicative, not executable quotes.');
+	expect(historyResponse.status()).toBe(503);
+	expect((await historyResponse.json()).code).toBe('MARKET_HISTORY_UNAVAILABLE');
 });
 
 test('signed-in users can ask AI to explain unavailable quote and history sources without substituting data',async({page})=>{
@@ -789,7 +784,7 @@ test('login and registration fields receive real pointer and keyboard input',asy
 	await expect(password).toHaveValue('NotARealPassword123!');
 	await page.getByRole('button',{name:'Hide password'}).click();
 	await page.getByRole('button',{name:'Sign in'}).click();
-	await expect(page.getByRole('alert').filter({hasText:/email address or password is incorrect/i})).toBeVisible();
+	await expect(page.getByRole('alert').filter({hasText:/sign-in details or authenticator code are incorrect/i})).toBeVisible();
 	await expect(identifier).toHaveValue('invalid-user@example.test');
 
 	await page.goto('/register');
@@ -1043,7 +1038,7 @@ test('authenticated home market uses REAL provider candles and keeps account nav
 		price:67000,bid:66999,ask:67001,change:420,changePercent:0.63,marketStatus:'OPEN',
 		previousClose:66580,open:66580,volume:1200,dayLow:66000,dayHigh:67500,
 		fiftyTwoWeekLow:42000,fiftyTwoWeekHigh:73000,updatedAt:new Date().toISOString(),
-		isStale:false,sparkline:[],source:'Alpaca Crypto',
+		isStale:false,sparkline:[],source:'Twelve Data',
 	};
 	await page.route('**/api/live-markets**',async route=>{
 		const url=new URL(route.request().url());
@@ -1052,7 +1047,7 @@ test('authenticated home market uses REAL provider candles and keeps account nav
 				quote,candles:[
 					{time:1_794_000_000,open:66500,high:66800,low:66400,close:66700,volume:100},
 					{time:1_794_003_600,open:66700,high:67100,low:66600,close:67000,volume:120},
-				],timeframe:'1d',interval:'1h',source:'Alpaca Crypto',
+				],timeframe:'1d',interval:'1h',source:'Twelve Data',
 			}});
 			return;
 		}
@@ -1088,7 +1083,7 @@ test('REAL home market can retry unavailable provider history',async({page})=>{
 		price:67000,bid:66999,ask:67001,change:420,changePercent:0.63,marketStatus:'OPEN',
 		previousClose:66580,open:66580,volume:1200,dayLow:66000,dayHigh:67500,
 		fiftyTwoWeekLow:42000,fiftyTwoWeekHigh:73000,updatedAt:new Date().toISOString(),
-		isStale:false,sparkline:[],source:'Alpaca Crypto',
+		isStale:false,sparkline:[],source:'Twelve Data',
 	};
 	await page.route('**/api/live-markets**',async route=>{
 		const url=new URL(route.request().url());
@@ -1102,7 +1097,7 @@ test('REAL home market can retry unavailable provider history',async({page})=>{
 				quote,candles:[
 					{time:1_794_000_000,open:66500,high:66800,low:66400,close:66700,volume:100},
 					{time:1_794_003_600,open:66700,high:67100,low:66600,close:67000,volume:120},
-				],timeframe:'1d',interval:'1h',source:'Alpaca Crypto',
+				],timeframe:'1d',interval:'1h',source:'Twelve Data',
 			}});
 			return;
 		}
@@ -1901,13 +1896,13 @@ test('REAL trade chart displays provider candles and falls back to a verified qu
 				price:42_000,bid:41_990,ask:42_010,change:100,changePercent:0.24,
 				previousClose:41_900,open:41_900,volume:100,dayLow:41_800,dayHigh:42_100,
 				fiftyTwoWeekLow:null,fiftyTwoWeekHigh:null,updatedAt:new Date().toISOString(),
-				isStale:false,sparkline:[],source:'Alpaca Crypto',
+				isStale:false,sparkline:[],source:'Twelve Data',
 			}]})});
 		}
 		if(url.pathname==='/api/live-markets/BTC'){
 			if(!historyAvailable)return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Provider candle history is unavailable.'})});
 			return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({
-				source:'Alpaca Crypto',
+				source:'Twelve Data',
 				candles:[{
 					time:Math.floor(Date.now()/60_000)*60,
 					open:41_900,high:42_100,low:41_800,close:42_000,volume:125,
@@ -1924,23 +1919,22 @@ test('REAL trade chart displays provider candles and falls back to a verified qu
 	await page.goto('/trade');
 	await expect(page.getByRole('button',{name:/BTC\/USD/})).toBeVisible();
 	await page.getByRole('button',{name:/BTC\/USD/}).click();
-	await expect(page.locator('.live-chart-data-status')).toContainText('QUOTE ONLY · Alpaca Crypto');
+	await expect(page.locator('.live-chart-data-status')).toContainText('QUOTE ONLY · Twelve Data');
 	await expect(page.locator('.live-chart-canvas')).toHaveAttribute('aria-hidden','false');
 	await expect(page.locator('.live-chart-readout')).toContainText('Latest provider quote 42,000.00');
 	await expect(page.locator('.live-chart-message')).toContainText('Historical candles unavailable. Showing the latest verified provider quote only.');
 
 	historyAvailable=true;
 	await page.getByRole('button',{name:'5m',exact:true}).click();
-	await expect(page.locator('.live-chart-data-status')).toContainText('CURRENT · Alpaca Crypto');
+	await expect(page.locator('.live-chart-data-status')).toContainText('CURRENT · Twelve Data');
 	await expect(page.locator('.live-chart-readout')).toContainText('O 41,900.00');
 	await expect(page.locator('.live-chart-readout')).toContainText('H 42,100.00');
 	await expect(page.locator('.live-chart-message')).toHaveCount(0);
 });
 
-test('REAL funding remains available while trading stays disabled without brokerage',async({browser,page})=>{
+test('REAL funding and internal simulated trading work without external brokerage',async({browser,page})=>{
 	await loginAs(page,fixture('INVESTOR_EMAIL'),fixture('INVESTOR_PASSWORD'));
 	expect((await page.request.get('/api/admin/providers/status')).status()).toBe(403);
-	expect((await page.request.post('/api/webhooks/broker/unconfigured',{data:{eventId:'synthetic-test-event'}})).status()).toBe(503);
 	await selectAccountMode(page,'REAL');
 	await expect.poll(async()=>Number((await page.request.get('/api/wallet').then(response=>response.json())).balance)).toBe(0);
 	const previousGbpRate=await db.exchangeRate.findUnique({where:{baseCurrency_quoteCurrency:{baseCurrency:'USD',quoteCurrency:'GBP'}}});
@@ -1952,7 +1946,11 @@ test('REAL funding remains available while trading stays disabled without broker
 		});
 		await page.request.patch('/api/currency-preference',{data:{currency:'GBP'}});
 		const configuredRate=await page.request.get('/api/currency-rates?to=GBP').then(response=>response.json());
-		expect(configuredRate).toMatchObject({rate:'0.8',source:'E2E configured rate',status:'CURRENT'});
+		expect(configuredRate).toMatchObject({
+			rate:'0.8',
+			source:process.env.AUREVIA_E2E_TWELVE_DATA_MOCK==='1'?'Twelve Data':'E2E configured rate',
+			status:'CURRENT',
+		});
 		await page.goto('/wallet');
 		await page.locator('details.wallet-settings > summary').click();
 		await expect(page.getByText('Approximate display · USD ledger · 1 USD = 0.8 GBP.')).toBeVisible();
@@ -1962,10 +1960,14 @@ test('REAL funding remains available while trading stays disabled without broker
 		if(previousGbpRate)await db.exchangeRate.update({where:{baseCurrency_quoteCurrency:{baseCurrency:'USD',quoteCurrency:'GBP'}},data:{rate:previousGbpRate.rate,source:previousGbpRate.source,observedAt:previousGbpRate.observedAt}});
 		else await db.exchangeRate.deleteMany({where:{baseCurrency:'USD',quoteCurrency:'GBP'}});
 	}
-	const instruments=await page.request.get('/api/market').then(response=>response.json());
-	const isolatedOrder=await page.request.post('/api/orders',{headers:{'Idempotency-Key':randomUUID()},data:{instrumentId:instruments[0].id,side:'BUY',type:'LIMIT',quantity:1,price:0.01,expectedPrice:Number(instruments[0].price),observedAt:instruments[0].lastUpdatedAt||instruments[0].updatedAt}});
-	expect(isolatedOrder.status()).toBe(403);
-	expect((await isolatedOrder.json()).error).toBe('This order could not be submitted right now. Try again later.');
+	const appleInstrument=await db.instrument.findUniqueOrThrow({where:{symbol:'AAPL'}});
+	const initialQuoteResponse=await page.request.get('/api/live-markets?symbols=AAPL');
+	expect(initialQuoteResponse.ok()).toBe(true);
+	const initialQuote=(await initialQuoteResponse.json()).quotes[0];
+	expect(initialQuote).toMatchObject({source:'Twelve Data',price:100,isStale:false});
+	const isolatedOrder=await page.request.post('/api/orders',{headers:{'Idempotency-Key':randomUUID()},data:{instrumentId:appleInstrument.id,side:'BUY',type:'LIMIT',quantity:1,price:0.01,expectedPrice:initialQuote.price,observedAt:initialQuote.updatedAt}});
+	expect(isolatedOrder.status()).toBe(409);
+	expect((await isolatedOrder.json()).error).toContain('REAL Aurevia Wallet does not have enough available funds');
 	expect(await page.request.get('/api/orders').then(response=>response.json())).toHaveLength(0);
 
 	const adminContext=await browser.newContext();
@@ -2010,20 +2012,92 @@ test('REAL funding remains available while trading stays disabled without broker
 
 	await expect.poll(async()=>Number((await page.request.get('/api/wallet').then(response=>response.json())).balance)).toBe(180);
 	await expect.poll(async()=>Number((await page.request.get('/api/wallet').then(response=>response.json())).withdrawableBalance)).toBe(155);
-	const fundedInstrument=(await page.request.get('/api/market').then(response=>response.json())).find((item:{price:number})=>Number(item.price)<100);
-	expect(fundedInstrument,'approved REAL deposits should provide an affordable market instrument').toBeTruthy();
-	if(!fundedInstrument)throw new Error('No affordable instrument is available after the simulated REAL deposits.');
-	const fundedBuy=await page.request.post('/api/orders',{headers:{'Idempotency-Key':randomUUID()},data:{instrumentId:fundedInstrument.id,side:'BUY',type:'MARKET',quantity:1,expectedPrice:Number(fundedInstrument.price),observedAt:fundedInstrument.lastUpdatedAt||fundedInstrument.updatedAt}});
-	expect(fundedBuy.status()).toBe(403);
-	expect((await fundedBuy.json()).error).toBe('This order could not be submitted right now. Try again later.');
-	expect(Number((await page.request.get('/api/wallet').then(response=>response.json())).balance)).toBe(180);
-	expect(await page.request.get('/api/positions').then(response=>response.json())).toHaveLength(0);
-	expect(await page.request.get('/api/orders').then(response=>response.json())).toHaveLength(0);
+	const executionQuoteResponse=await page.request.get('/api/live-markets?symbols=AAPL');
+	const executionQuote=(await executionQuoteResponse.json()).quotes[0];
+	expect(executionQuote).toMatchObject({source:'Twelve Data',price:100,isStale:false});
+	const buyPayload={instrumentId:appleInstrument.id,side:'BUY',type:'MARKET',quantity:1,expectedPrice:executionQuote.price,observedAt:executionQuote.updatedAt};
+	const concurrentBuyKeys=[randomUUID(),randomUUID()];
+	const concurrentBuys=await Promise.all(concurrentBuyKeys.map(key=>page.request.post('/api/orders',{headers:{'Idempotency-Key':key},data:buyPayload})));
+	expect(concurrentBuys.map(response=>response.status()).sort()).toEqual([201,409]);
+	const winningBuyIndex=concurrentBuys.findIndex(response=>response.status()===201);
+	const winningBuyKey=concurrentBuyKeys[winningBuyIndex];
+	const fundedOrder=await concurrentBuys[winningBuyIndex].json();
+	expect(fundedOrder).toMatchObject({accountMode:'REAL',status:'FILLED'});
+	expect(fundedOrder.executions).toHaveLength(1);
+	expect(Number(fundedOrder.fee)).toBeCloseTo(0.15,8);
+	const duplicateBuys=await Promise.all([0,1].map(()=>page.request.post('/api/orders',{headers:{'Idempotency-Key':winningBuyKey},data:buyPayload})));
+	expect(duplicateBuys.map(response=>response.status())).toEqual([201,201]);
+	expect((await duplicateBuys[0].json()).id).toBe(fundedOrder.id);
+	expect((await duplicateBuys[1].json()).id).toBe(fundedOrder.id);
+	const realBalanceAfterBuy=Number((await page.request.get('/api/wallet').then(response=>response.json())).balance);
+	expect(realBalanceAfterBuy).toBeCloseTo(79.85,8);
+	expect(await page.request.get('/api/positions').then(response=>response.json())).toHaveLength(1);
+	expect(await page.request.get('/api/orders').then(response=>response.json())).toHaveLength(1);
 	await selectAccountMode(page,'DEMO');
 	expect(Number((await page.request.get('/api/wallet').then(response=>response.json())).balance)).toBe(5000);
 	expect(await page.request.get('/api/positions').then(response=>response.json())).toHaveLength(0);
 	await selectAccountMode(page,'REAL');
+	expect(Number((await page.request.get('/api/wallet').then(response=>response.json())).balance)).toBe(realBalanceAfterBuy);
+	expect(await page.request.get('/api/positions').then(response=>response.json())).toHaveLength(1);
+
+	const sellQuoteResponse=await page.request.get('/api/live-markets?symbols=AAPL');
+	const sellQuote=(await sellQuoteResponse.json()).quotes[0];
+	expect(sellQuote).toMatchObject({source:'Twelve Data',price:100,isStale:false});
+	const sellResponse=await page.request.post('/api/orders',{
+		headers:{'Idempotency-Key':randomUUID()},
+		data:{instrumentId:appleInstrument.id,side:'SELL',type:'MARKET',quantity:1,expectedPrice:sellQuote.price,observedAt:sellQuote.updatedAt},
+	});
+	expect(sellResponse.status()).toBe(201);
+	const soldOrder=await sellResponse.json();
+	expect(soldOrder).toMatchObject({accountMode:'REAL',status:'FILLED'});
+	expect(soldOrder.executions).toHaveLength(1);
+	expect(Number(soldOrder.fee)).toBeCloseTo(0.15,8);
 	expect(await page.request.get('/api/positions').then(response=>response.json())).toHaveLength(0);
+	const oversell=await page.request.post('/api/orders',{
+		headers:{'Idempotency-Key':randomUUID()},
+		data:{instrumentId:appleInstrument.id,side:'SELL',type:'MARKET',quantity:1,expectedPrice:sellQuote.price,observedAt:sellQuote.updatedAt},
+	});
+	expect(oversell.status()).toBe(409);
+	expect((await oversell.json()).error).toContain('sell quantity exceeds');
+
+	const realBalanceAfterSell=Number((await page.request.get('/api/wallet').then(response=>response.json())).balance);
+	expect(realBalanceAfterSell).toBeCloseTo(179.70,8);
+	const realOrders=await page.request.get('/api/orders').then(response=>response.json());
+	expect(realOrders).toHaveLength(2);
+	expect(realOrders.map((order:{side:string;status:string})=>[order.side,order.status])).toEqual(expect.arrayContaining([
+		['BUY','FILLED'],['SELL','FILLED'],
+	]));
+	const realPortfolio=await page.request.get('/api/portfolio').then(response=>response.json());
+	expect(Number(realPortfolio.realizedPnl)).toBeCloseTo(-0.30,8);
+	expect(realPortfolio.positions).toHaveLength(0);
+
+	const investor=await db.user.findUniqueOrThrow({where:{email:fixture('INVESTOR_EMAIL')},select:{id:true}});
+	const usdWallet=await db.ledgerAccount.findUniqueOrThrow({
+		where:{code:`USER:${investor.id}:REAL:USD`},
+		select:{id:true},
+	});
+	const tradeTransactions=await db.ledgerTransaction.findMany({
+		where:{reference:{startsWith:'REAL:SIMULATED_TRADE:'},entries:{some:{accountId:usdWallet.id}}},
+		include:{entries:{include:{account:true}}},
+	});
+	expect(tradeTransactions).toHaveLength(2);
+	for(const transaction of tradeTransactions){
+		for(const currency of ['USD','AAPL']){
+			const entries=transaction.entries.filter(entry=>entry.account.currency===currency);
+			const debits=entries.filter(entry=>entry.type==='DEBIT').reduce((total,entry)=>total+Number(entry.amount),0);
+			const credits=entries.filter(entry=>entry.type==='CREDIT').reduce((total,entry)=>total+Number(entry.amount),0);
+			expect(debits).toBeCloseTo(credits,8);
+		}
+	}
+	const tradingFeeAccount=await db.ledgerAccount.findUniqueOrThrow({
+		where:{code:'SYSTEM:REAL:TRADING_FEES:USD'},
+		select:{id:true},
+	});
+	const feeEntries=await db.ledgerEntry.findMany({
+		where:{accountId:tradingFeeAccount.id,transaction:{reference:{startsWith:'REAL:SIMULATED_TRADE:'}}},
+		select:{type:true,amount:true},
+	});
+	expect(feeEntries.filter(entry=>entry.type==='CREDIT').reduce((total,entry)=>total+Number(entry.amount),0)).toBeCloseTo(0.30,8);
 });
 
 test('Wallet shows the internal funding workflow only in REAL Mode and survives API failures',async({browser,page})=>{
@@ -2130,7 +2204,7 @@ test('DEMO trading supports cash-backed buy and owned-unit sell execution',async
 		const freshInstrument=freshMarkets.find((item:{symbol:string})=>item.symbol===symbol);
 		const oversell=await tradePage.request.post('/api/orders',{headers:{'Idempotency-Key':randomUUID()},data:{instrumentId:freshInstrument.id,side:'SELL',type:'MARKET',quantity:1,expectedPrice:Number(freshInstrument.price),observedAt:freshInstrument.lastUpdatedAt}});
 		expect(oversell.status()).toBe(409);
-		expect((await oversell.json()).error).toContain('sell quantity exceeds your available DEMO position');
+		expect((await oversell.json()).error).toBe('The sell quantity exceeds the available position or wallet asset balance.');
 		const privateActivity=await tradePage.request.get('/api/market/activity').then(response=>response.json());
 		expect(privateActivity.source).toBe('DEMO practice activity records');
 		expect(privateActivity.activity.filter((event:{instrument:string;accountMode:string})=>event.instrument===symbol&&event.accountMode==='DEMO')).toHaveLength(2);
@@ -2201,16 +2275,20 @@ test('closing a DEMO position records a sell execution, reconciles portfolio, an
 	expect(notificationResponse.notifications.some((item:{title:string;relatedId:string|null})=>item.relatedId===closeOrder.id&&item.title==='DEMO position closed')).toBe(true);
 });
 
-test('Bitcoin conversion is blocked in DEMO and sandbox-disabled REAL mode without changing either ledger',async({page})=>{
+test('Bitcoin conversion is disabled in DEMO and insufficient REAL wallet funds fail without ledger changes',async({page})=>{
 	await loginAs(page,fixture('USER_EMAIL'),fixture('USER_PASSWORD'));
 	await selectAccountMode(page,'REAL');
 	const realCashBefore=Number((await page.request.get('/api/wallet').then(response=>response.json())).balance);
+	const realAmount=(realCashBefore+100).toFixed(2);
+	const initialPreview=await page.request.get(`/api/wallet/convert-bitcoin?direction=BUY&amount=${realAmount}`);
+	expect(initialPreview.status()).toBe(200);
+	const initialQuote=await initialPreview.json();
 	await selectAccountMode(page,'DEMO');
 	const initial=await page.request.get('/api/wallet').then(response=>response.json());
 	const userId=await page.request.get('/api/profile').then(response=>response.json().then(profile=>profile.id));
 	const cashBefore=Number(initial.balance);
 	const attemptStartedAt=new Date();
-	const conversion=await page.request.post('/api/wallet/convert-bitcoin',{headers:{'Idempotency-Key':randomUUID()},data:{direction:'BUY',amount:'100.00'}});
+	const conversion=await page.request.post('/api/wallet/convert-bitcoin',{headers:{'Idempotency-Key':randomUUID()},data:{direction:'BUY',amount:'100.00',confirmed:true,referencePrice:String(initialQuote.rate),observedAt:initialQuote.observedAt}});
 	expect(conversion.status()).toBe(403);
 	const afterDemoAttempt=await page.request.get('/api/wallet').then(response=>response.json());
 	expect(Number(afterDemoAttempt.balance)).toBe(cashBefore);
@@ -2218,9 +2296,26 @@ test('Bitcoin conversion is blocked in DEMO and sandbox-disabled REAL mode witho
 	const conversions=await db.ledgerTransaction.findMany({where:{reference:{startsWith:`DEMO:BTC:CONVERSION:${userId}:`},createdAt:{gte:attemptStartedAt}}});
 	expect(conversions).toHaveLength(0);
 	await selectAccountMode(page,'REAL');
-	const realAttempt=await page.request.post('/api/wallet/convert-bitcoin',{headers:{'Idempotency-Key':randomUUID()},data:{direction:'BUY',amount:'100.00'}});
-	expect(realAttempt.status()).toBe(403);
+	const walletBeforeRealAttempt=await page.request.get('/api/wallet').then(response=>response.json());
+	const ordersBeforeRealAttempt=await page.request.get('/api/orders').then(response=>response.json());
+	const positionsBeforeRealAttempt=await page.request.get('/api/positions').then(response=>response.json());
+	let realAttemptStatus=0;
+	let realAttemptError='';
+	for(let attempt=0;attempt<5;attempt++){
+		const freshPreview=await page.request.get(`/api/wallet/convert-bitcoin?direction=BUY&amount=${realAmount}`);
+		expect(freshPreview.status()).toBe(200);
+		const freshQuote=await freshPreview.json();
+		const realAttempt=await page.request.post('/api/wallet/convert-bitcoin',{headers:{'Idempotency-Key':randomUUID()},data:{direction:'BUY',amount:realAmount,confirmed:true,referencePrice:String(freshQuote.rate),observedAt:freshQuote.observedAt}});
+		realAttemptStatus=realAttempt.status();
+		realAttemptError=(await realAttempt.json()).error;
+		if(realAttemptError!=='The Bitcoin price changed after your preview. Review a new quote and confirm again.')break;
+	}
+	expect(realAttemptStatus).toBe(409);
+	expect(realAttemptError).toContain('does not have enough available USD');
 	expect(Number((await page.request.get('/api/wallet').then(response=>response.json())).balance)).toBe(realCashBefore);
+	expect(await page.request.get('/api/orders').then(response=>response.json())).toHaveLength(ordersBeforeRealAttempt.length);
+	expect(await page.request.get('/api/positions').then(response=>response.json())).toHaveLength(positionsBeforeRealAttempt.length);
+	expect(Number(walletBeforeRealAttempt.balance)).toBe(realCashBefore);
 });
 
 test('administrative balance adjustments require authorization and confirmation data, and are idempotent',async({browser,page})=>{
@@ -2280,7 +2375,7 @@ test('administrative balance adjustments require authorization and confirmation 
 	finally{await adminContext.close();}
 });
 
-test('DEMO accounts cannot access investments while REAL investment lifecycle remains available',async({browser,page})=>{
+test('DEMO accounts cannot access investments while REAL investments and internal trading remain available',async({browser,page})=>{
 	const adminContext=await browser.newContext();
 	const adminPage=await adminContext.newPage();
 	const priorBitcoinAddress=await db.systemSetting.findUnique({where:{key:SIMULATED_BTC_ADDRESS_SETTING},select:{value:true}});
@@ -2356,16 +2451,19 @@ test('DEMO accounts cannot access investments while REAL investment lifecycle re
 		expect(Number((await page.request.get('/api/wallet').then(response=>response.json())).balance)).toBeCloseTo(initialRealBalance+1040,2);
 		const tradeableInstrument=(await page.request.get('/api/market').then(response=>response.json())).find((item:{price:number})=>Number(item.price)<500);
 		expect(tradeableInstrument,'market should include enabled instruments').toBeTruthy();
-		const positionsBeforePaperOrder=await page.request.get('/api/positions').then(response=>response.json());
+		const walletBeforeRealOrder=Number((await page.request.get('/api/wallet').then(response=>response.json())).balance);
 		const realOrder=await page.request.post('/api/orders',{headers:{'Idempotency-Key':randomUUID()},data:{instrumentId:tradeableInstrument.id,side:'BUY',type:'MARKET',quantity:1,expectedPrice:Number(tradeableInstrument.price),observedAt:tradeableInstrument.lastUpdatedAt||tradeableInstrument.updatedAt}});
-		expect([403,503]).toContain(realOrder.status());
-		expect((await realOrder.json()).error).toBe('This order could not be submitted right now. Try again later.');
-		expect(await page.request.get('/api/positions').then(response=>response.json())).toHaveLength(positionsBeforePaperOrder.length);
+		expect(realOrder.status()).toBe(201);
+		const realOrderResult=await realOrder.json();
+		expect(realOrderResult).toMatchObject({accountMode:'REAL',status:'FILLED'});
+		expect(realOrderResult.executions).toHaveLength(1);
+		const realPositionsAfterOrder=await page.request.get('/api/positions').then(response=>response.json());
+		expect(realPositionsAfterOrder.some((position:{instrumentId:string})=>position.instrumentId===tradeableInstrument.id)).toBe(true);
 		const realPortfolio=await page.request.get('/api/portfolio').then(response=>response.json());
-		expect(realPortfolio.positions.length).toBe(positionsBeforePaperOrder.length);
+		expect(realPortfolio.positions.length).toBe(realPositionsAfterOrder.length);
 		expect(['LEDGER_ONLY','PROVIDER_UNAVAILABLE']).toContain(realPortfolio.marketDataMode);
 		const finalRealBalance=Number((await page.request.get('/api/wallet').then(response=>response.json())).balance);
-		expect(finalRealBalance).toBeCloseTo(initialRealBalance+1040,2);
+		expect(finalRealBalance).toBeLessThan(walletBeforeRealOrder);
 
 		await selectAccountMode(page,'DEMO');
 			await expect.poll(async()=>Number((await page.request.get('/api/wallet').then(response=>response.json())).balance)).toBe(initialDemoBalance);
@@ -2689,7 +2787,7 @@ test('profile completion and administrator identity review progress the account 
 	await expectNoHorizontalOverflow(page);
 	const instrument=(await page.request.get('/api/market').then(response=>response.json()))[0];
 	const realOrder=await page.request.post('/api/orders',{headers:{'Idempotency-Key':randomUUID()},data:{instrumentId:instrument.id,side:'BUY',type:'MARKET',quantity:1,expectedPrice:Number(instrument.price),observedAt:instrument.lastUpdatedAt||instrument.updatedAt}});
-	expect(realOrder.status()).toBe(403);
+	expect(realOrder.status()).toBe(409);
 });
 
 test('administrator email sign-in persists through refresh and logout removes admin access',async({page})=>{
@@ -3807,7 +3905,7 @@ test('password changes require fresh credentials and revoke other sessions',asyn
 	}
 });
 
-test('TOTP enrollment, new-device password-only sign-in, and disable flow',async({browser,page})=>{
+test('TOTP enrollment enforces second-factor sign-in and supports disable flow',async({browser,page})=>{
 	test.setTimeout(120_000);
 	const user=await createIsolatedDemoUser('security-totp');
 	await loginAs(page,user.email,user.password);
@@ -3832,6 +3930,7 @@ test('TOTP enrollment, new-device password-only sign-in, and disable flow',async
 	expect((await page.request.get('/api/profile').then(response=>response.json())).twoFactorEnabled).toBe(false);
 	expect(JSON.stringify(await page.request.get('/api/profile').then(response=>response.json()))).not.toContain(enrollment.manualKey);
 
+	const enrollmentStep=Math.floor(Date.now()/30_000);
 	const validEnrollmentCode=await generate({secret:enrollment.manualKey});
 	let invalidEnrollmentCode=await generate({secret:generateSecret()});
 	if(invalidEnrollmentCode===validEnrollmentCode)invalidEnrollmentCode=`${(Number(invalidEnrollmentCode)+1)%1_000_000}`.padStart(6,'0');
@@ -3861,9 +3960,51 @@ test('TOTP enrollment, new-device password-only sign-in, and disable flow',async
 	const newDeviceContext=await browser.newContext();
 	try{
 		const newDevicePage=await newDeviceContext.newPage();
-		await loginAs(newDevicePage,user.email,user.password);
+		await newDevicePage.goto('/login');
+		await waitForStartup(newDevicePage);
+		await newDevicePage.getByLabel('Email address').fill(user.email);
+		await newDevicePage.getByLabel('Password',{exact:true}).fill(user.password);
+		await newDevicePage.locator('input[name="secondFactorCode"]').fill('000000');
+		await newDevicePage.getByRole('button',{name:'Sign in'}).click();
+		await expect(newDevicePage.locator('.auth-signin-card [role="alert"]')).toContainText('authenticator code are incorrect');
+		expect((await newDevicePage.request.get('/api/auth/session').then(response=>response.json())).user).toBeUndefined();
+		await expect.poll(()=>Math.floor(Date.now()/30_000),{timeout:35_000}).not.toBe(enrollmentStep);
+		const totpCode=await generate({secret:enrollment.manualKey});
+		await loginAs(newDevicePage,user.email,user.password,{secondFactorCode:totpCode});
 		await expect(newDevicePage).toHaveURL(/dashboard/);
-		await expect(newDevicePage.getByLabel('New-device verification code (email or authenticator)')).toHaveCount(0);
+
+		const replayContext=await browser.newContext();
+		try{
+			const replayPage=await replayContext.newPage();
+			await replayPage.goto('/login');
+			await waitForStartup(replayPage);
+			await replayPage.getByLabel('Email address').fill(user.email);
+			await replayPage.getByLabel('Password',{exact:true}).fill(user.password);
+			await replayPage.locator('input[name="secondFactorCode"]').fill(totpCode);
+			await replayPage.getByRole('button',{name:'Sign in'}).click();
+			await expect(replayPage.locator('.auth-signin-card [role="alert"]')).toContainText('authenticator code are incorrect');
+			expect((await replayPage.request.get('/api/auth/session').then(response=>response.json())).user).toBeUndefined();
+		}finally{await replayContext.close()}
+
+		const recoveryContext=await browser.newContext();
+		try{
+			const recoveryPage=await recoveryContext.newPage();
+			await loginAs(recoveryPage,user.email,user.password,{secondFactorCode:recoveryCodes[0]});
+			await expect(recoveryPage).toHaveURL(/dashboard/);
+		}finally{await recoveryContext.close()}
+
+		const recoveryReplayContext=await browser.newContext();
+		try{
+			const recoveryReplayPage=await recoveryReplayContext.newPage();
+			await recoveryReplayPage.goto('/login');
+			await waitForStartup(recoveryReplayPage);
+			await recoveryReplayPage.getByLabel('Email address').fill(user.email);
+			await recoveryReplayPage.getByLabel('Password',{exact:true}).fill(user.password);
+			await recoveryReplayPage.locator('input[name="secondFactorCode"]').fill(recoveryCodes[0]);
+			await recoveryReplayPage.getByRole('button',{name:'Sign in'}).click();
+			await expect(recoveryReplayPage.locator('.auth-signin-card [role="alert"]')).toContainText('authenticator code are incorrect');
+			expect((await recoveryReplayPage.request.get('/api/auth/session').then(response=>response.json())).user).toBeUndefined();
+		}finally{await recoveryReplayContext.close()}
 
 		const disable=await newDevicePage.request.post('/api/security/totp',{data:{action:'disable',password:user.password}});
 		expect(disable.status()).toBe(200);

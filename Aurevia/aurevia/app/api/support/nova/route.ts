@@ -9,7 +9,7 @@ import {balance,reservedWithdrawalAmount} from '@/lib/ledger';
 import {getAccountTier} from '@/lib/production-policy';
 import {getTierProfileRequirements} from '@/lib/production-policy';
 import {MARKET_ASSETS,isExternalMarketDataSource} from '@/lib/live-market';
-import {getAdditionalMarketProviderKeys,getAlpacaMarketDataOptions,getMarketHistoryWithFallback,getMarketQuoteWithFallback} from '@/lib/market-data-service';
+import {getAdditionalMarketProviderKeys,getMarketHistoryWithFallback,getMarketQuoteWithFallback} from '@/lib/market-data-service';
 import {getServerConfiguration} from '@/lib/config/env';
 import {getSupportContact} from '@/lib/config';
 import {calculateTradePlan,formatTradePlan,hasDemoOrderIntent,missingTradePlanInputs,parseDemoOrderIntent,parseTradePlan,requestsUnsupportedOrderType} from '@/lib/nova-assistant';
@@ -156,7 +156,7 @@ export async function POST(request:Request){
 			const additionalProviders=getAdditionalMarketProviderKeys(config.marketData);
 			let quote:Awaited<ReturnType<typeof getMarketQuoteWithFallback>>|undefined;
 			try{
-				quote=await getMarketQuoteWithFallback(asset,config.marketData.finnhubApiKey,getAlpacaMarketDataOptions(config.execution),additionalProviders);
+				quote=await getMarketQuoteWithFallback(asset,additionalProviders);
 			}catch(error){
 				console.warn(`Nova market quote unavailable (${asset.id}, ${error instanceof Error?error.name:'UnknownError'}).`);
 			}
@@ -175,7 +175,7 @@ export async function POST(request:Request){
 			}else if(analysisRequested&&timeframe){
 				let history:Awaited<ReturnType<typeof getMarketHistoryWithFallback>>|undefined;
 				try{
-					history=await getMarketHistoryWithFallback(asset,timeframe,config.marketData.finnhubApiKey,getAlpacaMarketDataOptions(config.execution),additionalProviders);
+					history=await getMarketHistoryWithFallback(asset,timeframe,additionalProviders);
 				}catch(error){
 					console.warn(`Nova market history unavailable (${asset.id}, ${error instanceof Error?error.name:'UnknownError'}).`);
 				}
@@ -332,8 +332,8 @@ export async function POST(request:Request){
 		}
 		if(userId&&quoteAudit)await db.auditLog.create({data:{actorId:userId,action:'NOVA_MARKET_DATA_LOOKUP',entity:'NOVA_ACTIVITY',entityId:input.conversationId||null,metadata:quoteAudit}});
 		const contact=getSupportContact();
-		const platformAnswer= /\b(alpaca|paper trading|paper execution|live exchange|live execution)\b/i.test(input.question)
-			?'Alpaca Paper Trading is a simulated brokerage environment, not live exchange execution. An order or fill recorded there must not be described as a live-market trade. Check the execution mode and provider-confirmed order record in Aurevia before relying on any status.'
+		const platformAnswer= /\b(broker|paper trading|paper execution|live exchange|live execution)\b/i.test(input.question)
+			?'Aurevia does not route orders to an external broker or exchange. REAL orders use Aurevia’s internal wallet-funded simulated execution; DEMO orders use an isolated practice account.'
 			:/\b(demo|real|account mode)\b/i.test(input.question)
 			?'Aurevia keeps DEMO and REAL activity in separate account ledgers. DEMO funds and profits are simulated, cannot be withdrawn, and never credit the REAL wallet. REAL wallet balances come from the Aurevia ledger; funding and withdrawal requests remain subject to the existing administrator review workflow.'
 			:/\b(deposit|funding|withdraw|payout|payment)\b/i.test(input.question)

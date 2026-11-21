@@ -42,10 +42,10 @@ describe('Nova market intelligence',()=>{
 	it('formats sourced market analysis with conditional scenarios and explicit data caveats',()=>{
 		const candles=risingCandles();
 		const answer=formatNovaMarketAnalysis({
-			symbol:'BTC',name:'Bitcoin USD',timeframe:'1d',provider:'Alpaca Crypto',candles,
-			quote:{price:160,updatedAt:'2026-11-18T12:00:00.000Z',source:'Alpaca Crypto',change:1,changePercent:0.6},
+			symbol:'BTC',name:'Bitcoin USD',timeframe:'1d',provider:'Twelve Data',candles,
+			quote:{price:160,updatedAt:'2026-11-18T12:00:00.000Z',source:'Twelve Data',change:1,changePercent:0.6},
 		});
-		expect(answer).toContain('from Alpaca Crypto');
+		expect(answer).toContain('from Twelve Data');
 		expect(answer).toContain('RSI(14): 100');
 		expect(answer).toContain('Bullish scenario');
 		expect(answer).toContain('Bearish scenario');

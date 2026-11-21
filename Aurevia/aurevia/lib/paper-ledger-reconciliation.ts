@@ -1,12 +1,12 @@
 import {AccountMode,Prisma,PrismaClient} from '@prisma/client';
-import {ALPACA_PAPER_PROVIDER} from '@/lib/bitcoin-funding';
+import {LEGACY_EXTERNAL_PROVIDER} from '@/lib/bitcoin-funding';
 
 type TransactionClient=PrismaClient|Prisma.TransactionClient;
 
 export async function getWalletBackedPaperInstrumentIds(tx:TransactionClient,userId:string){
 	const [orders,usdAccount]=await Promise.all([
 		tx.order.findMany({
-			where:{userId,accountMode:AccountMode.REAL,providerName:ALPACA_PAPER_PROVIDER},
+			where:{userId,accountMode:AccountMode.REAL,providerName:LEGACY_EXTERNAL_PROVIDER},
 			select:{id:true,instrumentId:true,side:true,filledQuantity:true,executions:{select:{quantity:true,providerExecutionId:true}}},
 		}),
 		tx.ledgerAccount.findUnique({where:{code:`USER:${userId}:${AccountMode.REAL}:USD`},select:{id:true}}),

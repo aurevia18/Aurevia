@@ -35,10 +35,10 @@ vi.mock('@/lib/db',()=>({db:{
 	portfolioSnapshot:{upsert:mocks.snapshotUpsert,findMany:mocks.snapshotFindMany},
 }}));
 vi.mock('@/lib/ledger',()=>({balance:mocks.balance,reservedWithdrawalAmount:mocks.reservedWithdrawalAmount}));
-vi.mock('@/lib/bitcoin-funding',()=>({ALPACA_PAPER_PROVIDER:'alpaca-paper',BTC_FUNDING_METHOD:'btc',paperOrderCollateral:mocks.paperOrderCollateral}));
+vi.mock('@/lib/bitcoin-funding',()=>({LEGACY_EXTERNAL_PROVIDER:'alpaca-paper',BTC_FUNDING_METHOD:'btc',paperOrderCollateral:mocks.paperOrderCollateral}));
 vi.mock('@/lib/market-data-service',()=>({
 	getMarketQuoteWithFallback:mocks.marketQuote,
-	getAlpacaMarketDataOptions:vi.fn(()=>undefined),
+	getAdditionalMarketProviderKeys:vi.fn(()=>({})),
 }));
 vi.mock('@/lib/paper-ledger-reconciliation',()=>({getWalletBackedPaperInstrumentIds:mocks.walletBackedPaperInstrumentIds}));
 
@@ -85,7 +85,7 @@ describe('portfolio route provider valuation',()=>{
 		mocks.reservedWithdrawalAmount.mockResolvedValue(new Prisma.Decimal(0));
 		mocks.paperOrderCollateral.mockReturnValue({committed:new Prisma.Decimal(0)});
 		mocks.walletBackedPaperInstrumentIds.mockResolvedValue(new Set(['instrument-1']));
-		mocks.marketQuote.mockResolvedValue({price:110,updatedAt:new Date().toISOString(),source:'Alpaca',isStale:false});
+		mocks.marketQuote.mockResolvedValue({price:110,updatedAt:new Date().toISOString(),source:'Twelve Data',isStale:false});
 	});
 
 	it('includes ledger-backed positions in portfolio value without changing wallet cash',async()=>{
@@ -127,7 +127,7 @@ describe('portfolio route provider valuation',()=>{
 	it('does not present a stale provider mark as a current value',async()=>{
 		const quotedAt=new Date(Date.now()-120_000);
 		mocks.positionFindMany.mockResolvedValue([paperPosition(quotedAt)]);
-		mocks.marketQuote.mockResolvedValue({price:110,updatedAt:quotedAt.toISOString(),source:'Alpaca',isStale:true});
+		mocks.marketQuote.mockResolvedValue({price:110,updatedAt:quotedAt.toISOString(),source:'Twelve Data',isStale:true});
 
 		const response=await GET();
 		const result=await response.json();

@@ -124,6 +124,12 @@ export default async function globalSetup(){
 		instrumentIds.push(...instruments.map(instrument=>instrument.id));
 		const btcUsd=await db.instrument.upsert({where:{symbol:'BTC/USD'},update:{},create:{symbol:'BTC/USD',name:'E2E simulated BTC/USD',baseAsset:'BTC',quoteAsset:'USD',price:92500,enabled:true}});
 		instrumentIds.push(btcUsd.id);
+		const apple=await db.instrument.upsert({
+			where:{symbol:'AAPL'},
+			update:{name:'E2E simulated Apple',baseAsset:'AAPL',quoteAsset:'USD',price:100,takerFee:0.0015,enabled:true},
+			create:{symbol:'AAPL',name:'E2E simulated Apple',baseAsset:'AAPL',quoteAsset:'USD',price:100,takerFee:0.0015,enabled:true},
+		});
+		instrumentIds.push(apple.id);
 		await db.$transaction(async tx=>{
 			for(const id of [userId,legacyUserId,investorId,deletionUserId]){
 				await initializePaperAccount(tx,id,AccountMode.DEMO);

@@ -2,7 +2,6 @@ import {afterEach,describe,expect,it,vi} from 'vitest';
 import {
   getPublicConfiguration,
   getServerConfiguration,
-  normalizeAlpacaTradingBaseUrl,
   configurationSummary,
   validateServerConfiguration,
 } from '../lib/config/env';
@@ -189,15 +188,10 @@ describe('canonical environment configuration',()=>{
   it('detects optional integrations without requiring credentials',()=>{
     const config=getServerConfiguration({
       REAL_EXECUTION_ENABLED:'false',
-      BROKER_PROVIDER:'',
-      ALPACA_BROKER_BASE_URL:'https://broker-api.sandbox.alpaca.markets',
-      ALPACA_BROKER_CLIENT_ID:'',
-      ALPACA_BROKER_CLIENT_SECRET:'',
     });
 
     expect(config.execution.realEnabled).toBe(false);
-    expect(config.execution.alpacaConfigured).toBe(false);
-    expect(config.execution.provider).toBeNull();
+    expect(config.execution).toEqual({realEnabled:false});
     expect(config.email.configured).toBe(false);
     expect(config.marketData.configured).toBe(false);
   });
@@ -308,114 +302,34 @@ describe('canonical environment configuration',()=>{
     })).toBeNull();
   });
 
-  it('accepts the deployed Alpaca paper variable names without requiring an account ID or enabling REAL execution',()=>{
+  it('ignores removed broker credentials and permits internal REAL execution configuration',()=>{
     const config=getServerConfiguration({
-      REAL_EXECUTION_ENABLED:'false',
-      ALPACA_PROVIDER:'alpaca',
-      ALPACA_TRADING_BASE_URL:'https://paper-api.alpaca.markets',
-      ALPACA_API_KEY:'paper-key',
-      ALPACA_SECRET_KEY:'paper-secret',
-      ALPACA_PAPER_ORDERS_ENABLED:'true',
+      ...source,
+      REAL_EXECUTION_ENABLED:'true',
     });
 
-    expect(config.execution.provider).toBe('alpaca');
-    expect(config.execution.alpacaTradingConfigured).toBe(true);
-    expect(config.execution.alpacaTradingBaseUrl).toBe('https://paper-api.alpaca.markets');
-    expect(config.execution.alpacaTradingApiKey).toBe('paper-key');
-    expect(config.execution.alpacaTradingApiSecret).toBe('paper-secret');
-    expect(config.execution.alpacaTradingAccountId).toBe('');
-    expect(config.execution.realEnabled).toBe(false);
-    expect(config.execution.alpacaPaperOrdersEnabled).toBe(true);
+    expect(config.execution.realEnabled).toBe(true);
+    expect(Object.keys(config.execution)).toEqual(['realEnabled']);
+    expect(config.marketData.configured).toBe(false);
+    expect(validateServerConfiguration(config).some(issue=>/Alpaca/i.test(issue))).toBe(false);
+    const publicConfig=JSON.stringify(getPublicConfiguration(source));
+    expect(publicConfig).not.toContain('twelve-secret');
   });
 
-  it('supports the legacy Alpaca API secret alias without exposing it publicly',()=>{
-    const config=getServerConfiguration({ALPACA_API_SECRET:'legacy-paper-secret'});
-    expect(config.execution.alpacaTradingApiSecret).toBe('legacy-paper-secret');
-    expect(config.execution.alpacaClientSecret).toBe('legacy-paper-secret');
-    expect(JSON.stringify(getPublicConfiguration({ALPACA_API_SECRET:'legacy-paper-secret'}))).not.toContain('legacy-paper-secret');
-  });
-
-  it('accepts ALPACA_BASE_URL as an alias for the paper trading endpoint',()=>{
-    const config=getServerConfiguration({
-      ALPACA_PROVIDER:'alpaca',
-      ALPACA_BASE_URL:'https://paper-api.alpaca.markets/v2',
-      ALPACA_API_KEY:'test-paper-key',
-      ALPACA_API_SECRET:'test-paper-secret',
-    });
-
-    expect(config.execution).toMatchObject({
-      provider:'alpaca',
-      alpacaTradingBaseUrl:'https://paper-api.alpaca.markets',
-      alpacaTradingUrlConfigured:true,
-      alpacaTradingUrlValid:true,
-      alpacaTradingConfigured:true,
-      alpacaBaseUrl:'https://paper-api.alpaca.markets/v2',
-      alpacaClientSecret:'test-paper-secret',
-      realEnabled:false,
-      alpacaPaperOrdersEnabled:false,
-    });
-  });
-
-  it('prefers the established ALPACA_TRADING_BASE_URL and ALPACA_SECRET_KEY names',()=>{
-    const config=getServerConfiguration({
-      ALPACA_TRADING_BASE_URL:'https://paper-api.alpaca.markets',
-      ALPACA_BASE_URL:'https://api.alpaca.markets',
-      ALPACA_SECRET_KEY:'primary-secret',
-      ALPACA_API_SECRET:'legacy-secret',
-    });
-
-    expect(config.execution.alpacaTradingBaseUrl).toBe('https://paper-api.alpaca.markets');
-    expect(config.execution.alpacaTradingApiSecret).toBe('primary-secret');
-  });
-
-  it('does not silently replace an explicitly configured non-paper endpoint with the alias',()=>{
-    const config=getServerConfiguration({
-      ALPACA_TRADING_BASE_URL:'https://api.alpaca.markets',
-      ALPACA_BASE_URL:'https://paper-api.alpaca.markets',
-      ALPACA_API_KEY:'test-paper-key',
-      ALPACA_SECRET_KEY:'test-paper-secret',
-    });
-
-    expect(config.execution.alpacaTradingUrlConfigured).toBe(true);
-    expect(config.execution.alpacaTradingUrlValid).toBe(false);
-    expect(config.execution.alpacaTradingConfigured).toBe(false);
-  });
-
-  it('keeps paper order submission disabled unless explicitly enabled',()=>{
-    expect(getServerConfiguration({ALPACA_PROVIDER:'alpaca',ALPACA_TRADING_BASE_URL:'https://paper-api.alpaca.markets',ALPACA_API_KEY:'paper-key',ALPACA_SECRET_KEY:'paper-secret'}).execution.alpacaPaperOrdersEnabled).toBe(false);
-    expect(getServerConfiguration({ALPACA_PAPER_ORDERS_ENABLED:'true'}).execution.alpacaPaperOrdersEnabled).toBe(true);
-  });
-
-  it('normalizes only approved HTTPS Alpaca Trading API hosts',()=>{
-    expect(normalizeAlpacaTradingBaseUrl(' https://PAPER-API.ALPACA.MARKETS/ ')).toBe('https://paper-api.alpaca.markets');
-    expect(normalizeAlpacaTradingBaseUrl('https://paper-api.alpaca.markets/v2')).toBe('https://paper-api.alpaca.markets');
-    expect(normalizeAlpacaTradingBaseUrl('https://api.alpaca.markets')).toBeNull();
-    for(const url of ['http://paper-api.alpaca.markets','https://example.com','https://paper-api.alpaca.markets/path','https://paper-api.alpaca.markets/v2/account','https://user:pass@paper-api.alpaca.markets']){
-      expect(normalizeAlpacaTradingBaseUrl(url)).toBeNull();
-    }
-  });
-
-  it('consumes Finnhub credentials only in server configuration',()=>{
-    const privateSource={FINNHUB_API_KEY:'server-only-finnhub-test-key',ALPACA_API_KEY:'server-only-alpaca-test-key',ALPACA_API_SECRET:'server-only-alpaca-secret',ALPACA_ACCOUNT_ID:'private-account-id'};
-    const config=getServerConfiguration(privateSource);
-    expect(config.marketData.finnhubApiKey).toBe('server-only-finnhub-test-key');
-    const publicConfig=JSON.stringify(getPublicConfiguration(privateSource));
-    for(const value of Object.values(privateSource))expect(publicConfig).not.toContain(value);
-  });
-
-  it('detects market-data providers without exposing their credentials',()=>{
+  it('configures only Twelve Data and does not expose its credentials',()=>{
     const privateSource={
-      FINNHUB_API_KEY:'finnhub-secret',TWELVE_DATA_API_KEY:'twelve-secret',
-      ALPHA_VANTAGE_API_KEY:'alpha-secret',FMP_API_KEY:'fmp-secret',
+      TWELVE_DATA_API_KEY:'twelve-secret',
       MARKET_DATA_DISPLAY_LICENSES_CONFIRMED:'true',
     };
     const config=getServerConfiguration(privateSource);
     expect(config.marketData).toMatchObject({
-      configured:true,finnhubApiKey:'finnhub-secret',twelveDataApiKey:'twelve-secret',
-      alphaVantageApiKey:'alpha-secret',fmpApiKey:'fmp-secret',productionLicenseConfirmed:true,
+      configured:true,twelveDataApiKey:'twelve-secret',
+      productionLicenseConfirmed:true,
     });
     const summary=JSON.stringify(configurationSummary(config));
-    for(const value of Object.values(privateSource).slice(0,4))expect(summary).not.toContain(value);
-    expect(summary).toContain('"fmpConfigured":true');
+    expect(summary).not.toContain('twelve-secret');
+    expect(summary).toContain('"twelveDataConfigured":true');
+    expect(config.marketData.configured).toBe(true);
+    expect(getServerConfiguration({}).marketData.configured).toBe(false);
   });
 });

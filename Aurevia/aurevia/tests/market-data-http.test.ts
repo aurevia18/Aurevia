@@ -33,4 +33,13 @@ describe('market-data HTTP requests',()=>{
 
 		expect(fetcher).toHaveBeenCalledOnce();
 	});
+
+	it('retries network timeouts once and reports a sanitized provider error',async()=>{
+		const fetcher=vi.fn().mockRejectedValue(new DOMException('request timed out','TimeoutError'));
+
+		await expect(requestMarketProviderJson('Test provider','https://provider.example/quote',fetcher))
+			.rejects.toMatchObject({code:'NETWORK_OR_TIMEOUT',status:undefined});
+
+		expect(fetcher).toHaveBeenCalledTimes(2);
+	});
 });

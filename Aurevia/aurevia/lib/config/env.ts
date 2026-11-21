@@ -55,30 +55,6 @@ export type ServerConfiguration = {
   };
   execution: {
     realEnabled: boolean;
-    alpacaPaperOrdersEnabled: boolean;
-    provider: string | null;
-    alpacaProvider: string;
-    brokerProvider: string;
-    brokerApiUrl: string;
-    brokerApiKey: string;
-    brokerAccountId: string;
-    brokerWebhookSecret: string;
-    alpacaBaseUrl: string;
-    alpacaClientId: string;
-    alpacaClientSecret: string;
-    alpacaConfigured: boolean;
-    alpacaTradingBaseUrl: string;
-    alpacaTradingUrlConfigured: boolean;
-    alpacaTradingUrlValid: boolean;
-    alpacaTradingApiKey: string;
-    alpacaTradingApiSecret: string;
-    alpacaTradingAccountId: string;
-    alpacaTradingConfigured: boolean;
-    alpacaBrokerBaseUrl: string;
-    alpacaBrokerClientId: string;
-    alpacaBrokerClientSecret: string;
-    alpacaBrokerAccountId: string;
-    alpacaBrokerConfigured: boolean;
   };
   payment: {
     provider: string;
@@ -88,13 +64,10 @@ export type ServerConfiguration = {
     configured: boolean;
   };
   marketData: {
-    apiUrl: string;
-    apiKey: string;
     configured: boolean;
-    finnhubApiKey: string;
     twelveDataApiKey:string;
-    alphaVantageApiKey:string;
-    fmpApiKey:string;
+    twelveDataBaseUrl:string;
+    twelveDataBaseUrlValid:boolean;
     productionLicenseConfirmed:boolean;
   };
   akedly: {
@@ -185,15 +158,13 @@ function getDatabaseTarget(url: string): string {
   }
 }
 
-export function normalizeAlpacaTradingBaseUrl(value: string): string | null {
-  try {
-    const parsed = new URL(value.trim());
-    const host = parsed.hostname.toLowerCase();
-    if (parsed.protocol !== 'https:' || host !== 'paper-api.alpaca.markets') return null;
-    const basePath = parsed.pathname.replace(/\/+$/, '');
-    if (parsed.username || parsed.password || parsed.port || !['', '/v2'].includes(basePath) || parsed.search || parsed.hash) return null;
-    return `https://${host}`;
-  } catch {
+export function normalizeTwelveDataBaseUrl(value:string):string|null{
+  try{
+    const parsed=new URL(value.trim());
+    if(parsed.protocol!=='https:'||parsed.hostname.toLowerCase()!=='api.twelvedata.com')return null;
+    if(parsed.username||parsed.password||parsed.port||!['','/'].includes(parsed.pathname)||parsed.search||parsed.hash)return null;
+    return 'https://api.twelvedata.com';
+  }catch{
     return null;
   }
 }
@@ -224,32 +195,12 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
   const termiiBaseUrl=normalizeTermiiBaseUrl(termiiBaseUrlValue||'https://api.ng.termii.com');
   const termiiBaseUrlValid=Boolean(termiiBaseUrl);
   const termiiConfigured=Boolean(env('TERMII_API_KEY',source)&&env('TERMII_SENDER_ID',source)&&termiiBaseUrlValid);
-  const executionProvider = env('ALPACA_PROVIDER', source) || env('BROKER_PROVIDER', source) || null;
-  const alpacaProvider = env('ALPACA_PROVIDER', source) || 'alpaca';
-  const brokerProvider = env('BROKER_PROVIDER', source);
-  const configuredAlpacaTradingBaseUrl = env('ALPACA_TRADING_BASE_URL', source) || env('ALPACA_BASE_URL', source);
-  const alpacaTradingRawBaseUrl = configuredAlpacaTradingBaseUrl || 'https://paper-api.alpaca.markets/v2';
-  const alpacaTradingBaseUrl = normalizeAlpacaTradingBaseUrl(alpacaTradingRawBaseUrl) || '';
-  const alpacaTradingApiKey = env('ALPACA_API_KEY', source);
-  const alpacaTradingApiSecret = env('ALPACA_SECRET_KEY', source) || env('ALPACA_API_SECRET', source);
-  const alpacaTradingAccountId = env('ALPACA_ACCOUNT_ID', source);
-  const alpacaTradingConfigured = Boolean(alpacaTradingBaseUrl && alpacaTradingApiKey && alpacaTradingApiSecret);
-  const alpacaBrokerBaseUrl = env('ALPACA_BROKER_BASE_URL', source) || env('BROKER_API_URL', source);
-  const alpacaBrokerClientId = env('ALPACA_BROKER_CLIENT_ID', source) || env('BROKER_API_KEY', source);
-  const alpacaBrokerClientSecret = env('ALPACA_BROKER_CLIENT_SECRET', source) || env('BROKER_API_KEY', source);
-  const alpacaBrokerAccountId = env('BROKER_ACCOUNT_ID', source) || env('ALPACA_ACCOUNT_ID', source);
-  const alpacaBrokerConfigured = Boolean(alpacaBrokerBaseUrl && alpacaBrokerClientId && alpacaBrokerClientSecret && alpacaBrokerAccountId);
-  const alpacaBaseUrl = configuredAlpacaTradingBaseUrl || env('ALPACA_BROKER_BASE_URL', source);
-  const alpacaClientId = env('ALPACA_API_KEY', source) || env('ALPACA_BROKER_CLIENT_ID', source);
-  const alpacaClientSecret = alpacaTradingApiSecret || env('ALPACA_BROKER_CLIENT_SECRET', source);
-  const alpacaConfigured = Boolean(alpacaBaseUrl && alpacaClientId && alpacaClientSecret);
   const paymentConfigured = Boolean(env('PAYMENT_PROVIDER', source) && env('PAYMENT_API_URL', source) && env('PAYMENT_API_KEY', source));
-  const finnhubApiKey = env('FINNHUB_API_KEY', source);
   const twelveDataApiKey=env('TWELVE_DATA_API_KEY',source);
-  const alphaVantageApiKey=env('ALPHA_VANTAGE_API_KEY',source);
-  const fmpApiKey=env('FMP_API_KEY',source);
+  const twelveDataBaseUrlRaw=env('TWELVE_DATA_BASE_URL',source)||'https://api.twelvedata.com';
+  const twelveDataBaseUrl=normalizeTwelveDataBaseUrl(twelveDataBaseUrlRaw);
   const productionLicenseConfirmed=booleanEnv('MARKET_DATA_DISPLAY_LICENSES_CONFIRMED',source);
-  const marketDataConfigured = Boolean(env('MARKET_DATA_API_URL', source) || finnhubApiKey||twelveDataApiKey||alphaVantageApiKey||fmpApiKey);
+  const marketDataConfigured = Boolean(twelveDataApiKey);
   const akedly = {
     enabled: akedlyEnabledEnv(source),
     settingsPhoneEnabled: booleanEnv('AKEDLY_SETTINGS_PHONE_ENABLED', source),
@@ -356,30 +307,6 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
     },
     execution: {
       realEnabled: booleanEnv('REAL_EXECUTION_ENABLED', source),
-      alpacaPaperOrdersEnabled: booleanEnv('ALPACA_PAPER_ORDERS_ENABLED', source),
-      provider: executionProvider || null,
-      alpacaProvider,
-      brokerProvider,
-      brokerApiUrl: env('BROKER_API_URL', source),
-      brokerApiKey: env('BROKER_API_KEY', source),
-      brokerAccountId: env('BROKER_ACCOUNT_ID', source) || env('ALPACA_ACCOUNT_ID', source),
-      brokerWebhookSecret: env('BROKER_WEBHOOK_SECRET', source),
-      alpacaBaseUrl,
-      alpacaClientId,
-      alpacaClientSecret,
-      alpacaConfigured,
-      alpacaTradingBaseUrl,
-      alpacaTradingUrlConfigured: Boolean(configuredAlpacaTradingBaseUrl),
-      alpacaTradingUrlValid: Boolean(alpacaTradingBaseUrl),
-      alpacaTradingApiKey,
-      alpacaTradingApiSecret,
-      alpacaTradingAccountId,
-      alpacaTradingConfigured,
-      alpacaBrokerBaseUrl,
-      alpacaBrokerClientId,
-      alpacaBrokerClientSecret,
-      alpacaBrokerAccountId,
-      alpacaBrokerConfigured,
     },
     payment: {
       provider: env('PAYMENT_PROVIDER', source),
@@ -389,13 +316,10 @@ export function getServerConfiguration(source: EnvironmentSource = process.env):
       configured: paymentConfigured,
     },
     marketData: {
-      apiUrl: env('MARKET_DATA_API_URL', source),
-      apiKey: env('MARKET_DATA_API_KEY', source),
       configured: marketDataConfigured,
-      finnhubApiKey,
       twelveDataApiKey,
-      alphaVantageApiKey,
-      fmpApiKey,
+      twelveDataBaseUrl:twelveDataBaseUrl||'',
+      twelveDataBaseUrlValid:Boolean(twelveDataBaseUrl),
       productionLicenseConfirmed,
     },
     akedly: {
@@ -449,9 +373,8 @@ export function validateServerConfiguration(config: ServerConfiguration): string
   issues.push(...config.akedly.formattingIssues.map(issue=>`Invalid Akedly environment formatting: ${issue}`));
   issues.push(...config.kyc.formattingIssues);
   issues.push(...config.didit.formattingIssues);
+  if(!config.marketData.twelveDataBaseUrlValid)issues.push('TWELVE_DATA_BASE_URL must be https://api.twelvedata.com');
   if(config.kyc.engine!=='internal')issues.push('AUREVIA_KYC_ENGINE must be internal');
-  if(config.execution.realEnabled && (!config.execution.alpacaTradingConfigured || config.execution.alpacaProvider.toLowerCase() !== 'alpaca')) issues.push('REAL_EXECUTION_ENABLED requires a complete Individual Alpaca Trading API configuration selected with ALPACA_PROVIDER=alpaca');
-  if(config.execution.realEnabled && config.execution.alpacaTradingUrlConfigured && !config.execution.alpacaTradingUrlValid) issues.push('ALPACA_TRADING_BASE_URL must use an approved HTTPS Alpaca Trading API host');
   return issues;
 }
 
@@ -470,16 +393,13 @@ export function configurationSummary(config: ServerConfiguration) {
     verificationConfigured: config.verification.configured,
     execution: {
       realEnabled: config.execution.realEnabled,
-      provider: config.execution.provider,
-      alpacaConfigured: config.execution.alpacaConfigured,
+      provider: 'internal-simulation',
       adapterRegistered: false,
     },
     marketDataConfigured: config.marketData.configured,
-    finnhubConfigured: Boolean(config.marketData.finnhubApiKey),
     marketDataProviders:{
       twelveDataConfigured:Boolean(config.marketData.twelveDataApiKey),
-      alphaVantageConfigured:Boolean(config.marketData.alphaVantageApiKey),
-      fmpConfigured:Boolean(config.marketData.fmpApiKey),
+      twelveDataBaseUrlValid:config.marketData.twelveDataBaseUrlValid,
       productionLicenseConfirmed:config.marketData.productionLicenseConfirmed,
     },
     akedlyConfigured: config.akedly.configured,

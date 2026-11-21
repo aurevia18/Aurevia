@@ -1,7 +1,7 @@
 import {Prisma} from '@prisma/client';
 
 export const BTC_FUNDING_METHOD='BTC deposit · manual verification';
-export const ALPACA_PAPER_PROVIDER='alpaca-paper';
+export const LEGACY_EXTERNAL_PROVIDER='alpaca-paper';
 
 export function normalizeBitcoinTransactionId(value:string){
 	const normalized=value.trim().toLowerCase();

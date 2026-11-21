@@ -16,6 +16,7 @@ export default function Login(){
 	const {translate}=useLocale();
 	const [identifier,setIdentifier]=useState('');
 	const [password,setPassword]=useState('');
+	const [secondFactorCode,setSecondFactorCode]=useState('');
 	const [rememberEmail,setRememberEmail]=useState(false);
 	const [passwordVisible,setPasswordVisible]=useState(false);
 	const [error,setError]=useState('');
@@ -52,7 +53,7 @@ export default function Login(){
 	async function submit(event:FormEvent<HTMLFormElement>){
 		event.preventDefault();if(busy)return;setBusy(true);setError('');setLoginSuccess(false);
 		try{
-			const result=await signIn('credentials',{username:identifier,email:identifier,password,redirect:false});
+			const result=await signIn('credentials',{username:identifier,email:identifier,password,secondFactorCode,redirect:false});
 			if(result?.ok){
 				try{
 					if(rememberEmail)localStorage.setItem(rememberedEmailKey,identifier.trim());
@@ -63,7 +64,7 @@ export default function Login(){
 				await new Promise<void>(resolve=>window.setTimeout(resolve,900));
 				window.location.replace(callbackUrl);
 			}else if(result?.error==='CredentialsSignin'){
-				setError('Email address or password is incorrect.');
+				setError('Sign-in details or authenticator code are incorrect.');
 			}else if(result?.error?.startsWith('AUTHENTICATION_SERVICE_UNAVAILABLE:')){
 				const referenceId=result.error.slice('AUTHENTICATION_SERVICE_UNAVAILABLE:'.length);
 				setError(/^[0-9a-f-]{36}$/i.test(referenceId)?`${translate('unableAuth')} Reference ID: ${referenceId}`:translate('unableAuth'));
@@ -106,7 +107,8 @@ export default function Login(){
 						catch(storageError){console.warn('Unable to clear the remembered sign-in email.',{errorName:storageError instanceof Error?storageError.name:'UnknownError'})}
 					}
 				}}/><span>Remember my email on this device</span></label><Link className="auth-link" href="/forgot-password">{translate('forgotPassword')}</Link></div>
-				{error&&<StatusNotice tone={error==='Email address or password is incorrect.'?'declined':'neutral'} title={error==='Email address or password is incorrect.'?'Sign-in details not accepted':'Sign-in could not be completed'} description={error} role="alert"/>}
+				<label className="auth-field-label">Authenticator or recovery code (if enabled)<input className="auth-input" name="secondFactorCode" type="text" autoComplete="one-time-code" autoCapitalize="characters" value={secondFactorCode} onChange={event=>{setSecondFactorCode(event.target.value);setError('')}}/><span className="mt-1 block text-xs muted">Leave blank unless authenticator protection is enabled for your account.</span></label>
+				{error&&<StatusNotice tone={error==='Sign-in details or authenticator code are incorrect.'?'declined':'neutral'} title={error==='Sign-in details or authenticator code are incorrect.'?'Sign-in details not accepted':'Sign-in could not be completed'} description={error} role="alert"/>}
 				<button type="submit" disabled={busy} className="auth-submit flex w-full items-center justify-center gap-2" aria-busy={busy}>{busy?<><LoaderCircle size={16} className="animate-spin" aria-hidden="true"/>{loginSuccess?'Opening account…':translate('loading')}</> : translate('signIn')}</button>
 			</form>
 			<p className="auth-footer">{translate('newToAurevia')} <Link className="auth-link" href="/register">{translate('createAccount')}</Link></p>

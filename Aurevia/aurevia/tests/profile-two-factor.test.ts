@@ -1,4 +1,4 @@
-import {beforeEach,describe,expect,it,vi} from 'vitest';
+import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 
 const mocks=vi.hoisted(()=>({
 	requireUser:vi.fn(),
@@ -16,8 +16,10 @@ vi.mock('@/lib/tier-progression',()=>({synchronizeCompletedProfileTier:mocks.syn
 import {GET,PATCH} from '../app/api/profile/route';
 
 describe('profile two-factor status',()=>{
+	afterEach(()=>vi.unstubAllEnvs());
 	beforeEach(()=>{
 		vi.clearAllMocks();
+		vi.stubEnv('TOTP_ENCRYPTION_KEY','');
 		mocks.requireUser.mockResolvedValue({id:'user-1'});
 		mocks.investmentFindFirst.mockResolvedValue(null);
 		mocks.synchronizeTier.mockResolvedValue(false);

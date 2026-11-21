@@ -17,14 +17,14 @@ vi.mock('@/lib/db',()=>({db:{
 vi.mock('@/lib/ai-services',()=>({runAiService:mocks.runAiService}));
 vi.mock('@/lib/ai-gateway',()=>({AiGatewayError:class AiGatewayError extends Error{constructor(message:string,readonly code:string,readonly status=503){super(message)}}}));
 vi.mock('@/lib/rate-limit',()=>({rateLimit:mocks.rateLimit}));
-vi.mock('@/lib/config/env',()=>({getServerConfiguration:()=>({marketData:{finnhubApiKey:'test-key'},execution:{}})}));
+vi.mock('@/lib/config/env',()=>({getServerConfiguration:()=>({marketData:{twelveDataApiKey:'test-key',twelveDataBaseUrl:'https://api.twelvedata.com'}})}));
 vi.mock('@/lib/market-data-service',()=>({
-	getAlpacaMarketDataOptions:vi.fn(()=>undefined),
+	getAdditionalMarketProviderKeys:vi.fn(()=>({twelveDataApiKey:'test-key',twelveDataBaseUrl:'https://api.twelvedata.com'})),
 	getMarketQuoteWithFallback:mocks.getMarketQuote,
 }));
 vi.mock('@/lib/live-market',()=>({
 	getMarketAsset:vi.fn((symbol:string)=>['AAPL','BTC'].includes(symbol)?{id:symbol,name:symbol==='AAPL'?'Apple Inc.':'Bitcoin USD',type:symbol==='BTC'?'CRYPTO':'STOCK',currency:'USD'}:undefined),
-	isExternalMarketDataSource:vi.fn((source:string)=>source==='Alpaca'||source==='Alpaca Crypto'||source==='Finnhub'),
+	isExternalMarketDataSource:vi.fn((source:string)=>source==='Twelve Data'),
 }));
 
 import {POST} from '@/app/api/market/analysis/route';
@@ -43,7 +43,7 @@ beforeEach(()=>{
 		dayLow:190,
 		dayHigh:210,
 		updatedAt:new Date().toISOString(),
-		source:'Alpaca',
+		source:'Twelve Data',
 		isStale:false,
 	}));
 	mocks.runAiService.mockResolvedValue({
@@ -57,14 +57,14 @@ describe('fresh-provider market analysis',()=>{
 	it('analyzes only fresh external quotes and audits the data sources',async()=>{
 		mocks.getMarketQuote.mockImplementation(async(asset:{id:string})=>({
 			price:200,change:2,changePercent:1,dayLow:190,dayHigh:210,updatedAt:new Date().toISOString(),
-			source:asset.id==='AAPL'?'Alpaca':'Aurevia Internal',isStale:false,
+			source:asset.id==='AAPL'?'Twelve Data':'Aurevia Internal',isStale:false,
 		}));
 		const response=await POST(request({symbols:['AAPL','BTC']}));
 		const body=await response.json();
 
 		expect(response.status).toBe(200);
 		expect(body.quotes).toHaveLength(1);
-		expect(body.quotes[0]).toMatchObject({symbol:'AAPL',provider:'Alpaca'});
+		expect(body.quotes[0]).toMatchObject({symbol:'AAPL',provider:'Twelve Data'});
 		const messages=mocks.runAiService.mock.calls[0][1] as Array<{role:string;content:string}>;
 		expect(JSON.parse(messages[1].content).quotes).toHaveLength(1);
 		expect(messages[1].content).not.toContain('user-1');
@@ -75,7 +75,7 @@ describe('fresh-provider market analysis',()=>{
 	it('does not send stale or internal quotes to the model',async()=>{
 		mocks.getMarketQuote.mockImplementation(async(asset:{id:string})=>({
 			price:200,change:2,changePercent:1,dayLow:190,dayHigh:210,updatedAt:asset.id==='AAPL'?new Date(Date.now()-6*60_000).toISOString():new Date().toISOString(),
-			source:asset.id==='AAPL'?'Finnhub':'Aurevia Internal',isStale:false,
+			source:asset.id==='AAPL'?'Twelve Data':'Aurevia Internal',isStale:false,
 		}));
 
 		const response=await POST(request({symbols:['AAPL','BTC']}));

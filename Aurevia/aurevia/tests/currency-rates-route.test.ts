@@ -6,14 +6,18 @@ const mocks=vi.hoisted(()=>({
 	upsert:vi.fn(),
 	rateLimit:vi.fn(),
 	getConfiguration:vi.fn(),
-	finnhubQuote:vi.fn(),
+	getProviders:vi.fn(),
+	getQuote:vi.fn(),
 }));
 
 vi.mock('@/lib/auth',()=>({requireUser:mocks.requireUser}));
 vi.mock('@/lib/db',()=>({db:{exchangeRate:{findUnique:mocks.findUnique,upsert:mocks.upsert}}}));
 vi.mock('@/lib/rate-limit',()=>({rateLimit:mocks.rateLimit}));
 vi.mock('@/lib/config/env',()=>({getServerConfiguration:mocks.getConfiguration}));
-vi.mock('@/lib/providers/finnhub-market-data',()=>({getFinnhubQuote:mocks.finnhubQuote}));
+vi.mock('@/lib/market-data-service',()=>({
+	getAdditionalMarketProviderKeys:mocks.getProviders,
+	getMarketQuoteWithFallback:mocks.getQuote,
+}));
 
 import {GET} from '@/app/api/currency-rates/route';
 
@@ -24,35 +28,39 @@ beforeEach(()=>{
 	mocks.findUnique.mockReset().mockResolvedValue(null);
 	mocks.upsert.mockReset().mockImplementation(({create})=>Promise.resolve({...create}));
 	mocks.rateLimit.mockReset();
-	mocks.getConfiguration.mockReset().mockReturnValue({marketData:{finnhubApiKey:''}});
-	mocks.finnhubQuote.mockReset();
+	mocks.getConfiguration.mockReset().mockReturnValue({marketData:{}});
+	mocks.getProviders.mockReset().mockReturnValue({});
+	mocks.getQuote.mockReset().mockRejectedValue(new Error('PROVIDER_UNAVAILABLE'));
 	vi.spyOn(console,'warn').mockImplementation(()=>undefined);
 });
 afterEach(()=>vi.restoreAllMocks());
 
-describe('currency rate fallback',()=>{
-	it('returns a disclosed internal reference rate when Finnhub and cached rates are absent',async()=>{
+describe('currency rate provider handling',()=>{
+	it('reports unavailable instead of inventing an exchange rate',async()=>{
 		const response=await GET(request);
-		expect(response.status).toBe(200);
-		expect(await response.json()).toMatchObject({
-			baseCurrency:'USD',quoteCurrency:'EUR',source:'Aurevia internal reference rate',status:'INTERNAL',
-		});
+		expect(response.status).toBe(503);
+		expect(await response.json()).toMatchObject({error:'A verified exchange rate is currently unavailable.'});
+		expect(mocks.upsert).not.toHaveBeenCalled();
 	});
 
 	it('continues using the last known rate and labels it stale when the provider is unavailable',async()=>{
 		mocks.findUnique.mockResolvedValue({
-			rate:'0.91',source:'Finnhub',observedAt:new Date(Date.now()-48*60*60_000),
+			rate:'0.91',source:'Twelve Data',observedAt:new Date(Date.now()-48*60*60_000),
 		});
 		const response=await GET(request);
-		expect(await response.json()).toMatchObject({rate:'0.91',source:'Finnhub',status:'STALE'});
+		expect(await response.json()).toMatchObject({rate:'0.91',source:'Twelve Data',status:'STALE'});
 	});
 
-	it('uses and stores a valid Finnhub rate when available',async()=>{
-		mocks.getConfiguration.mockReturnValue({marketData:{finnhubApiKey:'server-key'}});
-		mocks.finnhubQuote.mockResolvedValue({price:0.93,source:'Finnhub',updatedAt:new Date().toISOString()});
+	it('uses and stores a timestamped Twelve Data rate when available',async()=>{
+		mocks.getQuote.mockResolvedValue({
+			price:0.93,source:'Twelve Data',isStale:false,updatedAt:new Date().toISOString(),
+		});
 		const response=await GET(request);
 		expect(response.status).toBe(200);
-		expect(await response.json()).toMatchObject({rate:0.93,source:'Finnhub',status:'CURRENT'});
+		expect(await response.json()).toMatchObject({rate:0.93,source:'Twelve Data',status:'CURRENT'});
+		expect(mocks.getQuote).toHaveBeenCalledWith(
+			expect.objectContaining({ticker:'USD/EUR',type:'FOREX'}),{},
+		);
 		expect(mocks.upsert).toHaveBeenCalledOnce();
 	});
 });

@@ -5,7 +5,7 @@ import {requireUser} from '@/lib/auth';
 import {db} from '@/lib/db';
 import {assertFreshQuote} from '@/lib/trading-policy';
 import {calculateSimulatedBitcoinConversion} from '@/lib/simulated-bitcoin';
-import {placeRealOrder} from '@/lib/orders';
+import {placeRealOrder,resolveTwelveDataExecutionQuote} from '@/lib/orders';
 import {rateLimit} from '@/lib/rate-limit';
 import {jsonSafe} from '@/lib/serializers';
 import {roundWalletAmount} from '@/lib/real-wallet-reservations';
@@ -23,7 +23,6 @@ const quoteFreshnessMs=30_000;
 async function getRealBitcoinInstrument(){
 	const instrument=await db.instrument.findUnique({where:{symbol:'BTC/USD'}});
 	if(!instrument?.enabled)throw new Error('BITCOIN_INSTRUMENT_UNAVAILABLE');
-	try{assertFreshQuote(instrument.updatedAt)}catch{throw new Error('STALE_MARKET_QUOTE')}
 	return instrument;
 }
 
@@ -45,7 +44,7 @@ function preview(direction:'BUY'|'SELL',amount:Prisma.Decimal,price:Prisma.Decim
 		finalAmount:direction==='BUY'?quantity:notional.minus(fee),
 		finalCurrency:direction==='BUY'?'BTC':'USD',
 		observedAt:null as string|null,
-		priceSource:'Aurevia Internal simulated market',
+		priceSource:'Twelve Data',
 		simulated:true,
 	};
 }
@@ -65,8 +64,10 @@ export async function GET(request:Request){
 		if(!amount.isFinite()||amount.lte(0)||amount.gt(1_000_000_000))return NextResponse.json({error:'Enter a valid conversion amount.'},{status:400});
 		if(parsed.direction==='BUY'&&amount.decimalPlaces()>2)return NextResponse.json({error:'USD buy amounts must be entered to the nearest cent.'},{status:400});
 		const instrument=await getRealBitcoinInstrument();
-		const result=preview(parsed.direction,amount,instrument.price,instrument.takerFee);
-		return NextResponse.json({...jsonSafe(result),observedAt:instrument.updatedAt.toISOString()},{headers:{'Cache-Control':'private, no-store'}});
+		const quote=await resolveTwelveDataExecutionQuote(instrument.symbol);
+		try{assertFreshQuote(quote.updatedAt)}catch{throw new Error('STALE_MARKET_QUOTE')}
+		const result=preview(parsed.direction,amount,new Prisma.Decimal(quote.price),instrument.takerFee);
+		return NextResponse.json({...jsonSafe(result),observedAt:quote.updatedAt},{headers:{'Cache-Control':'private, no-store'}});
 	}catch(error){
 		if(error instanceof ZodError)return NextResponse.json({error:'Enter a valid conversion direction and amount.'},{status:400});
 		if(error instanceof Error&&error.message==='UNAUTHORIZED')return NextResponse.json({error:'Unauthorized'},{status:401});
@@ -95,19 +96,21 @@ export async function POST(request:Request){
 		try{assertFreshQuote(input.observedAt)}catch{throw new Error('STALE_MARKET_QUOTE')}
 
 		const instrument=await getRealBitcoinInstrument();
-		const quoteAge=Math.abs(instrument.updatedAt.getTime()-Date.parse(input.observedAt));
-		if(!Number.isFinite(quoteAge)||quoteAge>quoteFreshnessMs||!instrument.price.equals(previewPrice))throw new Error('CONVERSION_QUOTE_CHANGED');
-		const conversion=calculateSimulatedBitcoinConversion(input.direction,amount,instrument.price,instrument.takerFee);
+		const quote=await resolveTwelveDataExecutionQuote(instrument.symbol);
+		try{assertFreshQuote(quote.updatedAt)}catch{throw new Error('STALE_MARKET_QUOTE')}
+		const quoteAge=Math.abs(Date.parse(quote.updatedAt)-Date.parse(input.observedAt));
+		if(!Number.isFinite(quoteAge)||quoteAge>quoteFreshnessMs||!new Prisma.Decimal(quote.price).equals(previewPrice))throw new Error('CONVERSION_QUOTE_CHANGED');
+		const conversion=calculateSimulatedBitcoinConversion(input.direction,amount,new Prisma.Decimal(quote.price),instrument.takerFee);
 		const quantity=input.direction==='BUY'?conversion.bitcoinAmount:amount;
 		const order=await placeRealOrder(user.id,{
 			instrumentId:instrument.id,side:input.direction,type:'MARKET',quantity:quantity.toNumber(),
-			expectedPrice:instrument.price.toNumber(),observedAt:instrument.updatedAt.toISOString(),
-		},idempotencyKey,{requireExpectedPriceMatch:true});
+			expectedPrice:quote.price,observedAt:quote.updatedAt,
+		},idempotencyKey,{requireExpectedPriceMatch:true,validatedQuote:quote});
 		if(!order)throw new Error('ORDER_SUBMISSION_RETURNED_NO_ORDER');
 		return NextResponse.json(jsonSafe({
 			order:{id:order.id,status:order.status,side:order.side,type:order.type,quantity:order.quantity,filledQuantity:order.filledQuantity,averageFillPrice:order.averageFillPrice,fee:order.fee,settlementCurrency:order.settlementCurrency},
-			...preview(input.direction,amount,instrument.price,instrument.takerFee),
-			observedAt:instrument.updatedAt.toISOString(),
+			...preview(input.direction,amount,new Prisma.Decimal(quote.price),instrument.takerFee),
+			observedAt:quote.updatedAt,
 			executionProvider:'AUREVIA_INTERNAL_SIMULATION',
 			simulated:true,
 		}),{status:201,headers:{'Cache-Control':'private, no-store'}});
@@ -115,6 +118,7 @@ export async function POST(request:Request){
 		if(error instanceof ZodError)return NextResponse.json({error:'Enter a valid conversion direction, amount, and explicit confirmation.'},{status:400});
 		if(error instanceof Error&&error.message==='UNAUTHORIZED')return NextResponse.json({error:'Unauthorized'},{status:401});
 		if(error instanceof Error&&error.message==='RATE_LIMITED')return NextResponse.json({error:'Conversion requests are temporarily limited. Try again shortly.'},{status:429});
+		if(error instanceof Error&&error.message==='MARKET_QUOTE_UNAVAILABLE')return NextResponse.json({error:'Twelve Data market quote is unavailable. No conversion was executed.'},{status:503});
 		if(error instanceof Error&&error.message==='STALE_MARKET_QUOTE')return NextResponse.json({error:'The Bitcoin simulated quote is stale. Refresh and confirm again.'},{status:503});
 		if(error instanceof Error&&error.message==='CONVERSION_QUOTE_CHANGED')return NextResponse.json({error:'The Bitcoin price changed after your preview. Review a new quote and confirm again.'},{status:409});
 		if(error instanceof Error&&error.message==='BITCOIN_INSTRUMENT_UNAVAILABLE')return NextResponse.json({error:'Bitcoin is not currently available for trading.'},{status:409});

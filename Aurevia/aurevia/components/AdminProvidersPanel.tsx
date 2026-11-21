@@ -4,19 +4,18 @@ import {useEffect,useState} from 'react';
 import {RefreshCw} from 'lucide-react';
 
 type ServiceStatus='AVAILABLE'|'UNAVAILABLE'|'DISABLED';
-type AlpacaPaperStatus='AVAILABLE'|'AUTHENTICATION_FAILED'|'UNAVAILABLE'|'NOT_CONFIGURED'|'NOT_SELECTED'|'MISCONFIGURED';
 type ProviderStatus={
 	checkedAt:string;
 	internalSimulation:{simulationEngine:ServiceStatus;accountLedger:ServiceStatus;adminAuthorization:ServiceStatus;simulatedTradeExecution:ServiceStatus;simulatedDepositsAndWithdrawals:ServiceStatus;simulatedInvestmentSettlement:ServiceStatus;externalBrokerExecution:'DISABLED';externalPaymentProcessing:'DISABLED';externalInvestmentSettlement:'DISABLED';externalMoneyMovement:'DISABLED'};
-	alpacaPaperAccount:{status:AlpacaPaperStatus;connected:boolean;configured:boolean;selected:boolean;mode:'PAPER'|null;executionEnabled:boolean;paperOrdersEnabled:boolean;liveTradingEnabled:false;diagnosticCode:string|null;account:{accountId:string;status:string;currency:string;cash:string;buyingPower:string;equity:string;portfolioValue:string;patternDayTrader:boolean|null;tradingBlocked:boolean;accountBlocked:boolean;tradeSuspendedByUser:boolean}|null;checkedAt:string};
 	marketData:{
-		status:string;provider:string;finnhubStatus:string;alpacaStatus:string;fallbackProvider:string|null;usedForOrderExecution:false;
+		status:string;provider:string;apiAuthenticationStatus:string;lastSuccessfulRequestAt:string|null;lastDataAt:string|null;freshness:string;
+		rateLimitErrors:number;providerErrors:number;errorCode:string|null;capabilities:string[];usedForOrderExecution:false;
 		historicalData:{status:string;symbol:string;timeframe:string;provider:string|null};
 	};
 	identity:{status:string;adminReviewAvailable:ServiceStatus;externalVerification:'DISABLED'};
 };
 
-const statusClass=(status:string)=>['AVAILABLE','CONFIGURED','HEALTHY'].includes(status)?'text-profit':['DISABLED','NOT_CONFIGURED','NOT_SELECTED'].includes(status)?'muted':'text-loss';
+const statusClass=(status:string)=>['AVAILABLE','CONFIGURED','HEALTHY','CONNECTED','AUTHENTICATED'].includes(status)?'text-profit':['DISABLED','NOT_CONFIGURED','NOT_CHECKED'].includes(status)?'muted':'text-loss';
 
 export default function AdminProvidersPanel(){
 	const [data,setData]=useState<ProviderStatus|null>(null);
@@ -50,19 +49,22 @@ export default function AdminProvidersPanel(){
 					['Live broker execution',services!.externalBrokerExecution],['Payment processing',services!.externalPaymentProcessing],['Investment settlement',services!.externalInvestmentSettlement],['Money movement',services!.externalMoneyMovement],
 				] as [string,'DISABLED'][]).map(([label,status])=><p className="mt-2 flex justify-between gap-3 text-sm" key={label}><span>{label}</span><b className={statusClass(status)}>{status}</b></p>)}
 			</article>
-			<article className="rounded-lg border border-white/10 p-3"><h3 className="font-semibold">Legacy Alpaca reconciliation</h3>
-				<p className="mt-2 flex justify-between gap-3 text-sm"><span>Account connectivity</span><b className={statusClass(data.alpacaPaperAccount.status)}>{data.alpacaPaperAccount.status}</b></p>
-				<p className="mt-2 flex justify-between gap-3 text-sm"><span>Configuration</span><b>{data.alpacaPaperAccount.configured?'CONFIGURED':'INCOMPLETE'}</b></p>
-				<p className="mt-2 flex justify-between gap-3 text-sm"><span>New REAL order routing</span><b className="muted">AUREVIA INTERNAL</b></p>
-				<p className="mt-2 flex justify-between gap-3 text-sm"><span>Live trading</span><b className="muted">DISABLED</b></p>
-				{data.alpacaPaperAccount.diagnosticCode&&<p className="mt-2 break-all text-xs muted">Sanitized diagnostic: {data.alpacaPaperAccount.diagnosticCode}</p>}
-				{data.alpacaPaperAccount.account&&<><p className="mt-2 text-sm">Sandbox account status: <b>{data.alpacaPaperAccount.account.status}</b></p><p className="break-all text-xs muted">Sandbox account reference: {data.alpacaPaperAccount.account.accountId}</p><p className="mt-2 text-sm">Sandbox cash: <b>{data.alpacaPaperAccount.account.currency} {Number(data.alpacaPaperAccount.account.cash).toLocaleString()}</b></p><p className="text-sm">Sandbox equity: <b>{data.alpacaPaperAccount.account.currency} {Number(data.alpacaPaperAccount.account.equity).toLocaleString()}</b></p><p className="text-sm">Sandbox buying power: <b>{data.alpacaPaperAccount.account.currency} {Number(data.alpacaPaperAccount.account.buyingPower).toLocaleString()}</b></p></>}
-				<p className="mt-2 text-xs muted">This optional integration is retained only to reconcile historical Alpaca-linked orders. New REAL-mode orders use Aurevia's wallet-funded internal simulated execution; the shared sandbox is not used for new submissions.</p>
+			<article className="rounded-lg border border-white/10 p-3"><h3 className="font-semibold">Market data</h3>
+				<p className="mt-2 text-sm">Primary provider: <b>{data.marketData.provider}</b></p>
+				<p className="text-sm">Connection: <b className={statusClass(data.marketData.status)}>{data.marketData.status}</b></p>
+				<p className="text-sm">API authentication: <b className={statusClass(data.marketData.apiAuthenticationStatus)}>{data.marketData.apiAuthenticationStatus}</b></p>
+				<p className="mt-2 text-sm">Last successful request: {data.marketData.lastSuccessfulRequestAt?new Date(data.marketData.lastSuccessfulRequestAt).toLocaleString():'None'}</p>
+				<p className="text-sm">Latest data timestamp: {data.marketData.lastDataAt?new Date(data.marketData.lastDataAt).toLocaleString():'None'}</p>
+				<p className="text-sm">Data freshness: <b className={statusClass(data.marketData.freshness)}>{data.marketData.freshness}</b></p>
+				<p className="text-sm">Rate-limit errors: <b>{data.marketData.rateLimitErrors}</b> · Provider errors: <b>{data.marketData.providerErrors}</b></p>
+				{data.marketData.errorCode&&<p className="mt-2 text-xs text-loss">Provider diagnostic: {data.marketData.errorCode}</p>}
+				<p className="mt-2 text-sm">Chart candles (AAPL, 1d): <b className={statusClass(data.marketData.historicalData.status)}>{data.marketData.historicalData.status}</b></p>
+				<p className="text-sm">Chart history provider: {data.marketData.historicalData.provider??'None'}</p>
+				<p className="mt-2 text-sm">Capabilities: {data.marketData.capabilities.length?data.marketData.capabilities.join(', '):'None verified'}</p>
+				<p className="mt-2 text-xs muted">Provider data is separate from internal simulated execution and is never used to move funds. Data access and freshness depend on the configured Twelve Data plan.</p>
 			</article>
-			<article className="rounded-lg border border-white/10 p-3"><h3 className="font-semibold">Market data</h3><p className="mt-2 text-sm">Status: <b className={statusClass(data.marketData.status)}>{data.marketData.status}</b></p><p className="text-sm">Active provider: {data.marketData.provider}</p><p className="text-sm">Finnhub: <b className={statusClass(data.marketData.finnhubStatus)}>{data.marketData.finnhubStatus}</b></p><p className="text-sm">Alpaca stock data: <b className={statusClass(data.marketData.alpacaStatus)}>{data.marketData.alpacaStatus}</b></p><p className="mt-2 text-sm">Chart candles (AAPL, 1d): <b className={statusClass(data.marketData.historicalData.status)}>{data.marketData.historicalData.status}</b></p><p className="text-sm">Chart history provider: {data.marketData.historicalData.provider??'None'}</p><p className="mt-2 text-xs muted">Chart status uses the same primary and configured fallback providers as REAL charts. Live provider data is separate from internal DEMO execution and is not used to move funds.</p></article>
 			<article className="rounded-lg border border-white/10 p-3"><h3 className="font-semibold">Identity review</h3><p className="mt-2 text-sm">Admin review: <b className={statusClass(data.identity.adminReviewAvailable)}>{data.identity.adminReviewAvailable}</b></p><p className="text-sm">External verification: <b className={statusClass(data.identity.externalVerification)}>{data.identity.externalVerification}</b></p><p className="mt-2 text-xs muted">Tier 3 reflects internal administrator review only.</p></article>
 		</div>}
-		{data?.alpacaPaperAccount&&<p className="mt-3 text-xs muted">Alpaca account check completed {new Date(data.alpacaPaperAccount.checkedAt).toLocaleString()}.</p>}
 		{data&&<p className="mt-3 text-xs muted">Checked {new Date(data.checkedAt).toLocaleString()}</p>}
 	</section>;
 }

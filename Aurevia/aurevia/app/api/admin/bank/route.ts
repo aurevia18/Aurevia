@@ -5,7 +5,7 @@ import {authFailureStatus,requireAdmin} from '@/lib/auth';
 import {db} from '@/lib/db';
 import {createBankOperationRequest,getTreasuryAvailable} from '@/lib/platform-bank';
 import {calculateRealWithdrawableBalance} from '@/lib/real-withdrawals';
-import {ALPACA_PAPER_PROVIDER,paperOrderCollateral} from '@/lib/bitcoin-funding';
+import {LEGACY_EXTERNAL_PROVIDER,paperOrderCollateral} from '@/lib/bitcoin-funding';
 import {SUPPORTED_CURRENCIES} from '@/lib/config/simulation';
 import {jsonSafe} from '@/lib/serializers';
 
@@ -82,7 +82,7 @@ export async function GET(request:Request){
 		const [entries,withdrawals,paperOrders]=await Promise.all([
 			ledgerAccountIds.length?db.ledgerEntry.groupBy({by:['accountId','type'],where:{accountId:{in:ledgerAccountIds}},_sum:{amount:true}}):Promise.resolve([]),
 			userIds.length?db.fundingRequest.groupBy({by:['userId'],where:{userId:{in:userIds},accountMode:AccountMode.REAL,currency:'USD',type:FundingType.WITHDRAWAL,status:{in:[FundingStatus.PENDING,FundingStatus.PENDING_REVIEW,FundingStatus.APPROVED,FundingStatus.PROCESSING]}},_sum:{amount:true}}):Promise.resolve([]),
-			userIds.length?db.order.findMany({where:{userId:{in:userIds},accountMode:AccountMode.REAL,providerName:ALPACA_PAPER_PROVIDER},select:{userId:true,instrumentId:true,side:true,quantity:true,filledQuantity:true,averageFillPrice:true,providerReservedAmount:true,status:true,createdAt:true},orderBy:{createdAt:'asc'}}):Promise.resolve([]),
+			userIds.length?db.order.findMany({where:{userId:{in:userIds},accountMode:AccountMode.REAL,providerName:LEGACY_EXTERNAL_PROVIDER},select:{userId:true,instrumentId:true,side:true,quantity:true,filledQuantity:true,averageFillPrice:true,providerReservedAmount:true,status:true,createdAt:true},orderBy:{createdAt:'asc'}}):Promise.resolve([]),
 		]);
 		const accountByUser=new Map(ledgerAccounts.map(account=>[account.userId,account]));
 		const withdrawalsByUser=new Map(withdrawals.map(row=>[row.userId,row._sum.amount??new Prisma.Decimal(0)]));

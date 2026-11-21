@@ -9,9 +9,9 @@ import {synchronizeCompletedProfileTier} from '@/lib/tier-progression';
 import {jsonSafe} from '@/lib/serializers';
 import {filterSupportedMarketAssets,getMarketAssetForTradingSymbol,isExternalMarketDataSource} from '@/lib/live-market';
 import {removeSimulatedLabels} from '@/lib/display-copy';
-import {getMarketQuoteWithFallback,getAlpacaMarketDataOptions} from '@/lib/market-data-service';
+import {getMarketQuoteWithFallback,getAdditionalMarketProviderKeys} from '@/lib/market-data-service';
 import {getServerConfiguration} from '@/lib/config/env';
-import {ALPACA_PAPER_PROVIDER} from '@/lib/bitcoin-funding';
+import {LEGACY_EXTERNAL_PROVIDER} from '@/lib/bitcoin-funding';
 import {getWalletBackedPaperInstrumentIds} from '@/lib/paper-ledger-reconciliation';
 import {optionalDashboardData} from '@/lib/dashboard-data';
 
@@ -37,13 +37,13 @@ export async function GET(){
     ]);
     const validPositions=positions.filter(position=>!!position.instrument);
     const validOrders=orders.filter(order=>!!order.instrument);
-    const walletBackedPaperInstrumentIds=mode===AccountMode.REAL&&validPositions.some(position=>position.providerName===ALPACA_PAPER_PROVIDER)
+    const walletBackedPaperInstrumentIds=mode===AccountMode.REAL&&validPositions.some(position=>position.providerName===LEGACY_EXTERNAL_PROVIDER)
       ?await getWalletBackedPaperInstrumentIds(db,user.id)
       :new Set<string>();
     const valuationPositions=mode===AccountMode.REAL
-      ?validPositions.filter(position=>position.providerName!==ALPACA_PAPER_PROVIDER||walletBackedPaperInstrumentIds.has(position.instrumentId))
+      ?validPositions.filter(position=>position.providerName!==LEGACY_EXTERNAL_PROVIDER||walletBackedPaperInstrumentIds.has(position.instrumentId))
       :validPositions;
-    const unreconciledPaperPositionCount=validPositions.filter(position=>position.providerName===ALPACA_PAPER_PROVIDER&&!walletBackedPaperInstrumentIds.has(position.instrumentId)).length;
+    const unreconciledPaperPositionCount=validPositions.filter(position=>position.providerName===LEGACY_EXTERNAL_PROVIDER&&!walletBackedPaperInstrumentIds.has(position.instrumentId)).length;
     const validInvestments=investments.filter(investment=>!!investment.opportunity);
     const supportedMarketInstruments=filterSupportedMarketAssets(marketInstruments);
     const cash=account?await optionalDashboardData('ledger balance',()=>balance(db,account.id),null,partialData):null;
@@ -51,13 +51,13 @@ export async function GET(){
     let positionMarksCurrent=true;
     if(mode===AccountMode.REAL&&valuationPositions.length){
       const configuration=getServerConfiguration();
-      const alpacaData=getAlpacaMarketDataOptions(configuration.execution);
+      const marketProviders=getAdditionalMarketProviderKeys(configuration.marketData);
       const instruments=[...new Map(valuationPositions.map(position=>[position.instrumentId,position.instrument])).values()];
       const marks=await Promise.all(instruments.map(async instrument=>{
         const asset=getMarketAssetForTradingSymbol(instrument.symbol);
         if(!asset)return null;
         try{
-          const quote=await getMarketQuoteWithFallback(asset,configuration.marketData.finnhubApiKey,alpacaData);
+          const quote=await getMarketQuoteWithFallback(asset,marketProviders);
           if(!isExternalMarketDataSource(quote.source)||quote.isStale)return null;
           return {instrumentId:instrument.id,price:new Prisma.Decimal(quote.price)};
         }catch{return null;}

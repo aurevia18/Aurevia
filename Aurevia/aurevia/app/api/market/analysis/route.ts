@@ -6,7 +6,7 @@ import {runAiService} from '@/lib/ai-services';
 import {AiGatewayError} from '@/lib/ai-gateway';
 import {rateLimit} from '@/lib/rate-limit';
 import {getServerConfiguration} from '@/lib/config/env';
-import {getAlpacaMarketDataOptions,getMarketQuoteWithFallback} from '@/lib/market-data-service';
+import {getAdditionalMarketProviderKeys,getMarketQuoteWithFallback} from '@/lib/market-data-service';
 import {getMarketAsset,isExternalMarketDataSource} from '@/lib/live-market';
 
 const requestSchema=z.object({symbols:z.array(z.string().trim().min(1).max(16)).min(1).max(6)}).strict().superRefine((value,context)=>{
@@ -39,7 +39,7 @@ export async function POST(request:Request){
 		const quoteResults=await Promise.all(assets.map(async asset=>{
 			if(!asset)return null;
 			try{
-				const quote=await getMarketQuoteWithFallback(asset,configuration.marketData.finnhubApiKey,getAlpacaMarketDataOptions(configuration.execution));
+				const quote=await getMarketQuoteWithFallback(asset,getAdditionalMarketProviderKeys(configuration.marketData));
 				const age=Date.now()-Date.parse(quote.updatedAt);
 				if(!isExternalMarketDataSource(quote.source)||quote.isStale||!Number.isFinite(age)||age<0||age>maxQuoteAgeMs||!Number.isFinite(quote.price)||quote.price<=0||!Number.isFinite(quote.change)||!Number.isFinite(quote.changePercent)){
 					return null;

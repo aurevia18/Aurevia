@@ -12,8 +12,8 @@ vi.mock('@/lib/db',()=>({db:{
 	user:{findUnique:mocks.userFindUnique},
 	instrument:{findUnique:mocks.instrumentFindUnique},
 }}));
-vi.mock('@/lib/config/env',()=>({getServerConfiguration:()=>({marketData:{finnhubApiKey:'configured'},execution:{}})}));
-vi.mock('@/lib/market-data-service',()=>({getAlpacaMarketDataOptions:vi.fn(()=>undefined)}));
+vi.mock('@/lib/config/env',()=>({getServerConfiguration:()=>({marketData:{twelveDataApiKey:'configured',twelveDataBaseUrl:'https://api.twelvedata.com'}})}));
+vi.mock('@/lib/market-data-service',()=>({getAdditionalMarketProviderKeys:vi.fn(()=>({twelveDataApiKey:'configured'})),getMarketQuoteWithFallback:mocks.marketQuote}));
 vi.mock('@/lib/live-market',async importOriginal=>{
 	const actual=await importOriginal<typeof import('@/lib/live-market')>();
 	return {...actual,getMarketQuote:mocks.marketQuote};
@@ -25,7 +25,7 @@ function request(){return new Request('https://aurevia.test/api/orderbook?instru
 function providerQuote(overrides:Record<string,unknown>={}){
 	return {
 		price:100,bid:99,ask:101,change:1,changePercent:1,updatedAt:new Date().toISOString(),
-		source:'Alpaca',marketStatus:'UNKNOWN',isStale:false,...overrides,
+		source:'Twelve Data',marketStatus:'UNKNOWN',isStale:false,...overrides,
 	};
 }
 
@@ -45,7 +45,7 @@ describe('mode-scoped order book route',()=>{
 		expect(response.status).toBe(200);
 		expect(result).toMatchObject({
 			kind:'TOP_OF_BOOK',symbol:'AAPL',last:100,bid:99,ask:101,spread:2,
-			source:'Alpaca',depthAvailable:false,
+			source:'Twelve Data',depthAvailable:false,
 		});
 		expect(result).not.toHaveProperty('bids');
 		expect(result).not.toHaveProperty('asks');

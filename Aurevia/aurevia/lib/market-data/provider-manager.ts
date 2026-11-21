@@ -3,73 +3,116 @@ import {createHash} from 'node:crypto';
 import {LRUCache} from 'lru-cache';
 import type {LiveMarketAsset,MarketCandle,MarketQuote,TimeframeId} from '@/lib/live-market';
 import {TIMEFRAMES} from '@/lib/live-market';
-import {AlphaVantageMarketProvider} from '@/lib/providers/alpha-vantage-market-data';
-import {FmpMarketProvider} from '@/lib/providers/fmp-market-data';
 import {TwelveDataMarketProvider} from '@/lib/providers/twelve-data-market-data';
+import type {TwelveDataIndicator} from '@/lib/providers/twelve-data-market-data';
 import type {MarketProviderHttpError} from '@/lib/providers/market-data-http';
 import {aggregateChartCandles,normalizeChartCandles} from '@/lib/chart-candles';
 
 export type MarketProviderKeys={
 	twelveDataApiKey:string;
-	alphaVantageApiKey:string;
-	fmpApiKey:string;
+	twelveDataBaseUrl:string;
 	productionLicenseConfirmed:boolean;
 };
 
-type ProviderId='twelveData'|'alphaVantage'|'fmp';
-type ProviderState={fingerprint:string;status:'CONNECTED'|'ERROR';checkedAt:string;failureUntil?:number;errorCode?:string};
+type ProviderId='twelveData';
+type ProviderState={
+	fingerprint:string;
+	status:'CONNECTED'|'ERROR';
+	checkedAt:string;
+	lastSuccessfulRequestAt?:string;
+	lastDataAt?:string;
+	failureUntil?:number;
+	errorCode?:string;
+	rateLimitErrors:number;
+	providerErrors:number;
+};
 type Adapter={
 	id:ProviderId;
 	name:string;
 	key:string;
+	baseUrl?:string;
 	categories:readonly LiveMarketAsset['type'][];
 	historyIntervals?:readonly string[];
 	getQuote:(asset:LiveMarketAsset)=>Promise<MarketQuote>;
 	getHistory?:(asset:LiveMarketAsset,from:string,to:string,interval:string)=>Promise<MarketCandle[]>;
+	search?:(query:string,limit:number)=>Promise<unknown[]>;
+	getIndicator?:(symbol:string,indicator:TwelveDataIndicator,interval:string,outputsize:number)=>Promise<unknown>;
+	getMarketState?:()=>Promise<unknown[]>;
 };
 
 const providerHealth=new LRUCache<ProviderId,ProviderState>({max:3,ttl:10*60_000});
 const quoteCache=new LRUCache<string,Promise<MarketQuote>>({max:400,ttl:15_000});
 const historyCache=new LRUCache<string,Promise<MarketCandle[]>>({max:200,ttl:60_000});
+const searchCache=new LRUCache<string,Promise<unknown[]>>({max:100,ttl:60*60_000});
+const indicatorCache=new LRUCache<string,Promise<unknown>>({max:200,ttl:5*60_000});
+const marketStateCache=new LRUCache<string,Promise<unknown[]>>({max:1,ttl:60_000});
+const isolatedTwelveDataMock=(()=>{
+	if(process.env.AUREVIA_E2E_TWELVE_DATA_MOCK!=='1'||!process.env.AUREVIA_E2E_DATABASE_URL)return false;
+	try{
+		const databaseUrl=new URL(process.env.AUREVIA_E2E_DATABASE_URL);
+		const databaseName=decodeURIComponent(databaseUrl.pathname.replace(/^\/+/,''));
+		return ['postgresql:','postgres:'].includes(databaseUrl.protocol)
+			&&['localhost','127.0.0.1','::1'].includes(databaseUrl.hostname)
+			&&/_e2e$/i.test(databaseName)
+			&&process.env.TWELVE_DATA_API_KEY==='aurevia-e2e-only-not-a-real-key';
+	}catch{return false}
+})();
 const limiters={
-	twelveData:new Bottleneck({maxConcurrent:1,minTime:8_000,highWater:5,strategy:Bottleneck.strategy.OVERFLOW}),
-	fmp:new Bottleneck({maxConcurrent:1,minTime:12_000,highWater:5,strategy:Bottleneck.strategy.OVERFLOW}),
-	alphaVantage:new Bottleneck({maxConcurrent:1,minTime:60*60_000,highWater:1,strategy:Bottleneck.strategy.OVERFLOW}),
+	twelveData:new Bottleneck({
+		maxConcurrent:isolatedTwelveDataMock?20:1,
+		minTime:isolatedTwelveDataMock?0:8_000,
+		highWater:isolatedTwelveDataMock?100:5,
+		strategy:Bottleneck.strategy.OVERFLOW,
+	}),
 };
 
 function fingerprint(key:string){return createHash('sha256').update(key).digest('hex')}
 function adapters(keys:MarketProviderKeys):Adapter[]{
 	return [
-		...(keys.fmpApiKey?[{
-			id:'fmp' as const,name:'Financial Modeling Prep',key:keys.fmpApiKey,categories:['STOCK'] as const,historyIntervals:['1d'],
-			getQuote:(asset:LiveMarketAsset)=>new FmpMarketProvider({apiKey:keys.fmpApiKey}).getQuote(asset),
-			getHistory:(asset:LiveMarketAsset,from:string,to:string)=>new FmpMarketProvider({apiKey:keys.fmpApiKey}).getHistory(asset,from,to),
-		}]:[]),
 		...(keys.twelveDataApiKey?[{
-			id:'twelveData' as const,name:'Twelve Data',key:keys.twelveDataApiKey,categories:['STOCK','FOREX','CRYPTO'] as const,
-			getQuote:(asset:LiveMarketAsset)=>new TwelveDataMarketProvider({apiKey:keys.twelveDataApiKey}).getQuote(asset),
-			getHistory:(asset:LiveMarketAsset,from:string,to:string,interval:string)=>new TwelveDataMarketProvider({apiKey:keys.twelveDataApiKey}).getHistory(asset,from,to,interval),
-		}]:[]),
-		...(keys.alphaVantageApiKey?[{
-			id:'alphaVantage' as const,name:'Alpha Vantage',key:keys.alphaVantageApiKey,categories:['STOCK'] as const,historyIntervals:['1d'],
-			getQuote:(asset:LiveMarketAsset)=>new AlphaVantageMarketProvider({apiKey:keys.alphaVantageApiKey}).getQuote(asset),
-			getHistory:(asset:LiveMarketAsset,from:string,to:string)=>new AlphaVantageMarketProvider({apiKey:keys.alphaVantageApiKey}).getHistory(asset,from,to),
+			id:'twelveData' as const,name:'Twelve Data',key:keys.twelveDataApiKey,baseUrl:keys.twelveDataBaseUrl,
+			categories:['STOCK','FOREX','CRYPTO'] as const,
+			getQuote:(asset:LiveMarketAsset)=>provider().getQuote(asset),
+			getHistory:(asset:LiveMarketAsset,from:string,to:string,interval:string)=>provider().getHistory(asset,from,to,interval),
+			search:(query:string,limit:number)=>provider().search(query,limit),
+			getIndicator:(symbol:string,indicator:TwelveDataIndicator,interval:string,outputsize:number)=>provider().getIndicator(symbol,indicator,interval,outputsize),
+			getMarketState:()=>provider().getMarketState(),
 		}]:[]),
 	];
+	function provider(){
+		return new TwelveDataMarketProvider({apiKey:keys.twelveDataApiKey,baseUrl:keys.twelveDataBaseUrl});
+	}
 }
 
 function recordFailure(adapter:Adapter,error:unknown){
 	const now=Date.now();
 	const errorCode=error&&typeof error==='object'&&'code'in error&&typeof (error as MarketProviderHttpError).code==='string'
 		?(error as MarketProviderHttpError).code:'INVALID_PROVIDER_RESPONSE';
+	const current=providerHealth.get(adapter.id);
+	const sameCredential=current?.fingerprint===fingerprint(adapter.key);
 	providerHealth.set(adapter.id,{
 		fingerprint:fingerprint(adapter.key),status:'ERROR',checkedAt:new Date(now).toISOString(),
+		...(sameCredential&&current.lastSuccessfulRequestAt?{lastSuccessfulRequestAt:current.lastSuccessfulRequestAt}:{}),
+		...(sameCredential&&current.lastDataAt?{lastDataAt:current.lastDataAt}:{}),
 		failureUntil:now+30_000,errorCode,
+		rateLimitErrors:(sameCredential?current.rateLimitErrors:0)+(errorCode==='RATE_LIMITED'?1:0),
+		providerErrors:(sameCredential?current.providerErrors:0)+1,
 	});
 }
 
-function recordSuccess(adapter:Adapter){
-	providerHealth.set(adapter.id,{fingerprint:fingerprint(adapter.key),status:'CONNECTED',checkedAt:new Date().toISOString()});
+function recordSuccess(adapter:Adapter,result:unknown){
+	const now=new Date().toISOString();
+	const current=providerHealth.get(adapter.id);
+	const sameCredential=current?.fingerprint===fingerprint(adapter.key);
+	const dataAt=result&&typeof result==='object'&&'updatedAt'in result&&typeof result.updatedAt==='string'
+		?result.updatedAt
+		:undefined;
+	providerHealth.set(adapter.id,{
+		fingerprint:fingerprint(adapter.key),status:'CONNECTED',checkedAt:now,lastSuccessfulRequestAt:now,
+		...(dataAt?{lastDataAt:dataAt}:sameCredential&&current.lastDataAt?{lastDataAt:current.lastDataAt}:{}),
+		rateLimitErrors:sameCredential?current.rateLimitErrors:0,
+		providerErrors:sameCredential?current.providerErrors:0,
+	});
 }
 
 function isCircuitOpen(adapter:Adapter){
@@ -81,7 +124,7 @@ function isCircuitOpen(adapter:Adapter){
 async function attempt<T>(adapter:Adapter,operation:()=>Promise<T>):Promise<T>{
 	try{
 		const result=await limiters[adapter.id].schedule(operation);
-		recordSuccess(adapter);
+		recordSuccess(adapter,result);
 		return result;
 	}catch(error){
 		recordFailure(adapter,error);
@@ -156,14 +199,57 @@ function errorCode(error:unknown){
 		?(error as MarketProviderHttpError).code:'INVALID_PROVIDER_RESPONSE';
 }
 
+function getTwelveDataAdapter(keys:MarketProviderKeys){
+	if(process.env.NODE_ENV==='production'&&!keys.productionLicenseConfirmed)return null;
+	return adapters(keys).find(adapter=>adapter.id==='twelveData')??null;
+}
+
+export async function getConfiguredMarketSearch(query:string,limit:number,keys:MarketProviderKeys){
+	const adapter=getTwelveDataAdapter(keys);
+	if(!adapter?.search)return null;
+	const cacheKey=`${fingerprint(adapter.key)}:${query.toLowerCase()}:${limit}`;
+	const cached=searchCache.get(cacheKey);
+	if(cached)return cached;
+	const pending=attempt(adapter,()=>adapter.search!(query,limit));
+	searchCache.set(cacheKey,pending);
+	try{return await pending}catch(error){searchCache.delete(cacheKey);throw error}
+}
+
+export async function getConfiguredMarketIndicator(
+	symbol:string,indicator:TwelveDataIndicator,interval:string,outputsize:number,keys:MarketProviderKeys,
+){
+	const adapter=getTwelveDataAdapter(keys);
+	if(!adapter?.getIndicator)return null;
+	const cacheKey=`${fingerprint(adapter.key)}:${symbol}:${indicator}:${interval}:${outputsize}`;
+	const cached=indicatorCache.get(cacheKey);
+	if(cached)return cached;
+	const pending=attempt(adapter,()=>adapter.getIndicator!(symbol,indicator,interval,outputsize));
+	indicatorCache.set(cacheKey,pending);
+	try{return await pending}catch(error){indicatorCache.delete(cacheKey);throw error}
+}
+
+export async function getConfiguredMarketState(keys:MarketProviderKeys){
+	const adapter=getTwelveDataAdapter(keys);
+	if(!adapter?.getMarketState)return null;
+	const cacheKey=fingerprint(adapter.key);
+	const cached=marketStateCache.get(cacheKey);
+	if(cached)return cached;
+	const pending=attempt(adapter,()=>adapter.getMarketState!());
+	marketStateCache.set(cacheKey,pending);
+	try{return await pending}catch(error){marketStateCache.delete(cacheKey);throw error}
+}
+
 export async function getMarketProviderReadiness(keys:MarketProviderKeys){
 	const configured=adapters(keys);
 	const byId=new Map(configured.map(adapter=>[adapter.id,adapter]));
-	const specs=[
-		{id:'fmp' as const,name:'Financial Modeling Prep',variable:'FMP_API_KEY',categories:['STOCK'],rateLimit:'Conservative pacing: one request per 12 seconds.'},
-		{id:'twelveData' as const,name:'Twelve Data',variable:'TWELVE_DATA_API_KEY',categories:['STOCK','FOREX','CRYPTO'],rateLimit:'Conservative pacing: one request per 8 seconds.'},
-		{id:'alphaVantage' as const,name:'Alpha Vantage',variable:'ALPHA_VANTAGE_API_KEY',categories:['STOCK'],rateLimit:'Conservative pacing: one request per hour.'},
-	];
+	const specs=[{
+		id:'twelveData' as const,
+		name:'Twelve Data',
+		variable:'TWELVE_DATA_API_KEY',
+		categories:['STOCK','FOREX','CRYPTO'],
+		capabilities:['quotes','intraday_candles','daily_weekly_monthly_history','symbol_search','technical_indicators','market_state'],
+		rateLimit:'Requests are paced to one every 8 seconds; plan quotas and symbol access vary.',
+	}];
 	return Promise.all(specs.map(async spec=>{
 		const adapter=byId.get(spec.id);
 		if(!adapter)return {...spec,configured:false,status:'NOT_CONFIGURED' as const,checkedAt:null};
@@ -172,18 +258,28 @@ export async function getMarketProviderReadiness(keys:MarketProviderKeys){
 		}
 		const current=providerHealth.get(spec.id);
 		if(current?.fingerprint===fingerprint(adapter.key)&&current.status==='CONNECTED'){
-			return {...spec,configured:true,status:'CONNECTED' as const,checkedAt:current.checkedAt};
+			return {...spec,configured:true,status:'CONNECTED' as const,checkedAt:current.checkedAt,
+				lastSuccessfulRequestAt:current.lastSuccessfulRequestAt??null,lastDataAt:current.lastDataAt??null,
+				rateLimitErrors:current.rateLimitErrors,providerErrors:current.providerErrors};
 		}
 		if(current?.fingerprint===fingerprint(adapter.key)&&current.status==='ERROR'&&(current.failureUntil??0)>Date.now()){
-			return {...spec,configured:true,status:'ERROR' as const,checkedAt:current.checkedAt,errorCode:current.errorCode};
+			return {...spec,configured:true,status:'ERROR' as const,checkedAt:current.checkedAt,errorCode:current.errorCode,
+				lastSuccessfulRequestAt:current.lastSuccessfulRequestAt??null,lastDataAt:current.lastDataAt??null,
+				rateLimitErrors:current.rateLimitErrors,providerErrors:current.providerErrors};
 		}
 		try{
 			await attempt(adapter,()=>adapter.getQuote({
 				id:'AAPL',ticker:'AAPL',name:'Apple Inc.',type:'STOCK',currency:'USD',
 			}));
-			return {...spec,configured:true,status:'CONNECTED' as const,checkedAt:providerHealth.get(spec.id)?.checkedAt??new Date().toISOString()};
+			const health=providerHealth.get(spec.id);
+			return {...spec,configured:true,status:'CONNECTED' as const,checkedAt:health?.checkedAt??new Date().toISOString(),
+				lastSuccessfulRequestAt:health?.lastSuccessfulRequestAt??null,lastDataAt:health?.lastDataAt??null,
+				rateLimitErrors:health?.rateLimitErrors??0,providerErrors:health?.providerErrors??0};
 		}catch(error){
-			return {...spec,configured:true,status:'ERROR' as const,checkedAt:providerHealth.get(spec.id)?.checkedAt??new Date().toISOString(),errorCode:errorCode(error)};
+			const health=providerHealth.get(spec.id);
+			return {...spec,configured:true,status:'ERROR' as const,checkedAt:health?.checkedAt??new Date().toISOString(),errorCode:errorCode(error),
+				lastSuccessfulRequestAt:health?.lastSuccessfulRequestAt??null,lastDataAt:health?.lastDataAt??null,
+				rateLimitErrors:health?.rateLimitErrors??0,providerErrors:health?.providerErrors??0};
 		}
 	}));
 }

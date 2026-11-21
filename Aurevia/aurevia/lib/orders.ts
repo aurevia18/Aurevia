@@ -6,8 +6,30 @@ import {createNotification} from '@/lib/notifications';
 import {assertFreshQuote,assertSellableQuantity,averageEntryPrice,realizedSpotPnl} from '@/lib/trading-policy';
 import {getDemoAiConfig} from '@/lib/demo-ai-config';
 import {availableWalletAmount,getRealWalletReservations,lockRealWalletCurrencies,roundWalletAmount} from '@/lib/real-wallet-reservations';
+import {LEGACY_EXTERNAL_PROVIDER} from '@/lib/bitcoin-funding';
+import {getServerConfiguration} from '@/lib/config/env';
+import {getAdditionalMarketProviderKeys,getMarketQuoteWithFallback} from '@/lib/market-data-service';
+import {getMarketAssetForTradingSymbol,isExternalMarketDataSource} from '@/lib/live-market';
 
 export type PlaceOrderInput={instrumentId:string;side:OrderSide;type:OrderType;quantity:number;price?:number;stopPrice?:number;expectedPrice:number;observedAt:string};
+
+export type ValidatedTwelveDataQuote={price:number;updatedAt:string};
+
+export async function resolveTwelveDataExecutionQuote(symbol:string):Promise<ValidatedTwelveDataQuote>{
+ const asset=getMarketAssetForTradingSymbol(symbol);
+ if(!asset)throw new Error('MARKET_QUOTE_UNAVAILABLE');
+ const configuration=getServerConfiguration();
+ let quote;
+ try{
+  quote=await getMarketQuoteWithFallback(asset,getAdditionalMarketProviderKeys(configuration.marketData));
+ }catch{
+  throw new Error('MARKET_QUOTE_UNAVAILABLE');
+ }
+ if(quote.source!=='Twelve Data'||!isExternalMarketDataSource(quote.source)||quote.isStale)throw new Error('MARKET_QUOTE_UNAVAILABLE');
+ assertFreshQuote(quote.updatedAt);
+ if(!Number.isFinite(quote.price)||quote.price<=0)throw new Error('MARKET_QUOTE_UNAVAILABLE');
+ return {price:quote.price,updatedAt:quote.updatedAt};
+}
 
 function executable(type:OrderType,side:OrderSide,market:number,price?:number,stopPrice?:number){
  if(type===OrderType.MARKET)return true;
@@ -22,7 +44,7 @@ export function matchesOrder(order:Awaited<ReturnType<typeof db.order.findUnique
 export async function executeOrderTx(tx:Prisma.TransactionClient,orderId:string,fill:number){
  const order=await tx.order.findUnique({where:{id:orderId},include:{instrument:true}});
  if(!order||order.status!==OrderStatus.OPEN)throw new Error('ORDER_NOT_OPEN');
- if(order.providerName==='alpaca-paper')throw new Error('EXTERNAL_PROVIDER_ORDER');
+ if(order.providerName===LEGACY_EXTERNAL_PROVIDER)throw new Error('EXTERNAL_PROVIDER_ORDER');
  const quantity=order.quantity.minus(order.filledQuantity); if(quantity.lte(0))throw new Error('ORDER_FILLED');
  let fillPrice=new Prisma.Decimal(fill);
  if(fillPrice.lte(0))throw new Error('INVALID_PRICE');
@@ -75,7 +97,7 @@ export async function executeOrderTx(tx:Prisma.TransactionClient,orderId:string,
  return tx.order.findUnique({where:{id:order.id},include:{executions:true,instrument:true}});
 }
 
-export async function executeRealOrderTx(tx:Prisma.TransactionClient,orderId:string,fill:number,fillQuantity?:Prisma.Decimal,specificPositionId?:string){
+export async function executeRealOrderTx(tx:Prisma.TransactionClient,orderId:string,fill:number,fillQuantity?:Prisma.Decimal,specificPositionId?:string,quoteObservedAt?:string){
  const order=await tx.order.findUnique({where:{id:orderId},include:{instrument:true}});
  if(!order||order.accountMode!==AccountMode.REAL||(order.status!==OrderStatus.OPEN&&order.status!==OrderStatus.PARTIALLY_FILLED))throw new Error('ORDER_NOT_OPEN');
  if(order.providerName)throw new Error('EXTERNAL_PROVIDER_ORDER');
@@ -89,8 +111,12 @@ export async function executeRealOrderTx(tx:Prisma.TransactionClient,orderId:str
  if(!quantity.isFinite()||quantity.lte(0)||quantity.gt(remaining))throw new Error('INVALID_FILL_QUANTITY');
  const fillPrice=new Prisma.Decimal(fill);
  if(!fillPrice.isFinite()||fillPrice.lte(0))throw new Error('INVALID_PRICE');
- const age=Date.now()-instrument.updatedAt.getTime();
- if(!Number.isFinite(age)||age < -5_000||age > 30_000)throw new Error('STALE_MARKET_QUOTE');
+ if(quoteObservedAt){
+  assertFreshQuote(quoteObservedAt);
+ }else{
+  const age=Date.now()-instrument.updatedAt.getTime();
+  if(!Number.isFinite(age)||age < -5_000||age > 30_000)throw new Error('STALE_MARKET_QUOTE');
+ }
  await lockRealWalletCurrencies(tx,order.userId,[settlementCurrency,baseAsset]);
  const quoteAccount=await tx.ledgerAccount.findUniqueOrThrow({where:{code:`USER:${order.userId}:${AccountMode.REAL}:${settlementCurrency}`}});
  const baseAccount=await tx.ledgerAccount.findUniqueOrThrow({where:{code:`USER:${order.userId}:${AccountMode.REAL}:${baseAsset}`}});
@@ -182,12 +208,25 @@ export async function executeRealOrderTx(tx:Prisma.TransactionClient,orderId:str
  return updated;
 }
 
-export async function placeRealOrder(userId:string,input:PlaceOrderInput,idempotencyKey:string,options:{requireExpectedPriceMatch?:boolean}={}){
+export async function placeRealOrder(userId:string,input:PlaceOrderInput,idempotencyKey:string,options:{requireExpectedPriceMatch?:boolean;validatedQuote?:ValidatedTwelveDataQuote}={}){
  if(!Number.isFinite(input.quantity)||input.quantity<=0||input.quantity>1_000_000_000||new Prisma.Decimal(input.quantity).decimalPlaces()>10)throw new Error('INVALID_QUANTITY');
  if(!Number.isFinite(input.expectedPrice)||input.expectedPrice<=0)throw new Error('INVALID_PRICE');
  assertFreshQuote(input.observedAt);
  if(input.type===OrderType.LIMIT&&(!Number.isFinite(input.price)||Number(input.price)<=0))throw new Error('LIMIT_PRICE_REQUIRED');
  if(input.type===OrderType.STOP&&(!Number.isFinite(input.stopPrice)||Number(input.stopPrice)<=0))throw new Error('STOP_PRICE_REQUIRED');
+ const priorOrder=await db.order.findUnique({where:{idempotencyKey},include:{executions:true,instrument:true}});
+ if(priorOrder){
+  if(priorOrder.providerName||!matchesOrder(priorOrder,userId,AccountMode.REAL,input))throw new Error('IDEMPOTENCY_KEY_REUSED');
+  return priorOrder;
+ }
+ const instrumentForQuote=await db.instrument.findUnique({where:{id:input.instrumentId},select:{symbol:true}});
+ if(!instrumentForQuote)throw new Error('INSTRUMENT_UNAVAILABLE');
+ const quote=options.validatedQuote??await resolveTwelveDataExecutionQuote(instrumentForQuote.symbol);
+ assertFreshQuote(quote.updatedAt);
+ if(options.requireExpectedPriceMatch){
+  if(!new Prisma.Decimal(input.expectedPrice).equals(new Prisma.Decimal(quote.price)))throw new Error('STALE_MARKET_QUOTE');
+  if(Math.abs(Date.parse(input.observedAt)-Date.parse(quote.updatedAt))>5_000)throw new Error('STALE_MARKET_QUOTE');
+ }
  const create=()=>db.$transaction(async tx=>{
   const prior=await tx.order.findUnique({where:{idempotencyKey},include:{executions:true,instrument:true}});
   if(prior){
@@ -203,12 +242,10 @@ export async function placeRealOrder(userId:string,input:PlaceOrderInput,idempot
   const settlementCurrency=instrument.quoteAsset.trim().toUpperCase();
   const baseAsset=instrument.baseAsset.trim().toUpperCase();
   if(!/^[A-Z0-9]{2,8}$/.test(settlementCurrency)||!/^[A-Z0-9]{2,8}$/.test(baseAsset)||settlementCurrency===baseAsset)throw new Error('INSTRUMENT_CURRENCY_UNAVAILABLE');
-  const age=Date.now()-instrument.updatedAt.getTime();
-  if(!Number.isFinite(age)||age < -5_000||age > 30_000)throw new Error('STALE_MARKET_QUOTE');
-  if(options.requireExpectedPriceMatch&&!instrument.price.equals(input.expectedPrice))throw new Error('STALE_MARKET_QUOTE');
-  const market=Number(instrument.price);
+  const market=quote.price;
+  if(options.requireExpectedPriceMatch&&!new Prisma.Decimal(input.expectedPrice).equals(new Prisma.Decimal(market)))throw new Error('STALE_MARKET_QUOTE');
   const reservePrice=input.type===OrderType.LIMIT?new Prisma.Decimal(input.price!):
-   input.type===OrderType.STOP?new Prisma.Decimal(input.stopPrice!):instrument.price;
+   input.type===OrderType.STOP?new Prisma.Decimal(input.stopPrice!):new Prisma.Decimal(market);
   const quantity=new Prisma.Decimal(input.quantity);
   await lockRealWalletCurrencies(tx,userId,[settlementCurrency,baseAsset]);
   const quoteAccount=await tx.ledgerAccount.findUniqueOrThrow({where:{code:`USER:${userId}:${AccountMode.REAL}:${settlementCurrency}`}});
@@ -238,11 +275,12 @@ export async function placeRealOrder(userId:string,input:PlaceOrderInput,idempot
    newState:OrderStatus.OPEN,accountMode:AccountMode.REAL,simulated:true,executionProvider:'AUREVIA_INTERNAL',
    instrument:instrument.symbol,baseAsset,settlementCurrency,side:input.side,type:input.type,
    quantity:order.quantity.toString(),expectedPrice:input.expectedPrice,observedAt:input.observedAt,
+   providerQuote:quote.price,providerTimestamp:quote.updatedAt,
    reservedAmount:reservedAmount?.toString()??null,reservationCurrency:input.side===OrderSide.BUY?settlementCurrency:baseAsset,
   }}});
   await createNotification(tx,{userId,type:NotificationType.TRADE,title:'REAL simulated order submitted',message:`Your ${input.side.toLowerCase()} ${input.type.toLowerCase()} order for ${instrument.symbol} was submitted to Aurevia's internal simulated trading engine. No external exchange order will be placed.`,dedupeKey:`real-order:${order.id}:submitted`,relatedEntity:'ORDER',relatedId:order.id,actionUrl:'/orders'});
   if(!executable(input.type,input.side,market,input.price,input.stopPrice))return order;
-  return executeRealOrderTx(tx,order.id,market,quantity);
+  return executeRealOrderTx(tx,order.id,market,quantity,undefined,quote.updatedAt);
  },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable,maxWait:5_000,timeout:15_000});
  try{return await create();}
  catch(error){
@@ -255,7 +293,7 @@ export async function placeRealOrder(userId:string,input:PlaceOrderInput,idempot
  }
 }
 
-export async function closeSimulatedPositionTx(tx:Prisma.TransactionClient,userId:string,positionId:string,actorId=userId,accountMode?:AccountMode){
+export async function closeSimulatedPositionTx(tx:Prisma.TransactionClient,userId:string,positionId:string,actorId=userId,accountMode?:AccountMode,validatedQuote?:ValidatedTwelveDataQuote){
  const realCloseKey=`REAL:POSITION_CLOSE:${positionId}`;
  const position=await tx.position.findFirst({where:{id:positionId,userId,status:'OPEN',...(accountMode?{accountMode}:{})},include:{instrument:true}});
  if(!position){
@@ -268,7 +306,7 @@ export async function closeSimulatedPositionTx(tx:Prisma.TransactionClient,userI
   }
   throw new Error('POSITION_NOT_FOUND');
  }
- if(position.providerName==='alpaca-paper')throw new Error('PROVIDER_POSITION_REQUIRES_PROVIDER_ORDER');
+ if(position.providerName===LEGACY_EXTERNAL_PROVIDER)throw new Error('PROVIDER_POSITION_REQUIRES_PROVIDER_ORDER');
  if(position.accountMode===AccountMode.REAL){
   if(position.side!==OrderSide.BUY)throw new Error('UNSUPPORTED_REAL_POSITION_SIDE');
   const previousRealClose=await tx.order.findUnique({where:{idempotencyKey:realCloseKey}});
@@ -276,17 +314,17 @@ export async function closeSimulatedPositionTx(tx:Prisma.TransactionClient,userI
    if(previousRealClose.userId!==userId||previousRealClose.accountMode!==AccountMode.REAL||previousRealClose.providerName)throw new Error('IDEMPOTENCY_KEY_REUSED');
    return tx.position.findUniqueOrThrow({where:{id:positionId}});
   }
-  assertFreshQuote(position.instrument.updatedAt);
+  const quote=validatedQuote??await resolveTwelveDataExecutionQuote(position.instrument.symbol);
   const settlementCurrency=(position.settlementCurrency||position.instrument.quoteAsset).trim().toUpperCase();
   const closingOrder=await tx.order.create({data:{
    userId,instrumentId:position.instrumentId,accountMode:AccountMode.REAL,side:OrderSide.SELL,type:OrderType.MARKET,
    status:OrderStatus.OPEN,quantity:position.quantity,filledQuantity:0,idempotencyKey:realCloseKey,settlementCurrency,
   }});
-  await executeRealOrderTx(tx,closingOrder.id,position.instrument.price.toNumber(),position.quantity,position.id);
+  await executeRealOrderTx(tx,closingOrder.id,quote.price,position.quantity,position.id,quote.updatedAt);
   const closed=await tx.position.findUniqueOrThrow({where:{id:position.id}});
   await tx.auditLog.create({data:{actorId,action:`REAL_SIMULATED_POSITION_${actorId===userId?'CLOSED':'ADMIN_CLOSED'}`,entity:'POSITION',entityId:position.id,metadata:{
    accountMode:AccountMode.REAL,simulated:true,symbol:position.instrument.symbol,quantity:position.quantity.toString(),
-   exitPrice:position.instrument.price.toString(),settlementCurrency,closingOrderId:closingOrder.id,
+   exitPrice:quote.price.toString(),providerTimestamp:quote.updatedAt,settlementCurrency,closingOrderId:closingOrder.id,
   }}});
   return closed;
  }
@@ -383,9 +421,20 @@ export async function placeOrder(userId:string,accountMode:AccountMode,input:Pla
 export async function processOpenOrders(){
  const orders=await db.order.findMany({where:{status:{in:[OrderStatus.OPEN,OrderStatus.PARTIALLY_FILLED]},providerName:null,accountMode:{in:[AccountMode.DEMO,AccountMode.REAL]}},include:{instrument:true},take:500,orderBy:{createdAt:'asc'}});
  for(const o of orders){
-   const p=Number(o.instrument.price); const hit=executable(o.type,o.side,p,o.price===null?undefined:Number(o.price),o.stopPrice===null?undefined:Number(o.stopPrice));
+   let p=Number(o.instrument.price);
+   let quoteTimestamp:string|undefined;
+   if(o.accountMode===AccountMode.REAL){
+    try{
+     const quote=await resolveTwelveDataExecutionQuote(o.instrument.symbol);
+     p=quote.price;
+     quoteTimestamp=quote.updatedAt;
+    }catch{
+     continue;
+    }
+   }
+   const hit=executable(o.type,o.side,p,o.price===null?undefined:Number(o.price),o.stopPrice===null?undefined:Number(o.stopPrice));
    if(!hit)continue;
-  try{await db.$transaction(tx=>o.accountMode===AccountMode.REAL?executeRealOrderTx(tx,o.id,p):executeOrderTx(tx,o.id,p),{isolationLevel:Prisma.TransactionIsolationLevel.Serializable,maxWait:5_000,timeout:15_000});}
+  try{await db.$transaction(tx=>o.accountMode===AccountMode.REAL?executeRealOrderTx(tx,o.id,p,undefined,undefined,quoteTimestamp):executeOrderTx(tx,o.id,p),{isolationLevel:Prisma.TransactionIsolationLevel.Serializable,maxWait:5_000,timeout:15_000});}
   catch(e){if(e instanceof Error&&['INSUFFICIENT_SIMULATED_BALANCE','INSUFFICIENT_REAL_WALLET_COLLATERAL','INSUFFICIENT_POSITION','ORDER_NOT_OPEN','ORDER_FILLED'].includes(e.message))await db.$transaction(async tx=>{const rejected=await tx.order.updateMany({where:{id:o.id,status:{in:[OrderStatus.OPEN,OrderStatus.PARTIALLY_FILLED]}},data:{status:OrderStatus.REJECTED}});if(rejected.count){await tx.auditLog.create({data:{actorId:o.userId,action:`${o.accountMode}_SIMULATED_ORDER_REJECTED`,entity:'ORDER',entityId:o.id,metadata:{oldState:o.status,newState:OrderStatus.REJECTED,accountMode:o.accountMode,simulated:true,reason:e.message}}});await createNotification(tx,{userId:o.userId,type:NotificationType.TRADE,title:`${o.accountMode} order rejected`,message:`Your ${o.side.toLowerCase()} order for ${o.instrument.symbol} was rejected in the ${o.accountMode===AccountMode.DEMO?'DEMO':'REAL'} account. Any completed partial fills remain recorded in your Aurevia wallet.`,dedupeKey:`order:${o.id}:rejected`,relatedEntity:'ORDER',relatedId:o.id,actionUrl:'/trade'});}});}
  }
 }

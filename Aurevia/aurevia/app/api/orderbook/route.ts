@@ -3,8 +3,8 @@ import {requireUser} from '@/lib/auth';
 import {db} from '@/lib/db';
 import {jsonSafe} from '@/lib/serializers';
 import {getServerConfiguration} from '@/lib/config/env';
-import {getAlpacaMarketDataOptions} from '@/lib/market-data-service';
-import {getMarketAssetForTradingSymbol,getMarketQuote,isExternalMarketDataSource} from '@/lib/live-market';
+import {getAdditionalMarketProviderKeys,getMarketQuoteWithFallback} from '@/lib/market-data-service';
+import {getMarketAssetForTradingSymbol,isExternalMarketDataSource} from '@/lib/live-market';
 
 export async function GET(req:Request){
   try{
@@ -20,7 +20,7 @@ export async function GET(req:Request){
       const asset=getMarketAssetForTradingSymbol(instrument.symbol);
       if(!asset)return NextResponse.json({error:'No provider market data is configured for this instrument.'},{status:404});
       const configuration=getServerConfiguration();
-      const quote=await getMarketQuote(asset,configuration.marketData.finnhubApiKey,getAlpacaMarketDataOptions(configuration.execution));
+      const quote=await getMarketQuoteWithFallback(asset,getAdditionalMarketProviderKeys(configuration.marketData));
       const age=Date.now()-Date.parse(quote.updatedAt);
       if(!isExternalMarketDataSource(quote.source)||quote.isStale||age>30_000||age< -5_000){
         return NextResponse.json({error:'Fresh provider quotes are unavailable.'},{status:503,headers:{'Cache-Control':'private, no-store'}});

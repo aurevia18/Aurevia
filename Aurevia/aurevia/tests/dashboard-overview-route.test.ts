@@ -34,8 +34,8 @@ vi.mock('@/lib/db',()=>({db:{
 }}));
 vi.mock('@/lib/activity',()=>({getUserActivity:mocks.getActivity}));
 vi.mock('@/lib/ledger',()=>({balance:mocks.balance,DEMO_STARTING_BALANCE:'5000.00'}));
-vi.mock('@/lib/market-data-service',()=>({getMarketQuoteWithFallback:mocks.marketQuote,getAlpacaMarketDataOptions:vi.fn(()=>undefined)}));
-vi.mock('@/lib/config/env',()=>({getServerConfiguration:vi.fn(()=>({execution:{},marketData:{finnhubApiKey:null}}))}));
+vi.mock('@/lib/market-data-service',()=>({getMarketQuoteWithFallback:mocks.marketQuote,getAdditionalMarketProviderKeys:vi.fn(()=>({twelveDataApiKey:'',twelveDataBaseUrl:'https://api.twelvedata.com'}))}));
+vi.mock('@/lib/config/env',()=>({getServerConfiguration:vi.fn(()=>({marketData:{twelveDataApiKey:'',twelveDataBaseUrl:'https://api.twelvedata.com'}}))}));
 vi.mock('@/lib/paper-ledger-reconciliation',()=>({getWalletBackedPaperInstrumentIds:mocks.walletBackedPaperInstrumentIds}));
 
 import {GET} from '@/app/api/dashboard/overview/route';
@@ -61,7 +61,7 @@ describe('user dashboard overview access and mode separation',()=>{
 		mocks.instrumentFindMany.mockResolvedValue([{id:'btc-instrument',symbol:'BTC/USD'}]);
 		mocks.getActivity.mockResolvedValue({items:[],total:0,hasMore:false,cursor:null});
 		mocks.balance.mockImplementation(async(_db:unknown,id:string)=>new Prisma.Decimal(id==='demo-account'?'125.50':'40.50'));
-		mocks.marketQuote.mockResolvedValue({price:12,updatedAt:new Date().toISOString(),source:'Finnhub',isStale:false});
+		mocks.marketQuote.mockResolvedValue({price:12,updatedAt:new Date().toISOString(),source:'Twelve Data',isStale:false});
 		mocks.walletBackedPaperInstrumentIds.mockResolvedValue(new Set(['btc-instrument']));
 	});
 

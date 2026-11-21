@@ -24,6 +24,16 @@ export async function requestMarketProviderJson(
 		let payload:unknown;
 		try{payload=await response.json()}catch{throw new MarketProviderHttpError(provider,response.status,'INVALID_JSON')}
 		if(!payload||typeof payload!=='object')throw new MarketProviderHttpError(provider,response.status,'INVALID_RESPONSE');
+		if(provider==='Twelve Data'&&!Array.isArray(payload)){
+			const body=payload as Record<string,unknown>;
+			const providerCode=Number(body.code);
+			if(body.status==='error'||Number.isFinite(providerCode)&&providerCode>=400){
+				const status=Number.isFinite(providerCode)&&providerCode>=400?providerCode:response.status;
+				const code=status===429?'RATE_LIMITED':status===401?'AUTHENTICATION_FAILED':
+					status===403?'SUBSCRIPTION_RESTRICTED':status>=500?'PROVIDER_SERVER_ERROR':'PROVIDER_REJECTED';
+				throw new MarketProviderHttpError(provider,status,code);
+			}
+		}
 		return payload as Record<string,unknown>;
 	},{
 		retries:1,
@@ -50,7 +60,7 @@ export function normalizedTimestamp(value:unknown){
 		const timestamp=Date.parse(value);
 		if(Number.isFinite(timestamp))return new Date(timestamp).toISOString();
 	}
-	return new Date().toISOString();
+	throw new Error('Market provider returned no valid data timestamp.');
 }
 
 export function candlesFromRows(rows:unknown,keys:{time:string;open:string;high:string;low:string;close:string;volume:string}){
