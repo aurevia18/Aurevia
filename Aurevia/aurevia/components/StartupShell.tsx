@@ -4,6 +4,7 @@ import {useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
 import type {MouseEvent,ReactNode} from 'react';
 import {usePathname} from 'next/navigation';
 import {useSession} from 'next-auth/react';
+import AureviaLoading from '@/components/AureviaLoading';
 import AureviaStartup,{AureviaStartupLoader} from '@/components/AureviaStartup';
 
 const startupKey='aurevia-startup-complete';
@@ -163,7 +164,9 @@ export default function StartupShell({children}:{children:ReactNode}){
 		<div className="scene-depth" aria-hidden="true"/>
 		<div className="scene-content"><div inert={showStartup||showIntro} aria-hidden={showStartup||showIntro}>{children}</div>
 			{startupMode==='loading'&&<AureviaStartupLoader isExiting={isExiting}/>}
-			{showPageTransition&&<div className="page-transition-progress" role="status" aria-label="Loading the next page"/>}
+			{showPageTransition&&<div className="page-transition-loader">
+				<AureviaLoading variant="inline" label="Loading the next page"/>
+			</div>}
 			{pathname==='/'&&<AureviaStartup isVisible={showIntro} isExiting={isIntroExiting} onSkip={finishIntro} onReplay={replayIntro}/>}
 		</div>
 	</div>;
