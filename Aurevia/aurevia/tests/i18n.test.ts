@@ -17,6 +17,11 @@ describe('locale system',()=>{
       expect(localeKeys).toHaveLength(keys.length);
     }
   });
+  it('uses consistent execution guidance across REAL account pages',()=>{
+    for(const locale of locales){
+      expect(translations[locale].realAccountExecutionNotice).toBe(translations[locale].realTradingNotice);
+    }
+  });
   it('provides complete locale metadata and visible flags',()=>{
     for(const locale of locales){
       const meta=localeMeta[locale];

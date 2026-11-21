@@ -300,7 +300,7 @@ const base = {
   demoAccount: "DEMO ACCOUNT",
   watchlistTitle: "Watchlist",
   marketActivityHeading: "MARKET ACTIVITY",
-  realAccountExecutionNotice: "REAL account orders use Aurevia Wallet funds and Aurevia internal simulated execution; no external exchange order is placed.",
+  realAccountExecutionNotice: 'REAL account orders use funds and assets available in the matching Aurevia Wallet currency and are executed by Aurevia internally. No external exchange order is placed.',
   demoSimulated: "DEMO · practice",
   instrument: "Instrument",
   dataNotExchangeFeed: "data, not an exchange feed.",
